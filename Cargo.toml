@@ -1,0 +1,3 @@
+[workspace]
+members = ["runex-core", "runex-cli"]
+resolver = "2"
