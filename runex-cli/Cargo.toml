@@ -7,3 +7,7 @@ edition = "2021"
 runex-core = { path = "../runex-core" }
 clap = { version = "4", features = ["derive"] }
 which = "7"
+
+[dev-dependencies]
+rexpect = "0.5"
+tempfile = "3"
