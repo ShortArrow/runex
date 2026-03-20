@@ -48,7 +48,7 @@ pub fn export_script(shell: Shell, bin: &str) -> String {
         Shell::Clink => include_str!("templates/clink.lua"),
         Shell::Nu => include_str!("templates/nu.nu"),
     };
-    template.replace("{BIN}", bin)
+    template.replace("\r\n", "\n").replace("{BIN}", bin)
 }
 
 #[cfg(test)]
