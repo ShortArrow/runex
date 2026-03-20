@@ -1,5 +1,7 @@
 # runex - Product Requirements Document
 
+English | [日本語](PRD.ja.md)
+
 ## 1. Overview
 
 runex is a cross-shell tool that expands short inputs (runes) into full commands (casts) in real-time.
@@ -52,7 +54,7 @@ The core concept is **"rune-to-cast expansion"**.
 
 ## 5. Architecture
 
-```
+```text
 config.toml
     ↓
 runex core (Rust)

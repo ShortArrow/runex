@@ -1,5 +1,7 @@
 # runex
 
+English | [日本語](docs/README.ja.md)
+
 > Turn runes into commands.
 
 runex is a cross-shell abbreviation engine that expands short tokens into full commands in real-time.
