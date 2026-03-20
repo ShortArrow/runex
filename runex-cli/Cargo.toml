@@ -2,13 +2,19 @@
 name = "runex-cli"
 version = "0.1.0"
 edition = "2021"
+description = "Cross-shell abbreviation engine that expands short tokens into full commands"
+license = "MIT"
+repository = "https://github.com/ShortArrow/runex"
+keywords = ["shell", "abbreviation", "alias", "expansion", "cli"]
+categories = ["command-line-utilities"]
+readme = "../README.md"
 
 [[bin]]
 name = "runex"
 path = "src/main.rs"
 
 [dependencies]
-runex-core = { path = "../runex-core" }
+runex-core = { version = "0.1.0", path = "../runex-core" }
 clap = { version = "4", features = ["derive"] }
 which = "7"
 

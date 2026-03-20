@@ -2,6 +2,12 @@
 name = "runex-core"
 version = "0.1.0"
 edition = "2021"
+description = "Core library for runex – a cross-shell abbreviation expansion engine"
+license = "MIT"
+repository = "https://github.com/ShortArrow/runex"
+keywords = ["shell", "abbreviation", "alias", "expansion", "cli"]
+categories = ["command-line-utilities"]
+readme = "../README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
