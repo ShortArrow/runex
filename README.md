@@ -33,33 +33,73 @@ cargo install runex
 
 ### PowerShell
 
+Temporary:
+
 ```powershell
 Invoke-Expression (& runex export pwsh)
 ```
 
+Persistent (`$PROFILE`):
+
+```powershell
+if (!(Test-Path $PROFILE)) { New-Item -Type File -Path $PROFILE -Force }
+Add-Content $PROFILE 'Invoke-Expression (& runex export pwsh)'
+```
+
 ### bash
+
+Temporary:
 
 ```bash
 eval "$(runex export bash)"
 ```
 
+Persistent (`~/.bashrc`):
+
+```bash
+echo 'eval "$(runex export bash)"' >> ~/.bashrc
+```
+
 ### Nushell
+
+Temporary:
 
 ```nu
 runex export nu | save ~/.config/nu/runex.nu
 ```
 
+Persistent (`config.nu`):
+
+```nu
+mkdir ~/.config/nu
+runex export nu | save -f ~/.config/nu/runex.nu
+open ~/.config/nu/config.nu
+```
+
+Then add this line to `config.nu`:
+
+```nu
+source ~/.config/nu/runex.nu
+```
+
 ### cmd (Clink)
 
-```bash
+Temporary / install script:
+
+```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua
 ```
+
+Persistent:
+If Clink is installed and loads `%LOCALAPPDATA%\clink\*.lua`, the file above is enough.
 
 ## Config
 
 `~/.config/runex/config.toml`
 
 ```toml
+version = 1
+
 [[abbr]]
 key = "ls"
 expand = "lsd"

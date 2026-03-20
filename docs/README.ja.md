@@ -34,33 +34,73 @@ cargo install runex
 
 ### PowerShell
 
+一時適用:
+
 ```powershell
 Invoke-Expression (& runex export pwsh)
 ```
 
+永続化（`$PROFILE`）:
+
+```powershell
+if (!(Test-Path $PROFILE)) { New-Item -Type File -Path $PROFILE -Force }
+Add-Content $PROFILE 'Invoke-Expression (& runex export pwsh)'
+```
+
 ### bash
+
+一時適用:
 
 ```bash
 eval "$(runex export bash)"
 ```
 
+永続化（`~/.bashrc`）:
+
+```bash
+echo 'eval "$(runex export bash)"' >> ~/.bashrc
+```
+
 ### Nushell
+
+一時適用:
 
 ```nu
 runex export nu | save ~/.config/nu/runex.nu
 ```
 
+永続化（`config.nu`）:
+
+```nu
+mkdir ~/.config/nu
+runex export nu | save -f ~/.config/nu/runex.nu
+open ~/.config/nu/config.nu
+```
+
+次の1行を `config.nu` に追加:
+
+```nu
+source ~/.config/nu/runex.nu
+```
+
 ### cmd (Clink)
 
-```bash
+一時適用 / スクリプト配置:
+
+```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua
 ```
+
+永続化:
+Clink が `%LOCALAPPDATA%\clink\*.lua` を読む設定なら、上の配置だけで有効です。
 
 ## 設定
 
 `~/.config/runex/config.toml`
 
 ```toml
+version = 1
+
 [[abbr]]
 key = "ls"
 expand = "lsd"
