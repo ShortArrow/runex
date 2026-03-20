@@ -3,6 +3,10 @@ name = "runex-cli"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "runex"
+path = "src/main.rs"
+
 [dependencies]
 runex-core = { path = "../runex-core" }
 clap = { version = "4", features = ["derive"] }
