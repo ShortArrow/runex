@@ -143,6 +143,7 @@ mod tests {
         assert!(s.contains("bind"), "bash script must use bind");
         assert!(s.contains("READLINE_LINE"), "bash script must use READLINE_LINE");
         assert!(s.contains("READLINE_POINT"), "bash script must inspect the cursor");
+        assert!(s.contains("PS0="), "bash script must be able to suppress PS0 hooks");
     }
 
     #[test]
