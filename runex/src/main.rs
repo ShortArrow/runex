@@ -4,12 +4,63 @@ use runex_core::doctor::{self, Check, CheckStatus, DiagResult};
 use runex_core::expand;
 use runex_core::model::{Abbr, Config, ExpandResult};
 use runex_core::shell::Shell;
+use std::collections::HashMap;
+use std::io::{self, IsTerminal, Write};
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread;
+use std::time::Duration;
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_GREEN: &str = "\x1b[32m";
 const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_RED: &str = "\x1b[31m";
+
+struct Spinner {
+    done: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Spinner {
+    fn start(message: &'static str) -> Self {
+        if !io::stderr().is_terminal() {
+            return Self {
+                done: Arc::new(AtomicBool::new(true)),
+                handle: None,
+            };
+        }
+
+        let done = Arc::new(AtomicBool::new(false));
+        let thread_done = Arc::clone(&done);
+        let handle = thread::spawn(move || {
+            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let mut i = 0usize;
+            while !thread_done.load(Ordering::Relaxed) {
+                eprint!("\r{} {}", frames[i % frames.len()], message);
+                let _ = io::stderr().flush();
+                i += 1;
+                thread::sleep(Duration::from_millis(100));
+            }
+            eprint!("\r\x1b[2K");
+            let _ = io::stderr().flush();
+        });
+
+        Self {
+            done,
+            handle: Some(handle),
+        }
+    }
+
+    fn stop(mut self) {
+        self.done.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "runex", about = "Rune-to-cast expansion engine")]
@@ -39,10 +90,6 @@ enum Commands {
     },
 }
 
-fn bash_single_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r#"'\''"#))
-}
-
 fn format_check_tag(status: &CheckStatus) -> String {
     match status {
         CheckStatus::Ok => format!("[{ANSI_GREEN}OK{ANSI_RESET}]"),
@@ -60,9 +107,23 @@ fn format_check_line(check: &Check) -> String {
     )
 }
 
-fn run_pwsh_alias_lookup(token: &str) -> Option<String> {
+fn parse_pwsh_alias_lines(stdout: &str) -> HashMap<String, String> {
+    let mut aliases = HashMap::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some((name, definition)) = trimmed.split_once('\t') {
+            aliases.insert(name.trim().to_string(), definition.trim().to_string());
+        }
+    }
+    aliases
+}
+
+fn load_pwsh_aliases() -> HashMap<String, String> {
     if which::which("pwsh").is_err() {
-        return None;
+        return HashMap::new();
     }
 
     let output = Command::new("pwsh")
@@ -70,20 +131,17 @@ fn run_pwsh_alias_lookup(token: &str) -> Option<String> {
             "-NoLogo",
             "-NoProfile",
             "-Command",
-            &format!(
-                "Get-Alias -Name {} -ErrorAction Stop | Select-Object -ExpandProperty Definition",
-                token
-            ),
+            "Get-Alias | ForEach-Object { \"{0}`t{1}\" -f $_.Name, $_.Definition }",
         ])
-        .output()
-        .ok()?;
+        .output();
 
+    let Ok(output) = output else {
+        return HashMap::new();
+    };
     if !output.status.success() {
-        return None;
+        return HashMap::new();
     }
-
-    let definition = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!definition.is_empty()).then_some(definition)
+    parse_pwsh_alias_lines(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn check_pwsh_alias_with<F>(token: &str, lookup: F) -> Option<Check>
@@ -98,29 +156,41 @@ where
     })
 }
 
-fn run_bash_alias_lookup(token: &str) -> Option<String> {
+fn parse_bash_alias_lines(stdout: &str) -> HashMap<String, String> {
+    let mut aliases = HashMap::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("alias ") {
+            continue;
+        }
+        let rest = &trimmed["alias ".len()..];
+        if let Some((name, value)) = rest.split_once('=') {
+            aliases.insert(name.trim().to_string(), value.trim().to_string());
+        }
+    }
+    aliases
+}
+
+fn load_bash_aliases() -> HashMap<String, String> {
     if cfg!(windows) {
-        return None;
+        return HashMap::new();
     }
 
     if which::which("bash").is_err() {
-        return None;
+        return HashMap::new();
     }
 
     let output = Command::new("bash")
-        .args([
-            "-ic",
-            &format!("alias {}", bash_single_quote(token)),
-        ])
-        .output()
-        .ok()?;
+        .args(["-ic", "alias"])
+        .output();
 
+    let Ok(output) = output else {
+        return HashMap::new();
+    };
     if !output.status.success() {
-        return None;
+        return HashMap::new();
     }
-
-    let detail = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!detail.is_empty()).then_some(detail)
+    parse_bash_alias_lines(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn check_bash_alias_with<F>(token: &str, lookup: F) -> Option<Check>
@@ -160,13 +230,15 @@ fn add_shell_alias_conflicts(result: &mut DiagResult, config: Option<&Config>) {
     let Some(config) = config else {
         return;
     };
+    let pwsh_aliases = load_pwsh_aliases();
+    let bash_aliases = load_bash_aliases();
 
     result
         .checks
         .extend(collect_shell_alias_conflicts_with(
             &config.abbr,
-            run_pwsh_alias_lookup,
-            run_bash_alias_lookup,
+            |token| pwsh_aliases.get(token).cloned(),
+            |token| bash_aliases.get(token).cloned(),
         ));
 }
 
@@ -203,9 +275,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Doctor => {
             let config_path = default_config_path().unwrap_or_default();
             let config = load_config(&config_path).ok();
+            let spinner = Spinner::start("Checking environment...");
             let mut result =
                 doctor::diagnose(&config_path, config.as_ref(), |cmd| which::which(cmd).is_ok());
             add_shell_alias_conflicts(&mut result, config.as_ref());
+            spinner.stop();
 
             for check in &result.checks {
                 println!("{}", format_check_line(check));
@@ -264,5 +338,19 @@ mod tests {
     fn collect_shell_alias_conflicts_skips_missing_aliases() {
         let checks = collect_shell_alias_conflicts_with(&[test_abbr("gcm")], |_| None, |_| None);
         assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn parse_pwsh_alias_lines_extracts_aliases() {
+        let aliases = parse_pwsh_alias_lines("gcm\tGet-Command\nls\tGet-ChildItem\n");
+        assert_eq!(aliases.get("gcm").map(String::as_str), Some("Get-Command"));
+        assert_eq!(aliases.get("ls").map(String::as_str), Some("Get-ChildItem"));
+    }
+
+    #[test]
+    fn parse_bash_alias_lines_extracts_aliases() {
+        let aliases = parse_bash_alias_lines("alias ls='ls --color=auto'\nalias nv='nvim'\n");
+        assert_eq!(aliases.get("ls").map(String::as_str), Some("'ls --color=auto'"));
+        assert_eq!(aliases.get("nv").map(String::as_str), Some("'nvim'"));
     }
 }
