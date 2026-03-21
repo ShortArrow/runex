@@ -62,6 +62,30 @@ fn bash_chord(trigger: TriggerKey) -> &'static str {
     }
 }
 
+fn bash_quote_pattern(token: &str) -> String {
+    format!("'{}'", token.replace('\'', r#"'\''"#))
+}
+
+fn bash_known_cases(config: Option<&Config>) -> String {
+    let Some(config) = config else {
+        return "        *) return 0 ;;".to_string();
+    };
+
+    if config.abbr.is_empty() {
+        return "        *) return 0 ;;".to_string();
+    }
+
+    let mut lines = Vec::with_capacity(config.abbr.len() + 1);
+    for abbr in &config.abbr {
+        lines.push(format!(
+            "        {}) return 0 ;;",
+            bash_quote_pattern(&abbr.key)
+        ));
+    }
+    lines.push("        *) return 1 ;;".to_string());
+    lines.join("\n")
+}
+
 fn pwsh_chord(trigger: TriggerKey) -> &'static str {
     match trigger {
         TriggerKey::Space => " ",
@@ -99,6 +123,7 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
         .replace("\r\n", "\n")
         .replace("{BIN}", bin)
         .replace("{BASH_CHORD}", bash_chord(trigger))
+        .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
         .replace("{PWSH_CHORD}", pwsh_chord(trigger))
         .replace("{NU_MODIFIER}", nu_modifier(trigger))
         .replace("{NU_KEYCODE}", nu_keycode(trigger))
@@ -181,6 +206,21 @@ mod tests {
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
         assert!(s.contains("\\e "), "bash script must use the configured key chord");
+    }
+
+    #[test]
+    fn bash_script_embeds_known_tokens() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![crate::model::Abbr {
+                key: "gcm".into(),
+                expand: "git commit -m".into(),
+                when_command_exists: None,
+            }],
+        };
+        let s = export_script(Shell::Bash, "runex", Some(&config));
+        assert!(s.contains("'gcm') return 0 ;;"), "bash script must embed known tokens");
     }
 
     #[test]
