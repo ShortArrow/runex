@@ -102,6 +102,7 @@ version = 1
 
 [keybind]
 trigger = "space"
+literal = "alt-space"
 
 [[abbr]]
 key = "ls"
@@ -118,7 +119,9 @@ Supported key values:
 - `tab`
 - `alt-space`
 
-`trigger` sets the default for all shells. Shell-specific keys like `bash`, `pwsh`, and `nu` override that default.
+`trigger` sets the default expand key for all shells.
+`literal` sets the default "insert a plain space without expansion" key.
+Shell-specific keys like `bash`, `pwsh`, `nu`, `bash_literal`, `pwsh_literal`, and `nu_literal` override those defaults.
 
 Example override:
 
@@ -126,6 +129,8 @@ Example override:
 [keybind]
 trigger = "space"
 bash = "alt-space"
+literal = "alt-space"
+pwsh_literal = "tab"
 ```
 
 If you want multiple shells or environments to share one physical config file, set `RUNEX_CONFIG` to that path before loading `runex`.

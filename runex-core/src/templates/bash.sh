@@ -44,6 +44,11 @@ __runex_is_known_token() {
     esac
 }
 
+__runex_insert_literal_space() {
+    READLINE_LINE="${READLINE_LINE:0:READLINE_POINT} ${READLINE_LINE:READLINE_POINT}"
+    READLINE_POINT=$((READLINE_POINT + 1))
+}
+
 __runex_expand() {
     local runex_prompt_command="${PROMPT_COMMAND-}"
 
@@ -94,3 +99,4 @@ __runex_expand() {
     PROMPT_COMMAND="$runex_prompt_command"
 }
 bind -x '"{BASH_CHORD}": __runex_expand'
+bind -x '"{BASH_LITERAL_CHORD}": __runex_insert_literal_space'

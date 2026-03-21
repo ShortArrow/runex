@@ -103,6 +103,7 @@ version = 1
 
 [keybind]
 trigger = "space"
+literal = "alt-space"
 
 [[abbr]]
 key = "ls"
@@ -119,7 +120,9 @@ expand = "git commit -m"
 - `tab`
 - `alt-space`
 
-`trigger` は全シェル共通の既定値です。`bash`、`pwsh`、`nu` を書くと、そのシェルだけ個別に上書きできます。
+`trigger` は全シェル共通の展開キーの既定値です。
+`literal` は「展開せずにそのまま空白を入れるキー」の既定値です。
+`bash`、`pwsh`、`nu`、`bash_literal`、`pwsh_literal`、`nu_literal` を書くと、そのシェルだけ個別に上書きできます。
 
 上書き例:
 
@@ -127,6 +130,8 @@ expand = "git commit -m"
 [keybind]
 trigger = "space"
 bash = "alt-space"
+literal = "alt-space"
+pwsh_literal = "tab"
 ```
 
 複数シェルや複数環境で物理的に同じ設定ファイルを共有したい場合は、`runex` 読み込み前に `RUNEX_CONFIG` でそのパスを指定します。

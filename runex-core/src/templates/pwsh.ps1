@@ -71,24 +71,38 @@ function __runex_expand_space {
     }
 }
 
+function __runex_insert_literal_space {
+    param(
+        [string]$line,
+        [int]$cursor
+    )
+
+    return @{
+        Line = $line.Substring(0, $cursor) + ' ' + $line.Substring($cursor)
+        Cursor = $cursor + 1
+    }
+}
+
 if (-not (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue)) {
     Import-Module PSReadLine -ErrorAction SilentlyContinue
 }
 
-function __runex_register_space_handler {
+function __runex_register_handler {
     param(
+        [string]$chord,
+        [scriptblock]$handler,
         [string]$viMode
     )
 
     $params = @{
-        Chord = '{PWSH_CHORD}'
+        Chord = $chord
         ScriptBlock = {
             param($key, $arg)
             $line = $null
             $cursor = $null
             [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
 
-            $state = __runex_expand_space $line $cursor
+            $state = & $handler $line $cursor
             [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $state.Line)
             [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($state.Cursor)
         }
@@ -102,8 +116,10 @@ function __runex_register_space_handler {
 }
 
 if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
-    __runex_register_space_handler
+    __runex_register_handler '{PWSH_CHORD}' ${function:__runex_expand_space}
+    __runex_register_handler '{PWSH_LITERAL_CHORD}' ${function:__runex_insert_literal_space}
     if ((Get-PSReadLineOption).EditMode -eq 'Vi') {
-        __runex_register_space_handler Insert
+        __runex_register_handler '{PWSH_CHORD}' ${function:__runex_expand_space} Insert
+        __runex_register_handler '{PWSH_LITERAL_CHORD}' ${function:__runex_insert_literal_space} Insert
     }
 }

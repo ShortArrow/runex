@@ -54,6 +54,29 @@ fn trigger_for(shell: Shell, config: Option<&Config>) -> TriggerKey {
     }
 }
 
+fn literal_trigger_for(shell: Shell, config: Option<&Config>) -> TriggerKey {
+    let keybind = match config {
+        Some(config) => &config.keybind,
+        None => return TriggerKey::AltSpace,
+    };
+
+    match shell {
+        Shell::Bash => keybind
+            .bash_literal
+            .or(keybind.literal)
+            .unwrap_or(TriggerKey::AltSpace),
+        Shell::Pwsh => keybind
+            .pwsh_literal
+            .or(keybind.literal)
+            .unwrap_or(TriggerKey::AltSpace),
+        Shell::Nu => keybind
+            .nu_literal
+            .or(keybind.literal)
+            .unwrap_or(TriggerKey::AltSpace),
+        Shell::Clink => keybind.literal.unwrap_or(TriggerKey::AltSpace),
+    }
+}
+
 fn bash_chord(trigger: TriggerKey) -> &'static str {
     match trigger {
         TriggerKey::Space => "\\x20",
@@ -142,15 +165,20 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
         Shell::Nu => include_str!("templates/nu.nu"),
     };
     let trigger = trigger_for(shell, config);
+    let literal = literal_trigger_for(shell, config);
     template
         .replace("\r\n", "\n")
         .replace("{BIN}", bin)
         .replace("{BASH_CHORD}", bash_chord(trigger))
+        .replace("{BASH_LITERAL_CHORD}", bash_chord(literal))
         .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
         .replace("{PWSH_CHORD}", pwsh_chord(trigger))
+        .replace("{PWSH_LITERAL_CHORD}", pwsh_chord(literal))
         .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
         .replace("{NU_MODIFIER}", nu_modifier(trigger))
         .replace("{NU_KEYCODE}", nu_keycode(trigger))
+        .replace("{NU_LITERAL_MODIFIER}", nu_modifier(literal))
+        .replace("{NU_LITERAL_KEYCODE}", nu_keycode(literal))
 }
 
 #[cfg(test)]
@@ -192,6 +220,7 @@ mod tests {
         assert!(s.contains("bind"), "bash script must use bind");
         assert!(s.contains("READLINE_LINE"), "bash script must use READLINE_LINE");
         assert!(s.contains("READLINE_POINT"), "bash script must inspect the cursor");
+        assert!(s.contains("{BASH_LITERAL_CHORD}") == false, "bash script must resolve the literal chord");
     }
 
     #[test]
@@ -201,6 +230,7 @@ mod tests {
         assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
         assert!(s.contains("EditMode"), "pwsh script must handle PSReadLine edit mode");
         assert!(s.contains("__runex_is_command_position"), "pwsh script must detect command position");
+        assert!(s.contains("{PWSH_LITERAL_CHORD}") == false, "pwsh script must resolve the literal chord");
     }
 
     #[test]
@@ -222,9 +252,13 @@ mod tests {
             version: 1,
             keybind: crate::model::KeybindConfig {
                 trigger: None,
+                literal: None,
                 bash: Some(TriggerKey::AltSpace),
+                bash_literal: None,
                 pwsh: None,
+                pwsh_literal: None,
                 nu: None,
+                nu_literal: None,
             },
             abbr: vec![],
         };
@@ -253,14 +287,44 @@ mod tests {
             version: 1,
             keybind: crate::model::KeybindConfig {
                 trigger: Some(TriggerKey::Tab),
+                literal: None,
                 bash: None,
+                bash_literal: None,
                 pwsh: None,
+                pwsh_literal: None,
                 nu: None,
+                nu_literal: None,
             },
             abbr: vec![],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
-        assert!(s.contains("Chord = 'Tab'"), "pwsh script must use the configured chord");
+        assert!(
+            s.contains("__runex_register_handler 'Tab' ${function:__runex_expand_space}"),
+            "pwsh script must use the configured chord"
+        );
+    }
+
+    #[test]
+    fn pwsh_script_uses_literal_override() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                trigger: Some(TriggerKey::Space),
+                literal: Some(TriggerKey::AltSpace),
+                bash: None,
+                bash_literal: None,
+                pwsh: None,
+                pwsh_literal: Some(TriggerKey::Tab),
+                nu: None,
+                nu_literal: None,
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Pwsh, "runex", Some(&config));
+        assert!(
+            s.contains("__runex_register_handler 'Tab' ${function:__runex_insert_literal_space}"),
+            "pwsh script must use the configured literal chord"
+        );
     }
 
     #[test]
