@@ -40,7 +40,7 @@ function __runex_register_space_handler {
     )
 
     $params = @{
-        Chord = ' '
+        Chord = '{PWSH_CHORD}'
         ScriptBlock = {
             param($key, $arg)
             $line = $null

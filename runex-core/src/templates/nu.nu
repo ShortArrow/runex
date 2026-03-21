@@ -2,8 +2,8 @@
 # Add the following to your $env.config.keybindings:
 $env.config.keybindings = ($env.config.keybindings | append {
     name: runex_expand
-    modifier: none
-    keycode: space
+    modifier: {NU_MODIFIER}
+    keycode: {NU_KEYCODE}
     mode: [emacs vi_insert]
     event: {
         send: executehostcommand

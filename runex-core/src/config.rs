@@ -37,6 +37,7 @@ pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::TriggerKey;
 
     #[test]
     fn parse_minimal_toml() {
@@ -69,6 +70,23 @@ when_command_exists = ["lsd"]
             config.abbr[0].when_command_exists,
             Some(vec!["lsd".to_string()])
         );
+    }
+
+    #[test]
+    fn parse_with_keybind() {
+        let toml = r#"
+version = 1
+
+[keybind]
+trigger = "space"
+bash = "alt-space"
+pwsh = "tab"
+"#;
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.keybind.trigger, Some(TriggerKey::Space));
+        assert_eq!(config.keybind.bash, Some(TriggerKey::AltSpace));
+        assert_eq!(config.keybind.pwsh, Some(TriggerKey::Tab));
+        assert_eq!(config.keybind.nu, None);
     }
 
     #[test]

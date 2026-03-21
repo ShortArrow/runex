@@ -57,7 +57,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
                 Box::<dyn std::error::Error>::from(e.to_string())
             })?;
-            print!("{}", runex_core::shell::export_script(s, &bin));
+            let config_path = default_config_path().ok();
+            let config = config_path
+                .as_ref()
+                .and_then(|path| load_config(path).ok());
+            print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
         }
         Commands::Doctor => {
             let config_path = default_config_path().unwrap_or_default();

@@ -1,5 +1,22 @@
 use serde::Deserialize;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TriggerKey {
+    #[default]
+    Space,
+    Tab,
+    AltSpace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+pub struct KeybindConfig {
+    pub trigger: Option<TriggerKey>,
+    pub bash: Option<TriggerKey>,
+    pub pwsh: Option<TriggerKey>,
+    pub nu: Option<TriggerKey>,
+}
+
 /// A single abbreviation rule: rune → cast.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Abbr {
@@ -12,6 +29,8 @@ pub struct Abbr {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
     pub version: u32,
+    #[serde(default)]
+    pub keybind: KeybindConfig,
     #[serde(default)]
     pub abbr: Vec<Abbr>,
 }
@@ -53,10 +72,26 @@ mod tests {
     fn config_fields() {
         let c = Config {
             version: 1,
+            keybind: KeybindConfig::default(),
             abbr: vec![],
         };
         assert_eq!(c.version, 1);
+        assert_eq!(c.keybind, KeybindConfig::default());
         assert!(c.abbr.is_empty());
+    }
+
+    #[test]
+    fn keybind_config_fields() {
+        let k = KeybindConfig {
+            trigger: Some(TriggerKey::Space),
+            bash: Some(TriggerKey::AltSpace),
+            pwsh: Some(TriggerKey::Tab),
+            nu: None,
+        };
+        assert_eq!(k.trigger, Some(TriggerKey::Space));
+        assert_eq!(k.bash, Some(TriggerKey::AltSpace));
+        assert_eq!(k.pwsh, Some(TriggerKey::Tab));
+        assert_eq!(k.nu, None);
     }
 
     #[test]

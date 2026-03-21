@@ -9,7 +9,7 @@ runex is a cross-shell abbreviation engine that expands short tokens into full c
 ## Features
 
 - Cross-shell support (bash / pwsh / cmd / nu)
-- Real-time expansion (space-triggered)
+- Real-time expansion (customizable trigger)
 - Single config file
 - Conditional rules (OS / shell / command existence)
 - Fast and lightweight (Rust core)
@@ -100,6 +100,10 @@ If Clink is installed and loads `%LOCALAPPDATA%\clink\*.lua`, the file above is 
 ```toml
 version = 1
 
+[keybind]
+trigger = "space"
+bash = "alt-space"
+
 [[abbr]]
 key = "ls"
 expand = "lsd"
@@ -108,6 +112,18 @@ expand = "lsd"
 key = "gcm"
 expand = "git commit -m"
 ```
+
+Supported key values:
+
+- `space`
+- `tab`
+- `alt-space`
+
+`trigger` sets the default for all shells. Shell-specific keys like `bash`, `pwsh`, and `nu` override that default.
+
+Example: keep `space` everywhere, but use `alt-space` only for bash.
+
+If you want multiple shells or environments to share one physical config file, set `RUNEX_CONFIG` to that path before loading `runex`.
 
 ## Commands
 

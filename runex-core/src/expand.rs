@@ -43,6 +43,7 @@ mod tests {
     fn cfg(abbrs: Vec<Abbr>) -> Config {
         Config {
             version: 1,
+            keybind: crate::model::KeybindConfig::default(),
             abbr: abbrs,
         }
     }
