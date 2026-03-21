@@ -427,6 +427,7 @@ mod tests {
         );
         assert!(s.contains("zle -N __runex_expand"), "zsh script must register a zle widget");
         assert!(s.contains(r#"bindkey " " __runex_expand"#), "zsh script must bind the trigger key");
+        assert!(s.contains("__runex_expand_buffer"), "zsh script must expose a testable helper");
         assert!(s.contains("LBUFFER"), "zsh script must inspect the text before the cursor");
         assert!(s.contains("RBUFFER"), "zsh script must inspect the text after the cursor");
         assert!(s.contains("expanded=$('runex' expand"), "zsh script must quote the executable");

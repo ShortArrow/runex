@@ -44,28 +44,24 @@ function __runex_is_known_token() {
     esac
 }
 
-function __runex_expand() {
+function __runex_expand_buffer() {
     local left="$LBUFFER"
     local right="$RBUFFER"
 
-    if [[ -n "$right" && "${right:0:1}" != " " ]]; then
+    if [[ -n "$right" && "${right[1,1]}" != " " ]]; then
         LBUFFER+=" "
-        zle redisplay
         return
     fi
 
     local token="${left##* }"
     if [[ -n "$token" ]]; then
-        local token_start=$((${#left} - ${#token}))
-        local prefix="${left:0:token_start}"
+        local prefix="${left[1,$(( ${#left} - ${#token} ))]}"
         if ! __runex_is_command_position "$prefix"; then
             LBUFFER+=" "
-            zle redisplay
             return
         fi
         if ! __runex_is_known_token "$token"; then
             LBUFFER+=" "
-            zle redisplay
             return
         fi
         local expanded
@@ -76,6 +72,10 @@ function __runex_expand() {
     fi
 
     LBUFFER+=" "
+}
+
+function __runex_expand() {
+    __runex_expand_buffer
     zle redisplay
 }
 
