@@ -94,6 +94,29 @@ fn pwsh_chord(trigger: TriggerKey) -> &'static str {
     }
 }
 
+fn pwsh_quote_string(token: &str) -> String {
+    format!("'{}'", token.replace('\'', "''"))
+}
+
+fn pwsh_known_cases(config: Option<&Config>) -> String {
+    let Some(config) = config else {
+        return "        default { return $true }".to_string();
+    };
+
+    if config.abbr.is_empty() {
+        return "        default { return $true }".to_string();
+    }
+
+    let mut lines = Vec::with_capacity(config.abbr.len());
+    for abbr in &config.abbr {
+        lines.push(format!(
+            "        {} {{ return $true }}",
+            pwsh_quote_string(&abbr.key)
+        ));
+    }
+    lines.join("\n")
+}
+
 fn nu_modifier(trigger: TriggerKey) -> &'static str {
     match trigger {
         TriggerKey::AltSpace => "alt",
@@ -125,6 +148,7 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
         .replace("{BASH_CHORD}", bash_chord(trigger))
         .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
         .replace("{PWSH_CHORD}", pwsh_chord(trigger))
+        .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
         .replace("{NU_MODIFIER}", nu_modifier(trigger))
         .replace("{NU_KEYCODE}", nu_keycode(trigger))
 }
@@ -176,6 +200,7 @@ mod tests {
         assert!(s.contains("Set-PSReadLineKeyHandler"), "pwsh script must use PSReadLine");
         assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
         assert!(s.contains("EditMode"), "pwsh script must handle PSReadLine edit mode");
+        assert!(s.contains("__runex_is_command_position"), "pwsh script must detect command position");
     }
 
     #[test]
@@ -236,5 +261,20 @@ mod tests {
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
         assert!(s.contains("Chord = 'Tab'"), "pwsh script must use the configured chord");
+    }
+
+    #[test]
+    fn pwsh_script_embeds_known_tokens() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![crate::model::Abbr {
+                key: "gcm".into(),
+                expand: "git commit -m".into(),
+                when_command_exists: None,
+            }],
+        };
+        let s = export_script(Shell::Pwsh, "runex", Some(&config));
+        assert!(s.contains("'gcm' { return $true }"), "pwsh script must embed known tokens");
     }
 }

@@ -62,8 +62,23 @@ Write-Output "$($state.Line)|$($state.Cursor)"
         let config = write_config();
         assert_eq!(
             run_helper(&config, "echo gcm", 8),
-            "echo echo EXPANDED |19"
+            "echo gcm |9"
         );
+    }
+
+    #[test]
+    fn expands_after_separator() {
+        let config = write_config();
+        assert_eq!(
+            run_helper(&config, "echo foo && gcm", 15),
+            "echo foo && echo EXPANDED |26"
+        );
+    }
+
+    #[test]
+    fn expands_after_sudo() {
+        let config = write_config();
+        assert_eq!(run_helper(&config, "sudo gcm", 8), "sudo echo EXPANDED |19");
     }
 
     #[test]
@@ -79,5 +94,11 @@ Write-Output "$($state.Line)|$($state.Cursor)"
             run_helper(&config, "cargo install --path", 20),
             "cargo install --path |21"
         );
+    }
+
+    #[test]
+    fn known_token_in_argument_position_does_not_expand() {
+        let config = write_config();
+        assert_eq!(run_helper(&config, "echo gcm", 8), "echo gcm |9");
     }
 }

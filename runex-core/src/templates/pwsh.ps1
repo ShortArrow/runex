@@ -1,4 +1,44 @@
 # runex shell integration for PowerShell
+function __runex_trim_trailing_spaces {
+    param([string]$text)
+
+    return $text.TrimEnd(' ')
+}
+
+function __runex_is_command_position {
+    param([string]$prefix)
+
+    $prefix = __runex_trim_trailing_spaces $prefix
+    if (-not $prefix) {
+        return $true
+    }
+
+    if ($prefix -match '(\|\||&&|\||;)$') {
+        return $true
+    }
+
+    $parts = $prefix -split ' '
+    $prev = $parts[-1]
+    if ($prev -eq 'sudo') {
+        $before = __runex_trim_trailing_spaces ($prefix.Substring(0, $prefix.Length - 4))
+        if (-not $before) {
+            return $true
+        }
+        return [bool]($before -match '(\|\||&&|\||;)$')
+    }
+
+    return $false
+}
+
+function __runex_is_known_token {
+    param([string]$token)
+
+    switch ($token) {
+{PWSH_KNOWN_CASES}
+        default { return $false }
+    }
+}
+
 function __runex_expand_space {
     param(
         [string]$line,
@@ -15,8 +55,9 @@ function __runex_expand_space {
 
     $left = $line.Substring(0, $cursor)
     $tokenStart = $left.LastIndexOf(' ') + 1
+    $prefix = $line.Substring(0, $tokenStart)
     $token = $left.Substring($tokenStart)
-    if ($token) {
+    if ($token -and (__runex_is_command_position $prefix) -and (__runex_is_known_token $token)) {
         $expanded = & {BIN} expand "--token=$token" 2>$null
         if ($expanded -and $expanded -ne $token) {
             $line = $line.Substring(0, $tokenStart) + $expanded + $right
