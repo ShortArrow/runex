@@ -79,7 +79,7 @@ __runex_expand() {
         runex_debug_trap="$(trap -p DEBUG)"
         trap - DEBUG
         PROMPT_COMMAND=
-        expanded=$({BIN} expand --token="$token" 2>/dev/null)
+        expanded=$({BASH_BIN} expand --token="$token" 2>/dev/null)
         if [ -n "$runex_debug_trap" ]; then
             eval "$runex_debug_trap"
         fi

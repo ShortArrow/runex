@@ -58,7 +58,7 @@ function __runex_expand_space {
     $prefix = $line.Substring(0, $tokenStart)
     $token = $left.Substring($tokenStart)
     if ($token -and (__runex_is_command_position $prefix) -and (__runex_is_known_token $token)) {
-        $expanded = & {BIN} expand "--token=$token" 2>$null
+        $expanded = & {PWSH_BIN} expand "--token=$token" 2>$null
         if ($expanded -and $expanded -ne $token) {
             $line = $line.Substring(0, $tokenStart) + $expanded + $right
             $cursor = $tokenStart + $expanded.Length

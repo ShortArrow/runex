@@ -29,6 +29,8 @@ ls␣  → lsd
 cargo install runex
 ```
 
+Generated shell scripts and your `config.toml` are part of your local shell environment. Only load and sync files you trust.
+
 ## Setup
 
 ### PowerShell

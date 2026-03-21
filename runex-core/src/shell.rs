@@ -66,6 +66,10 @@ fn bash_quote_pattern(token: &str) -> String {
     format!("'{}'", token.replace('\'', r#"'\''"#))
 }
 
+fn bash_quote_string(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r#"'\''"#))
+}
+
 fn bash_known_cases(config: Option<&Config>) -> String {
     let Some(config) = config else {
         return "        *) return 0 ;;".to_string();
@@ -98,6 +102,21 @@ fn pwsh_quote_string(token: &str) -> String {
     format!("'{}'", token.replace('\'', "''"))
 }
 
+fn lua_quote_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn pwsh_known_cases(config: Option<&Config>) -> String {
     let Some(config) = config else {
         return "        default { return $true }".to_string();
@@ -122,6 +141,19 @@ fn nu_modifier(trigger: TriggerKey) -> &'static str {
         TriggerKey::AltSpace => "alt",
         TriggerKey::Space | TriggerKey::Tab => "none",
     }
+}
+
+fn clink_known_cases(config: Option<&Config>) -> String {
+    let Some(config) = config else {
+        return String::new();
+    };
+
+    config
+        .abbr
+        .iter()
+        .map(|abbr| format!("    [{}] = true,", lua_quote_string(&abbr.key)))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn nu_keycode(trigger: TriggerKey) -> &'static str {
@@ -211,9 +243,13 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
     template
         .replace("\r\n", "\n")
         .replace("{BIN}", bin)
+        .replace("{BASH_BIN}", &bash_quote_string(bin))
         .replace("{BASH_BIND_LINES}", &bash_bind_lines(trigger))
         .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
+        .replace("{CLINK_BIN}", &lua_quote_string(bin))
+        .replace("{CLINK_KNOWN_CASES}", &clink_known_cases(config))
         .replace("{CLINK_REGISTRATION}", &clink_registration(trigger))
+        .replace("{PWSH_BIN}", &pwsh_quote_string(bin))
         .replace("{PWSH_REGISTER_LINES}", &pwsh_register_lines(trigger))
         .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
         .replace("{NU_BINDINGS}", &nu_bindings(trigger, bin))
@@ -276,6 +312,7 @@ mod tests {
         );
         assert!(s.contains("bind -x"), "bash script must use bind");
         assert!(s.contains(r#"bind -r "\x20""#), "bash script must clean up prior bindings");
+        assert!(s.contains("expanded=$('runex' expand"), "bash script must quote the executable");
         assert!(s.contains("READLINE_LINE"), "bash script must use READLINE_LINE");
         assert!(s.contains("READLINE_POINT"), "bash script must inspect the cursor");
         assert!(!s.contains("{BASH_BIND_LINES}"), "bash script must resolve bind lines");
@@ -300,6 +337,7 @@ mod tests {
             s.contains("Set-PSReadLineKeyHandler -Chord 'Tab' -Function Complete"),
             "pwsh script must restore default handlers before adding custom ones"
         );
+        assert!(s.contains("$expanded = & 'runex' expand"), "pwsh script must quote the executable");
         assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
         assert!(s.contains("EditMode"), "pwsh script must handle PSReadLine edit mode");
         assert!(s.contains("__runex_is_command_position"), "pwsh script must detect command position");
@@ -321,6 +359,8 @@ mod tests {
             }),
         );
         assert!(s.contains("clink"), "clink script must reference clink");
+        assert!(s.contains("local RUNEX_BIN = \"runex\""), "clink script must quote the executable");
+        assert!(s.contains("local RUNEX_KNOWN = {"), "clink script must embed known keys");
     }
 
     #[test]
