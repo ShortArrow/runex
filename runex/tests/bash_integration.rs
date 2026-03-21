@@ -104,10 +104,24 @@ mod bash {
         p.exp_string("<g cm tail>").unwrap();
     }
 
-    /// The token immediately before the cursor is expanded without touching the prefix.
+    /// The token after a command separator is expanded without touching the prefix.
     #[test]
     #[ignore]
-    fn test_expand_token_before_cursor() {
+    fn test_expand_after_separator() {
+        let config = write_config();
+        let mut p = spawn_bash_with_integration(&config);
+
+        p.send_line(
+            "READLINE_LINE='echo foo && gcm'; READLINE_POINT=15; __runex_expand; printf '<%s>\\n' \"$READLINE_LINE\"",
+        )
+        .unwrap();
+        p.exp_string("<echo foo && echo EXPANDED >").unwrap();
+    }
+
+    /// Argument positions should stay plain even if the token matches an abbreviation.
+    #[test]
+    #[ignore]
+    fn test_argument_position_does_not_expand() {
         let config = write_config();
         let mut p = spawn_bash_with_integration(&config);
 
@@ -115,7 +129,21 @@ mod bash {
             "READLINE_LINE='echo gcm'; READLINE_POINT=8; __runex_expand; printf '<%s>\\n' \"$READLINE_LINE\"",
         )
         .unwrap();
-        p.exp_string("<echo echo EXPANDED >").unwrap();
+        p.exp_string("<echo gcm >").unwrap();
+    }
+
+    /// `sudo` preserves command-position expansion for the following token.
+    #[test]
+    #[ignore]
+    fn test_sudo_position_expands() {
+        let config = write_config();
+        let mut p = spawn_bash_with_integration(&config);
+
+        p.send_line(
+            "READLINE_LINE='sudo gcm'; READLINE_POINT=8; __runex_expand; printf '<%s>\\n' \"$READLINE_LINE\"",
+        )
+        .unwrap();
+        p.exp_string("<sudo echo EXPANDED >").unwrap();
     }
 
     /// Unknown token is not expanded — stays as-is.

@@ -1,4 +1,43 @@
 # runex shell integration for bash
+__runex_trim_trailing_spaces() {
+    local s="$1"
+    while [[ "$s" == *" " ]]; do
+        s="${s% }"
+    done
+    printf '%s' "$s"
+}
+
+__runex_is_command_position() {
+    local prefix
+    prefix="$(__runex_trim_trailing_spaces "$1")"
+
+    if [ -z "$prefix" ]; then
+        return 0
+    fi
+
+    case "$prefix" in
+        *'&&'|*'||'|*'|'|*';')
+            return 0
+            ;;
+    esac
+
+    local prev_word="${prefix##* }"
+    if [ "$prev_word" = "sudo" ]; then
+        local before_sudo="${prefix%sudo}"
+        before_sudo="$(__runex_trim_trailing_spaces "$before_sudo")"
+        if [ -z "$before_sudo" ]; then
+            return 0
+        fi
+        case "$before_sudo" in
+            *'&&'|*'||'|*'|'|*';')
+                return 0
+                ;;
+        esac
+    fi
+
+    return 1
+}
+
 __runex_expand() {
     local runex_prompt_command="${PROMPT_COMMAND-}"
     local runex_restore_prompt_command
@@ -22,6 +61,13 @@ __runex_expand() {
     if [ -n "$token" ]; then
         local token_start=$((READLINE_POINT - ${#token}))
         local prefix="${READLINE_LINE:0:token_start}"
+        if ! __runex_is_command_position "$prefix"; then
+            READLINE_LINE="${left} ${right}"
+            READLINE_POINT=$((READLINE_POINT + 1))
+            PROMPT_COMMAND="$runex_restore_prompt_command"
+            eval "$runex_restore_ps0"
+            return
+        fi
         local suffix="${READLINE_LINE:READLINE_POINT}"
         local expanded
         local runex_debug_trap
