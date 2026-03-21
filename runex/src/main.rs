@@ -2,9 +2,14 @@ use clap::{Parser, Subcommand};
 use runex_core::config::{default_config_path, load_config};
 use runex_core::doctor::{self, Check, CheckStatus, DiagResult};
 use runex_core::expand;
-use runex_core::model::{Config, ExpandResult};
+use runex_core::model::{Abbr, Config, ExpandResult};
 use runex_core::shell::Shell;
 use std::process::Command;
+
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_GREEN: &str = "\x1b[32m";
+const ANSI_YELLOW: &str = "\x1b[33m";
+const ANSI_RED: &str = "\x1b[31m";
 
 #[derive(Parser)]
 #[command(name = "runex", about = "Rune-to-cast expansion engine")]
@@ -38,7 +43,24 @@ fn bash_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r#"'\''"#))
 }
 
-fn check_pwsh_alias(token: &str) -> Option<Check> {
+fn format_check_tag(status: &CheckStatus) -> String {
+    match status {
+        CheckStatus::Ok => format!("[{ANSI_GREEN}OK{ANSI_RESET}]"),
+        CheckStatus::Warn => format!("[{ANSI_YELLOW}WARN{ANSI_RESET}]"),
+        CheckStatus::Error => format!("[{ANSI_RED}ERROR{ANSI_RESET}]"),
+    }
+}
+
+fn format_check_line(check: &Check) -> String {
+    format!(
+        "{:>8}  {}: {}",
+        format_check_tag(&check.status),
+        check.name,
+        check.detail
+    )
+}
+
+fn run_pwsh_alias_lookup(token: &str) -> Option<String> {
     if which::which("pwsh").is_err() {
         return None;
     }
@@ -61,10 +83,14 @@ fn check_pwsh_alias(token: &str) -> Option<Check> {
     }
 
     let definition = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if definition.is_empty() {
-        return None;
-    }
+    (!definition.is_empty()).then_some(definition)
+}
 
+fn check_pwsh_alias_with<F>(token: &str, lookup: F) -> Option<Check>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let definition = lookup(token)?;
     Some(Check {
         name: format!("shell:pwsh:key:{token}"),
         status: CheckStatus::Warn,
@@ -72,7 +98,7 @@ fn check_pwsh_alias(token: &str) -> Option<Check> {
     })
 }
 
-fn check_bash_alias(token: &str) -> Option<Check> {
+fn run_bash_alias_lookup(token: &str) -> Option<String> {
     if cfg!(windows) {
         return None;
     }
@@ -94,10 +120,14 @@ fn check_bash_alias(token: &str) -> Option<Check> {
     }
 
     let detail = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if detail.is_empty() {
-        return None;
-    }
+    (!detail.is_empty()).then_some(detail)
+}
 
+fn check_bash_alias_with<F>(token: &str, lookup: F) -> Option<Check>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let detail = lookup(token)?;
     Some(Check {
         name: format!("shell:bash:key:{token}"),
         status: CheckStatus::Warn,
@@ -105,19 +135,39 @@ fn check_bash_alias(token: &str) -> Option<Check> {
     })
 }
 
+fn collect_shell_alias_conflicts_with<FPwsh, FBash>(
+    abbrs: &[Abbr],
+    pwsh_lookup: FPwsh,
+    bash_lookup: FBash,
+) -> Vec<Check>
+where
+    FPwsh: Fn(&str) -> Option<String> + Copy,
+    FBash: Fn(&str) -> Option<String> + Copy,
+{
+    let mut checks = Vec::new();
+    for abbr in abbrs {
+        if let Some(check) = check_pwsh_alias_with(&abbr.key, pwsh_lookup) {
+            checks.push(check);
+        }
+        if let Some(check) = check_bash_alias_with(&abbr.key, bash_lookup) {
+            checks.push(check);
+        }
+    }
+    checks
+}
+
 fn add_shell_alias_conflicts(result: &mut DiagResult, config: Option<&Config>) {
     let Some(config) = config else {
         return;
     };
 
-    for abbr in &config.abbr {
-        if let Some(check) = check_pwsh_alias(&abbr.key) {
-            result.checks.push(check);
-        }
-        if let Some(check) = check_bash_alias(&abbr.key) {
-            result.checks.push(check);
-        }
-    }
+    result
+        .checks
+        .extend(collect_shell_alias_conflicts_with(
+            &config.abbr,
+            run_pwsh_alias_lookup,
+            run_bash_alias_lookup,
+        ));
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -158,12 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             add_shell_alias_conflicts(&mut result, config.as_ref());
 
             for check in &result.checks {
-                let tag = match check.status {
-                    CheckStatus::Ok => "[OK]",
-                    CheckStatus::Warn => "[WARN]",
-                    CheckStatus::Error => "[ERROR]",
-                };
-                println!("{tag:>8}  {}: {}", check.name, check.detail);
+                println!("{}", format_check_line(check));
             }
 
             if !result.is_healthy() {
@@ -173,4 +218,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_abbr(key: &str) -> Abbr {
+        Abbr {
+            key: key.into(),
+            expand: format!("expand-{key}"),
+            when_command_exists: None,
+        }
+    }
+
+    #[test]
+    fn format_check_line_colors_only_tag_text() {
+        let check = Check {
+            name: "config_file".into(),
+            status: CheckStatus::Warn,
+            detail: "detail".into(),
+        };
+
+        let line = format_check_line(&check);
+        assert!(line.starts_with(&format!("[{ANSI_YELLOW}WARN{ANSI_RESET}]")));
+        assert!(line.contains("config_file: detail"));
+    }
+
+    #[test]
+    fn collect_shell_alias_conflicts_reports_pwsh_and_bash() {
+        let checks = collect_shell_alias_conflicts_with(
+            &[test_abbr("gcm"), test_abbr("nv")],
+            |token| (token == "gcm").then_some("Get-Command".to_string()),
+            |token| (token == "nv").then_some("alias nv='nvim'".to_string()),
+        );
+
+        assert_eq!(checks.len(), 2);
+        assert_eq!(checks[0].name, "shell:pwsh:key:gcm");
+        assert!(checks[0].detail.contains("Get-Command"));
+        assert_eq!(checks[1].name, "shell:bash:key:nv");
+        assert!(checks[1].detail.contains("alias nv='nvim'"));
+    }
+
+    #[test]
+    fn collect_shell_alias_conflicts_skips_missing_aliases() {
+        let checks = collect_shell_alias_conflicts_with(&[test_abbr("gcm")], |_| None, |_| None);
+        assert!(checks.is_empty());
+    }
 }
