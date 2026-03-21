@@ -104,7 +104,6 @@ version = 1
 
 [keybind]
 trigger = "space"
-literal = "alt-space"
 
 [[abbr]]
 key = "ls"
@@ -122,8 +121,7 @@ Supported key values:
 - `alt-space`
 
 `trigger` sets the default expand key for all shells.
-`literal` sets the default "insert a plain space without expansion" key.
-Shell-specific keys like `bash`, `pwsh`, `nu`, `bash_literal`, `pwsh_literal`, and `nu_literal` override those defaults.
+Shell-specific keys like `bash`, `pwsh`, and `nu` override that default.
 
 Example override:
 
@@ -131,11 +129,17 @@ Example override:
 [keybind]
 trigger = "space"
 bash = "alt-space"
-literal = "alt-space"
-pwsh_literal = "tab"
 ```
 
 If you want multiple shells or environments to share one physical config file, set `RUNEX_CONFIG` to that path before loading `runex`.
+
+## Avoiding Expansion
+
+If you use `trigger = "space"`, there are a few practical ways to avoid expansion when needed.
+
+- In many terminal setups, `Shift+Space` inserts a plain space without triggering `runex`. This is convenient, but terminal- and shell-dependent.
+- In bash, prefixing the token with `\` avoids a match, so `\ls` stays literal. `command ls` also works.
+- In PowerShell, `\ls` is just a different token, not a built-in escape. For built-in aliases such as `ls`, prefer the full command name such as `Get-ChildItem`.
 
 ## Commands
 

@@ -79,17 +79,13 @@ version = 1
 
 [keybind]
 trigger = "space"
-literal = "alt-space"
 bash = "alt-space"
 pwsh = "tab"
-pwsh_literal = "alt-space"
 "#;
         let config = parse_config(toml).unwrap();
         assert_eq!(config.keybind.trigger, Some(TriggerKey::Space));
-        assert_eq!(config.keybind.literal, Some(TriggerKey::AltSpace));
         assert_eq!(config.keybind.bash, Some(TriggerKey::AltSpace));
         assert_eq!(config.keybind.pwsh, Some(TriggerKey::Tab));
-        assert_eq!(config.keybind.pwsh_literal, Some(TriggerKey::AltSpace));
         assert_eq!(config.keybind.nu, None);
     }
 

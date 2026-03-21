@@ -54,20 +54,6 @@ fn trigger_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> {
     }
 }
 
-fn literal_trigger_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> {
-    let keybind = match config {
-        Some(config) => &config.keybind,
-        None => return None,
-    };
-
-    match shell {
-        Shell::Bash => keybind.bash_literal.or(keybind.literal),
-        Shell::Pwsh => keybind.pwsh_literal.or(keybind.literal),
-        Shell::Nu => keybind.nu_literal.or(keybind.literal),
-        Shell::Clink => keybind.literal,
-    }
-}
-
 fn bash_chord(trigger: TriggerKey) -> &'static str {
     match trigger {
         TriggerKey::Space => "\\x20",
@@ -104,7 +90,7 @@ fn pwsh_chord(trigger: TriggerKey) -> &'static str {
     match trigger {
         TriggerKey::Space => " ",
         TriggerKey::Tab => "Tab",
-        TriggerKey::AltSpace => "Alt+Space",
+        TriggerKey::AltSpace => "Alt+Spacebar",
     }
 }
 
@@ -145,7 +131,7 @@ fn nu_keycode(trigger: TriggerKey) -> &'static str {
     }
 }
 
-fn bash_bind_lines(trigger: Option<TriggerKey>, literal: Option<TriggerKey>) -> String {
+fn bash_bind_lines(trigger: Option<TriggerKey>) -> String {
     let mut lines = vec![
         r#"bind -r "\x20" 2>/dev/null || true"#.to_string(),
         r#"bind -r "\C-i" 2>/dev/null || true"#.to_string(),
@@ -154,44 +140,26 @@ fn bash_bind_lines(trigger: Option<TriggerKey>, literal: Option<TriggerKey>) -> 
     if let Some(trigger) = trigger {
         lines.push(format!("bind -x '\"{}\": __runex_expand'", bash_chord(trigger)));
     }
-    if let Some(literal) = literal {
-        lines.push(format!(
-            "bind -x '\"{}\": __runex_insert_literal_space'",
-            bash_chord(literal)
-        ));
-    }
     lines.join("\n")
 }
 
-fn pwsh_register_lines(trigger: Option<TriggerKey>, literal: Option<TriggerKey>) -> String {
+fn pwsh_register_lines(trigger: Option<TriggerKey>) -> String {
     let mut lines = vec![
         "    Set-PSReadLineKeyHandler -Chord ' ' -Function SelfInsert".to_string(),
         "    Set-PSReadLineKeyHandler -Chord 'Tab' -Function Complete".to_string(),
-        "    Set-PSReadLineKeyHandler -Chord 'Alt+Space' -Function SelfInsert".to_string(),
+        "    Set-PSReadLineKeyHandler -Chord 'Alt+Spacebar' -Function SelfInsert".to_string(),
     ];
     if let Some(trigger) = trigger {
         lines.push(format!(
-            "    __runex_register_handler '{}' ${{function:__runex_expand_space}}",
+            "    __runex_register_expand_handler '{}'",
             pwsh_chord(trigger)
-        ));
-    }
-    if let Some(literal) = literal {
-        lines.push(format!(
-            "    __runex_register_handler '{}' ${{function:__runex_insert_literal_space}}",
-            pwsh_chord(literal)
         ));
     }
     let mut vi_lines = Vec::new();
     if let Some(trigger) = trigger {
         vi_lines.push(format!(
-            "        __runex_register_handler '{}' ${{function:__runex_expand_space}} Insert",
+            "        __runex_register_expand_handler '{}' Insert",
             pwsh_chord(trigger)
-        ));
-    }
-    if let Some(literal) = literal {
-        vi_lines.push(format!(
-            "        __runex_register_handler '{}' ${{function:__runex_insert_literal_space}} Insert",
-            pwsh_chord(literal)
         ));
     }
     if !vi_lines.is_empty() {
@@ -202,7 +170,7 @@ fn pwsh_register_lines(trigger: Option<TriggerKey>, literal: Option<TriggerKey>)
     lines.join("\n")
 }
 
-fn nu_bindings(trigger: Option<TriggerKey>, literal: Option<TriggerKey>, bin: &str) -> String {
+fn nu_bindings(trigger: Option<TriggerKey>, bin: &str) -> String {
     let mut blocks = Vec::new();
     if let Some(trigger) = trigger {
         blocks.push(
@@ -210,13 +178,6 @@ fn nu_bindings(trigger: Option<TriggerKey>, literal: Option<TriggerKey>, bin: &s
                 .replace("{BIN}", bin)
                 .replace("{NU_MODIFIER}", nu_modifier(trigger))
                 .replace("{NU_KEYCODE}", nu_keycode(trigger)),
-        );
-    }
-    if let Some(literal) = literal {
-        blocks.push(
-            include_str!("templates/nu_literal_binding.nu")
-                .replace("{NU_LITERAL_MODIFIER}", nu_modifier(literal))
-                .replace("{NU_LITERAL_KEYCODE}", nu_keycode(literal)),
         );
     }
     blocks.join(" | append ")
@@ -247,16 +208,15 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
         Shell::Nu => include_str!("templates/nu.nu"),
     };
     let trigger = trigger_for(shell, config);
-    let literal = literal_trigger_for(shell, config);
     template
         .replace("\r\n", "\n")
         .replace("{BIN}", bin)
-        .replace("{BASH_BIND_LINES}", &bash_bind_lines(trigger, literal))
+        .replace("{BASH_BIND_LINES}", &bash_bind_lines(trigger))
         .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
         .replace("{CLINK_REGISTRATION}", &clink_registration(trigger))
-        .replace("{PWSH_REGISTER_LINES}", &pwsh_register_lines(trigger, literal))
+        .replace("{PWSH_REGISTER_LINES}", &pwsh_register_lines(trigger))
         .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
-        .replace("{NU_BINDINGS}", &nu_bindings(trigger, literal, bin))
+        .replace("{NU_BINDINGS}", &nu_bindings(trigger, bin))
 }
 
 #[cfg(test)]
@@ -387,13 +347,9 @@ mod tests {
             version: 1,
             keybind: crate::model::KeybindConfig {
                 trigger: None,
-                literal: None,
                 bash: Some(TriggerKey::AltSpace),
-                bash_literal: None,
                 pwsh: None,
-                pwsh_literal: None,
                 nu: None,
-                nu_literal: None,
             },
             abbr: vec![],
         };
@@ -422,43 +378,39 @@ mod tests {
             version: 1,
             keybind: crate::model::KeybindConfig {
                 trigger: Some(TriggerKey::Tab),
-                literal: None,
                 bash: None,
-                bash_literal: None,
                 pwsh: None,
-                pwsh_literal: None,
                 nu: None,
-                nu_literal: None,
             },
             abbr: vec![],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
         assert!(
-            s.contains("__runex_register_handler 'Tab' ${function:__runex_expand_space}"),
+            s.contains("__runex_register_expand_handler 'Tab'"),
             "pwsh script must use the configured chord"
         );
     }
 
     #[test]
-    fn pwsh_script_uses_literal_override() {
+    fn pwsh_script_uses_spacebar_name_for_alt_space() {
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig {
-                trigger: Some(TriggerKey::Space),
-                literal: Some(TriggerKey::AltSpace),
+                trigger: None,
                 bash: None,
-                bash_literal: None,
-                pwsh: None,
-                pwsh_literal: Some(TriggerKey::Tab),
+                pwsh: Some(TriggerKey::AltSpace),
                 nu: None,
-                nu_literal: None,
             },
             abbr: vec![],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
         assert!(
-            s.contains("__runex_register_handler 'Tab' ${function:__runex_insert_literal_space}"),
-            "pwsh script must use the configured literal chord"
+            s.contains("Set-PSReadLineKeyHandler -Chord 'Alt+Spacebar' -Function SelfInsert"),
+            "pwsh script must use PowerShell's Spacebar key name"
+        );
+        assert!(
+            s.contains("__runex_register_expand_handler 'Alt+Spacebar'"),
+            "pwsh script must register Alt+Space using Spacebar"
         );
     }
 
@@ -493,8 +445,8 @@ mod tests {
             abbr: vec![],
         }));
         assert!(
-            !s.contains("__runex_register_handler '"),
-            "pwsh script should not register handlers by default"
+            !s.contains("__runex_register_expand_handler '"),
+            "pwsh script should not register expand handlers by default"
         );
         assert!(
             s.contains("Set-PSReadLineKeyHandler -Chord ' ' -Function SelfInsert"),

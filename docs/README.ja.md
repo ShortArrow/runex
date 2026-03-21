@@ -105,7 +105,6 @@ version = 1
 
 [keybind]
 trigger = "space"
-literal = "alt-space"
 
 [[abbr]]
 key = "ls"
@@ -123,8 +122,7 @@ expand = "git commit -m"
 - `alt-space`
 
 `trigger` は全シェル共通の展開キーの既定値です。
-`literal` は「展開せずにそのまま空白を入れるキー」の既定値です。
-`bash`、`pwsh`、`nu`、`bash_literal`、`pwsh_literal`、`nu_literal` を書くと、そのシェルだけ個別に上書きできます。
+`bash`、`pwsh`、`nu` を書くと、そのシェルだけ個別に上書きできます。
 
 上書き例:
 
@@ -132,11 +130,17 @@ expand = "git commit -m"
 [keybind]
 trigger = "space"
 bash = "alt-space"
-literal = "alt-space"
-pwsh_literal = "tab"
 ```
 
 複数シェルや複数環境で物理的に同じ設定ファイルを共有したい場合は、`runex` 読み込み前に `RUNEX_CONFIG` でそのパスを指定します。
+
+## 展開を回避したいとき
+
+`trigger = "space"` を使う場合、必要なときだけ展開を避ける方法があります。
+
+- 多くの端末設定では、`Shift+Space` で `runex` を発火させずに普通の空白を入れられます。ただし、これは端末や line editor 依存です。
+- bash では、先頭に `\` を付けると一致しなくなるので、`\ls` のように書けば展開されません。`command ls` でも回避できます。
+- PowerShell では `\ls` は bash のような escape ではなく、ただ別のトークンになるだけです。`ls` のような標準 alias をそのまま使いたいなら、`Get-ChildItem` のように完全なコマンド名を書く方が安全です。
 
 ## 詠唱一覧
 

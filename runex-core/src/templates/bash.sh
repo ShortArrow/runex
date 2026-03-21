@@ -44,11 +44,6 @@ __runex_is_known_token() {
     esac
 }
 
-__runex_insert_literal_space() {
-    READLINE_LINE="${READLINE_LINE:0:READLINE_POINT} ${READLINE_LINE:READLINE_POINT}"
-    READLINE_POINT=$((READLINE_POINT + 1))
-}
-
 __runex_expand() {
     local runex_prompt_command="${PROMPT_COMMAND-}"
 

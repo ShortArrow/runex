@@ -71,26 +71,13 @@ function __runex_expand_space {
     }
 }
 
-function __runex_insert_literal_space {
-    param(
-        [string]$line,
-        [int]$cursor
-    )
-
-    return @{
-        Line = $line.Substring(0, $cursor) + ' ' + $line.Substring($cursor)
-        Cursor = $cursor + 1
-    }
-}
-
 if (-not (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue)) {
     Import-Module PSReadLine -ErrorAction SilentlyContinue
 }
 
-function __runex_register_handler {
+function __runex_register_expand_handler {
     param(
         [string]$chord,
-        [scriptblock]$handler,
         [string]$viMode
     )
 
@@ -102,7 +89,7 @@ function __runex_register_handler {
             $cursor = $null
             [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
 
-            $state = & $handler $line $cursor
+            $state = __runex_expand_space $line $cursor
             [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $state.Line)
             [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($state.Cursor)
         }

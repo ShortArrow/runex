@@ -12,13 +12,9 @@ pub enum TriggerKey {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 pub struct KeybindConfig {
     pub trigger: Option<TriggerKey>,
-    pub literal: Option<TriggerKey>,
     pub bash: Option<TriggerKey>,
-    pub bash_literal: Option<TriggerKey>,
     pub pwsh: Option<TriggerKey>,
-    pub pwsh_literal: Option<TriggerKey>,
     pub nu: Option<TriggerKey>,
-    pub nu_literal: Option<TriggerKey>,
 }
 
 /// A single abbreviation rule: rune → cast.
@@ -88,22 +84,14 @@ mod tests {
     fn keybind_config_fields() {
         let k = KeybindConfig {
             trigger: Some(TriggerKey::Space),
-            literal: Some(TriggerKey::AltSpace),
             bash: Some(TriggerKey::AltSpace),
-            bash_literal: Some(TriggerKey::Tab),
             pwsh: Some(TriggerKey::Tab),
-            pwsh_literal: None,
             nu: None,
-            nu_literal: None,
         };
         assert_eq!(k.trigger, Some(TriggerKey::Space));
-        assert_eq!(k.literal, Some(TriggerKey::AltSpace));
         assert_eq!(k.bash, Some(TriggerKey::AltSpace));
-        assert_eq!(k.bash_literal, Some(TriggerKey::Tab));
         assert_eq!(k.pwsh, Some(TriggerKey::Tab));
-        assert_eq!(k.pwsh_literal, None);
         assert_eq!(k.nu, None);
-        assert_eq!(k.nu_literal, None);
     }
 
     #[test]
