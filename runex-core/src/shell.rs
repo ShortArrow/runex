@@ -146,7 +146,11 @@ fn nu_keycode(trigger: TriggerKey) -> &'static str {
 }
 
 fn bash_bind_lines(trigger: Option<TriggerKey>, literal: Option<TriggerKey>) -> String {
-    let mut lines = Vec::new();
+    let mut lines = vec![
+        r#"bind -r "\x20" 2>/dev/null || true"#.to_string(),
+        r#"bind -r "\C-i" 2>/dev/null || true"#.to_string(),
+        r#"bind -r "\e " 2>/dev/null || true"#.to_string(),
+    ];
     if let Some(trigger) = trigger {
         lines.push(format!("bind -x '\"{}\": __runex_expand'", bash_chord(trigger)));
     }
@@ -160,7 +164,11 @@ fn bash_bind_lines(trigger: Option<TriggerKey>, literal: Option<TriggerKey>) -> 
 }
 
 fn pwsh_register_lines(trigger: Option<TriggerKey>, literal: Option<TriggerKey>) -> String {
-    let mut lines = Vec::new();
+    let mut lines = vec![
+        "    Set-PSReadLineKeyHandler -Chord ' ' -Function SelfInsert".to_string(),
+        "    Set-PSReadLineKeyHandler -Chord 'Tab' -Function Complete".to_string(),
+        "    Set-PSReadLineKeyHandler -Chord 'Alt+Space' -Function SelfInsert".to_string(),
+    ];
     if let Some(trigger) = trigger {
         lines.push(format!(
             "    __runex_register_handler '{}' ${{function:__runex_expand_space}}",
@@ -307,6 +315,7 @@ mod tests {
             }),
         );
         assert!(s.contains("bind -x"), "bash script must use bind");
+        assert!(s.contains(r#"bind -r "\x20""#), "bash script must clean up prior bindings");
         assert!(s.contains("READLINE_LINE"), "bash script must use READLINE_LINE");
         assert!(s.contains("READLINE_POINT"), "bash script must inspect the cursor");
         assert!(!s.contains("{BASH_BIND_LINES}"), "bash script must resolve bind lines");
@@ -327,6 +336,10 @@ mod tests {
             }),
         );
         assert!(s.contains("Set-PSReadLineKeyHandler"), "pwsh script must use PSReadLine");
+        assert!(
+            s.contains("Set-PSReadLineKeyHandler -Chord 'Tab' -Function Complete"),
+            "pwsh script must restore default handlers before adding custom ones"
+        );
         assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
         assert!(s.contains("EditMode"), "pwsh script must handle PSReadLine edit mode");
         assert!(s.contains("__runex_is_command_position"), "pwsh script must detect command position");
@@ -472,6 +485,7 @@ mod tests {
             abbr: vec![],
         }));
         assert!(!s.contains("bind -x"), "bash script should not bind keys by default");
+        assert!(s.contains(r#"bind -r "\x20""#), "bash cleanup should still be emitted");
 
         let s = export_script(Shell::Pwsh, "runex", Some(&Config {
             version: 1,
@@ -481,6 +495,10 @@ mod tests {
         assert!(
             !s.contains("__runex_register_handler '"),
             "pwsh script should not register handlers by default"
+        );
+        assert!(
+            s.contains("Set-PSReadLineKeyHandler -Chord ' ' -Function SelfInsert"),
+            "pwsh script should restore defaults even without custom handlers"
         );
 
         let s = export_script(Shell::Clink, "runex", Some(&Config {
