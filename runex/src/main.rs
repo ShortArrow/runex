@@ -1,9 +1,10 @@
 use clap::{Parser, Subcommand};
 use runex_core::config::{default_config_path, load_config};
-use runex_core::doctor::{self, CheckStatus};
+use runex_core::doctor::{self, Check, CheckStatus, DiagResult};
 use runex_core::expand;
-use runex_core::model::ExpandResult;
+use runex_core::model::{Config, ExpandResult};
 use runex_core::shell::Shell;
+use std::process::Command;
 
 #[derive(Parser)]
 #[command(name = "runex", about = "Rune-to-cast expansion engine")]
@@ -31,6 +32,92 @@ enum Commands {
         #[arg(long, default_value = "runex")]
         bin: String,
     },
+}
+
+fn bash_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r#"'\''"#))
+}
+
+fn check_pwsh_alias(token: &str) -> Option<Check> {
+    if which::which("pwsh").is_err() {
+        return None;
+    }
+
+    let output = Command::new("pwsh")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "Get-Alias -Name {} -ErrorAction Stop | Select-Object -ExpandProperty Definition",
+                token
+            ),
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let definition = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if definition.is_empty() {
+        return None;
+    }
+
+    Some(Check {
+        name: format!("shell:pwsh:key:{token}"),
+        status: CheckStatus::Warn,
+        detail: format!("conflicts with existing alias '{token}' -> {definition}"),
+    })
+}
+
+fn check_bash_alias(token: &str) -> Option<Check> {
+    if cfg!(windows) {
+        return None;
+    }
+
+    if which::which("bash").is_err() {
+        return None;
+    }
+
+    let output = Command::new("bash")
+        .args([
+            "-ic",
+            &format!("alias {}", bash_single_quote(token)),
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let detail = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if detail.is_empty() {
+        return None;
+    }
+
+    Some(Check {
+        name: format!("shell:bash:key:{token}"),
+        status: CheckStatus::Warn,
+        detail: format!("conflicts with existing alias {detail}"),
+    })
+}
+
+fn add_shell_alias_conflicts(result: &mut DiagResult, config: Option<&Config>) {
+    let Some(config) = config else {
+        return;
+    };
+
+    for abbr in &config.abbr {
+        if let Some(check) = check_pwsh_alias(&abbr.key) {
+            result.checks.push(check);
+        }
+        if let Some(check) = check_bash_alias(&abbr.key) {
+            result.checks.push(check);
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,8 +153,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Doctor => {
             let config_path = default_config_path().unwrap_or_default();
             let config = load_config(&config_path).ok();
-            let result =
+            let mut result =
                 doctor::diagnose(&config_path, config.as_ref(), |cmd| which::which(cmd).is_ok());
+            add_shell_alias_conflicts(&mut result, config.as_ref());
 
             for check in &result.checks {
                 let tag = match check.status {
