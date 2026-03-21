@@ -98,5 +98,4 @@ __runex_expand() {
     READLINE_POINT=$((READLINE_POINT + 1))
     PROMPT_COMMAND="$runex_prompt_command"
 }
-bind -x '"{BASH_CHORD}": __runex_expand'
-bind -x '"{BASH_LITERAL_CHORD}": __runex_insert_literal_space'
+{BASH_BIND_LINES}

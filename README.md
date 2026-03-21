@@ -97,6 +97,8 @@ If Clink is installed and loads `%LOCALAPPDATA%\clink\*.lua`, the file above is 
 
 `~/.config/runex/config.toml`
 
+No keybindings are active until you configure them.
+
 ```toml
 version = 1
 

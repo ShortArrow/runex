@@ -14,9 +14,4 @@ local function runex_expand(line)
     return nil
 end
 
-clink.onfilterinput(function(line)
-    local result = runex_expand(line)
-    if result then
-        return result
-    end
-end)
+{CLINK_REGISTRATION}

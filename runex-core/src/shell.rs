@@ -40,40 +40,31 @@ impl fmt::Display for ShellParseError {
 
 impl std::error::Error for ShellParseError {}
 
-fn trigger_for(shell: Shell, config: Option<&Config>) -> TriggerKey {
+fn trigger_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> {
     let keybind = match config {
         Some(config) => &config.keybind,
-        None => return TriggerKey::Space,
+        None => return None,
     };
 
     match shell {
-        Shell::Bash => keybind.bash.or(keybind.trigger).unwrap_or(TriggerKey::Space),
-        Shell::Pwsh => keybind.pwsh.or(keybind.trigger).unwrap_or(TriggerKey::Space),
-        Shell::Nu => keybind.nu.or(keybind.trigger).unwrap_or(TriggerKey::Space),
-        Shell::Clink => keybind.trigger.unwrap_or(TriggerKey::Space),
+        Shell::Bash => keybind.bash.or(keybind.trigger),
+        Shell::Pwsh => keybind.pwsh.or(keybind.trigger),
+        Shell::Nu => keybind.nu.or(keybind.trigger),
+        Shell::Clink => keybind.trigger,
     }
 }
 
-fn literal_trigger_for(shell: Shell, config: Option<&Config>) -> TriggerKey {
+fn literal_trigger_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> {
     let keybind = match config {
         Some(config) => &config.keybind,
-        None => return TriggerKey::AltSpace,
+        None => return None,
     };
 
     match shell {
-        Shell::Bash => keybind
-            .bash_literal
-            .or(keybind.literal)
-            .unwrap_or(TriggerKey::AltSpace),
-        Shell::Pwsh => keybind
-            .pwsh_literal
-            .or(keybind.literal)
-            .unwrap_or(TriggerKey::AltSpace),
-        Shell::Nu => keybind
-            .nu_literal
-            .or(keybind.literal)
-            .unwrap_or(TriggerKey::AltSpace),
-        Shell::Clink => keybind.literal.unwrap_or(TriggerKey::AltSpace),
+        Shell::Bash => keybind.bash_literal.or(keybind.literal),
+        Shell::Pwsh => keybind.pwsh_literal.or(keybind.literal),
+        Shell::Nu => keybind.nu_literal.or(keybind.literal),
+        Shell::Clink => keybind.literal,
     }
 }
 
@@ -154,6 +145,89 @@ fn nu_keycode(trigger: TriggerKey) -> &'static str {
     }
 }
 
+fn bash_bind_lines(trigger: Option<TriggerKey>, literal: Option<TriggerKey>) -> String {
+    let mut lines = Vec::new();
+    if let Some(trigger) = trigger {
+        lines.push(format!("bind -x '\"{}\": __runex_expand'", bash_chord(trigger)));
+    }
+    if let Some(literal) = literal {
+        lines.push(format!(
+            "bind -x '\"{}\": __runex_insert_literal_space'",
+            bash_chord(literal)
+        ));
+    }
+    lines.join("\n")
+}
+
+fn pwsh_register_lines(trigger: Option<TriggerKey>, literal: Option<TriggerKey>) -> String {
+    let mut lines = Vec::new();
+    if let Some(trigger) = trigger {
+        lines.push(format!(
+            "    __runex_register_handler '{}' ${{function:__runex_expand_space}}",
+            pwsh_chord(trigger)
+        ));
+    }
+    if let Some(literal) = literal {
+        lines.push(format!(
+            "    __runex_register_handler '{}' ${{function:__runex_insert_literal_space}}",
+            pwsh_chord(literal)
+        ));
+    }
+    let mut vi_lines = Vec::new();
+    if let Some(trigger) = trigger {
+        vi_lines.push(format!(
+            "        __runex_register_handler '{}' ${{function:__runex_expand_space}} Insert",
+            pwsh_chord(trigger)
+        ));
+    }
+    if let Some(literal) = literal {
+        vi_lines.push(format!(
+            "        __runex_register_handler '{}' ${{function:__runex_insert_literal_space}} Insert",
+            pwsh_chord(literal)
+        ));
+    }
+    if !vi_lines.is_empty() {
+        lines.push("    if ((Get-PSReadLineOption).EditMode -eq 'Vi') {".to_string());
+        lines.extend(vi_lines);
+        lines.push("    }".to_string());
+    }
+    lines.join("\n")
+}
+
+fn nu_bindings(trigger: Option<TriggerKey>, literal: Option<TriggerKey>, bin: &str) -> String {
+    let mut blocks = Vec::new();
+    if let Some(trigger) = trigger {
+        blocks.push(
+            include_str!("templates/nu_expand_binding.nu")
+                .replace("{BIN}", bin)
+                .replace("{NU_MODIFIER}", nu_modifier(trigger))
+                .replace("{NU_KEYCODE}", nu_keycode(trigger)),
+        );
+    }
+    if let Some(literal) = literal {
+        blocks.push(
+            include_str!("templates/nu_literal_binding.nu")
+                .replace("{NU_LITERAL_MODIFIER}", nu_modifier(literal))
+                .replace("{NU_LITERAL_KEYCODE}", nu_keycode(literal)),
+        );
+    }
+    blocks.join(" | append ")
+}
+
+fn clink_registration(trigger: Option<TriggerKey>) -> String {
+    if trigger.is_none() {
+        return String::new();
+    }
+
+    r#"clink.onfilterinput(function(line)
+    local result = runex_expand(line)
+    if result then
+        return result
+    end
+end)"#
+        .to_string()
+}
+
 /// Generate a shell integration script.
 ///
 /// `{BIN}` placeholders in the template are replaced with `bin`.
@@ -169,16 +243,12 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
     template
         .replace("\r\n", "\n")
         .replace("{BIN}", bin)
-        .replace("{BASH_CHORD}", bash_chord(trigger))
-        .replace("{BASH_LITERAL_CHORD}", bash_chord(literal))
+        .replace("{BASH_BIND_LINES}", &bash_bind_lines(trigger, literal))
         .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
-        .replace("{PWSH_CHORD}", pwsh_chord(trigger))
-        .replace("{PWSH_LITERAL_CHORD}", pwsh_chord(literal))
+        .replace("{CLINK_REGISTRATION}", &clink_registration(trigger))
+        .replace("{PWSH_REGISTER_LINES}", &pwsh_register_lines(trigger, literal))
         .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
-        .replace("{NU_MODIFIER}", nu_modifier(trigger))
-        .replace("{NU_KEYCODE}", nu_keycode(trigger))
-        .replace("{NU_LITERAL_MODIFIER}", nu_modifier(literal))
-        .replace("{NU_LITERAL_KEYCODE}", nu_keycode(literal))
+        .replace("{NU_BINDINGS}", &nu_bindings(trigger, literal, bin))
 }
 
 #[cfg(test)]
@@ -205,8 +275,16 @@ mod tests {
 
     #[test]
     fn export_script_contains_bin() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                trigger: Some(TriggerKey::Space),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
         for shell in [Shell::Bash, Shell::Pwsh, Shell::Clink, Shell::Nu] {
-            let script = export_script(shell, "my-runex", None);
+            let script = export_script(shell, "my-runex", Some(&config));
             assert!(
                 script.contains("my-runex"),
                 "{shell:?} script must contain the bin name"
@@ -216,32 +294,76 @@ mod tests {
 
     #[test]
     fn bash_script_has_bind() {
-        let s = export_script(Shell::Bash, "runex", None);
-        assert!(s.contains("bind"), "bash script must use bind");
+        let s = export_script(
+            Shell::Bash,
+            "runex",
+            Some(&Config {
+                version: 1,
+                keybind: crate::model::KeybindConfig {
+                    trigger: Some(TriggerKey::Space),
+                    ..crate::model::KeybindConfig::default()
+                },
+                abbr: vec![],
+            }),
+        );
+        assert!(s.contains("bind -x"), "bash script must use bind");
         assert!(s.contains("READLINE_LINE"), "bash script must use READLINE_LINE");
         assert!(s.contains("READLINE_POINT"), "bash script must inspect the cursor");
-        assert!(s.contains("{BASH_LITERAL_CHORD}") == false, "bash script must resolve the literal chord");
+        assert!(!s.contains("{BASH_BIND_LINES}"), "bash script must resolve bind lines");
     }
 
     #[test]
     fn pwsh_script_has_psreadline() {
-        let s = export_script(Shell::Pwsh, "runex", None);
+        let s = export_script(
+            Shell::Pwsh,
+            "runex",
+            Some(&Config {
+                version: 1,
+                keybind: crate::model::KeybindConfig {
+                    trigger: Some(TriggerKey::Space),
+                    ..crate::model::KeybindConfig::default()
+                },
+                abbr: vec![],
+            }),
+        );
         assert!(s.contains("Set-PSReadLineKeyHandler"), "pwsh script must use PSReadLine");
         assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
         assert!(s.contains("EditMode"), "pwsh script must handle PSReadLine edit mode");
         assert!(s.contains("__runex_is_command_position"), "pwsh script must detect command position");
-        assert!(s.contains("{PWSH_LITERAL_CHORD}") == false, "pwsh script must resolve the literal chord");
+        assert!(!s.contains("{PWSH_REGISTER_LINES}"), "pwsh script must resolve register lines");
     }
 
     #[test]
     fn clink_script_has_clink() {
-        let s = export_script(Shell::Clink, "runex", None);
+        let s = export_script(
+            Shell::Clink,
+            "runex",
+            Some(&Config {
+                version: 1,
+                keybind: crate::model::KeybindConfig {
+                    trigger: Some(TriggerKey::Space),
+                    ..crate::model::KeybindConfig::default()
+                },
+                abbr: vec![],
+            }),
+        );
         assert!(s.contains("clink"), "clink script must reference clink");
     }
 
     #[test]
     fn nu_script_has_keybindings() {
-        let s = export_script(Shell::Nu, "runex", None);
+        let s = export_script(
+            Shell::Nu,
+            "runex",
+            Some(&Config {
+                version: 1,
+                keybind: crate::model::KeybindConfig {
+                    trigger: Some(TriggerKey::Space),
+                    ..crate::model::KeybindConfig::default()
+                },
+                abbr: vec![],
+            }),
+        );
         assert!(s.contains("keybindings"), "nu script must reference keybindings");
         assert!(s.contains("commandline get-cursor"), "nu script must inspect the cursor");
     }
@@ -340,5 +462,35 @@ mod tests {
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
         assert!(s.contains("'gcm' { return $true }"), "pwsh script must embed known tokens");
+    }
+
+    #[test]
+    fn no_keybinds_means_no_handlers() {
+        let s = export_script(Shell::Bash, "runex", Some(&Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![],
+        }));
+        assert!(!s.contains("bind -x"), "bash script should not bind keys by default");
+
+        let s = export_script(Shell::Pwsh, "runex", Some(&Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![],
+        }));
+        assert!(
+            !s.contains("__runex_register_handler '"),
+            "pwsh script should not register handlers by default"
+        );
+
+        let s = export_script(Shell::Clink, "runex", Some(&Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![],
+        }));
+        assert!(
+            !s.contains("clink.onfilterinput"),
+            "clink script should not register handlers by default"
+        );
     }
 }

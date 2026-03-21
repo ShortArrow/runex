@@ -116,10 +116,5 @@ function __runex_register_handler {
 }
 
 if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
-    __runex_register_handler '{PWSH_CHORD}' ${function:__runex_expand_space}
-    __runex_register_handler '{PWSH_LITERAL_CHORD}' ${function:__runex_insert_literal_space}
-    if ((Get-PSReadLineOption).EditMode -eq 'Vi') {
-        __runex_register_handler '{PWSH_CHORD}' ${function:__runex_expand_space} Insert
-        __runex_register_handler '{PWSH_LITERAL_CHORD}' ${function:__runex_insert_literal_space} Insert
-    }
+{PWSH_REGISTER_LINES}
 }
