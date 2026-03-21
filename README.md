@@ -8,7 +8,7 @@ runex is a cross-shell abbreviation engine that expands short tokens into full c
 
 ## Features
 
-- Cross-shell support (bash / pwsh / cmd / nu)
+- Cross-shell support (bash / pwsh / cmd)
 - Real-time expansion (customizable trigger)
 - Single config file
 - Conditional rules (OS / shell / command existence)
@@ -62,7 +62,9 @@ Persistent (`~/.bashrc`):
 echo 'eval "$(runex export bash)"' >> ~/.bashrc
 ```
 
-### Nushell
+### Nushell (Experimental)
+
+Nushell integration is currently experimental and not considered stable yet.
 
 Temporary:
 
