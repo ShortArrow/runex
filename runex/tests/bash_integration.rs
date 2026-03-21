@@ -136,4 +136,18 @@ mod bash {
             "unknown token must not expand, got: {out}"
         );
     }
+
+    /// Option-like tokens must not be eaten by the helper.
+    #[test]
+    #[ignore]
+    fn test_option_like_token_stays_intact() {
+        let config = write_config();
+        let mut p = spawn_bash_with_integration(&config);
+
+        p.send_line(
+            "READLINE_LINE='cargo install --path'; READLINE_POINT=20; __runex_expand; printf '<%s>\\n' \"$READLINE_LINE\"",
+        )
+        .unwrap();
+        p.exp_string("<cargo install --path >").unwrap();
+    }
 }

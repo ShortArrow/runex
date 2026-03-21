@@ -14,7 +14,7 @@ $env.config.keybindings = ($env.config.keybindings | append {
                 commandline edit --insert ' '
             } else {
                 let token = ($line | split row ' ' | first)
-                let expanded = ({BIN} expand --token $token | complete | get stdout)
+                let expanded = ({BIN} expand $"--token=($token)" | complete | get stdout)
                 if $expanded != $token {
                     commandline edit --replace ($expanded + ($line | str substring ($token | str length)..))
                 }

@@ -17,7 +17,7 @@ function __runex_expand_space {
     $tokenStart = $left.LastIndexOf(' ') + 1
     $token = $left.Substring($tokenStart)
     if ($token) {
-        $expanded = & {BIN} expand --token $token 2>$null
+        $expanded = & {BIN} expand "--token=$token" 2>$null
         if ($expanded -and $expanded -ne $token) {
             $line = $line.Substring(0, $tokenStart) + $expanded + $right
             $cursor = $tokenStart + $expanded.Length

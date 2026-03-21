@@ -2,7 +2,7 @@
 local function runex_expand(line)
     local token = line:match("^(%S+)")
     if token then
-        local handle = io.popen("{BIN} expand --token " .. token .. " 2>nul")
+        local handle = io.popen("{BIN} expand --token=" .. token .. " 2>nul")
         if handle then
             local expanded = handle:read("*a"):gsub("%s+$", "")
             handle:close()

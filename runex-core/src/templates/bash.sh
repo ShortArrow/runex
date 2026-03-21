@@ -15,7 +15,7 @@ __runex_expand() {
         local prefix="${READLINE_LINE:0:token_start}"
         local suffix="${READLINE_LINE:READLINE_POINT}"
         local expanded
-        expanded=$({BIN} expand --token "$token" 2>/dev/null)
+        expanded=$({BIN} expand --token="$token" 2>/dev/null)
         if [ "$expanded" != "$token" ]; then
             READLINE_LINE="${prefix}${expanded}${suffix}"
             READLINE_POINT=$((token_start + ${#expanded}))

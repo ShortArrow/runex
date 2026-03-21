@@ -71,4 +71,13 @@ Write-Output "$($state.Line)|$($state.Cursor)"
         let config = write_config();
         assert_eq!(run_helper(&config, "xyz", 3), "xyz |4");
     }
+
+    #[test]
+    fn option_like_token_stays_intact() {
+        let config = write_config();
+        assert_eq!(
+            run_helper(&config, "cargo install --path", 20),
+            "cargo install --path |21"
+        );
+    }
 }
