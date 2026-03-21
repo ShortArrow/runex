@@ -97,6 +97,7 @@ mod tests {
         let s = export_script(Shell::Pwsh, "runex");
         assert!(s.contains("Set-PSReadLineKeyHandler"), "pwsh script must use PSReadLine");
         assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
+        assert!(s.contains("EditMode"), "pwsh script must handle PSReadLine edit mode");
     }
 
     #[test]

@@ -36,14 +36,14 @@ cargo install runex
 Temporary:
 
 ```powershell
-Invoke-Expression (& runex export pwsh)
+Invoke-Expression ((& runex export pwsh) -join "`n")
 ```
 
 Persistent (`$PROFILE`):
 
 ```powershell
 if (!(Test-Path $PROFILE)) { New-Item -Type File -Path $PROFILE -Force }
-Add-Content $PROFILE 'Invoke-Expression (& runex export pwsh)'
+Add-Content $PROFILE 'Invoke-Expression ((& runex export pwsh) -join "`n")'
 ```
 
 ### bash
