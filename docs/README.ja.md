@@ -103,7 +103,6 @@ version = 1
 
 [keybind]
 trigger = "space"
-bash = "alt-space"
 
 [[abbr]]
 key = "ls"
@@ -122,7 +121,13 @@ expand = "git commit -m"
 
 `trigger` は全シェル共通の既定値です。`bash`、`pwsh`、`nu` を書くと、そのシェルだけ個別に上書きできます。
 
-例: 基本は `space` のまま、bash だけ `alt-space` にする。
+上書き例:
+
+```toml
+[keybind]
+trigger = "space"
+bash = "alt-space"
+```
 
 複数シェルや複数環境で物理的に同じ設定ファイルを共有したい場合は、`runex` 読み込み前に `RUNEX_CONFIG` でそのパスを指定します。
 

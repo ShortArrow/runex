@@ -102,7 +102,6 @@ version = 1
 
 [keybind]
 trigger = "space"
-bash = "alt-space"
 
 [[abbr]]
 key = "ls"
@@ -121,7 +120,13 @@ Supported key values:
 
 `trigger` sets the default for all shells. Shell-specific keys like `bash`, `pwsh`, and `nu` override that default.
 
-Example: keep `space` everywhere, but use `alt-space` only for bash.
+Example override:
+
+```toml
+[keybind]
+trigger = "space"
+bash = "alt-space"
+```
 
 If you want multiple shells or environments to share one physical config file, set `RUNEX_CONFIG` to that path before loading `runex`.
 
