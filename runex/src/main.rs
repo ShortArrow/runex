@@ -82,7 +82,7 @@ enum Commands {
     Doctor,
     /// Export shell integration script
     Export {
-        /// Target shell: bash, pwsh, clink, nu
+        /// Target shell: bash, zsh, pwsh, clink, nu
         shell: String,
         /// Binary name used in the generated script
         #[arg(long, default_value = "runex")]

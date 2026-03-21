@@ -8,7 +8,7 @@ runex is a cross-shell abbreviation engine that expands short tokens into full c
 
 ## Features
 
-- Cross-shell support (bash / pwsh / cmd)
+- Cross-shell support (bash / zsh / pwsh / cmd)
 - Real-time expansion (customizable trigger)
 - Single config file
 - Conditional rules (OS / shell / command existence)
@@ -60,6 +60,20 @@ Persistent (`~/.bashrc`):
 
 ```bash
 echo 'eval "$(runex export bash)"' >> ~/.bashrc
+```
+
+### zsh
+
+Temporary:
+
+```zsh
+eval "$(runex export zsh)"
+```
+
+Persistent (`~/.zshrc`):
+
+```zsh
+echo 'eval "$(runex export zsh)"' >> ~/.zshrc
 ```
 
 ### Nushell (Experimental)
@@ -125,7 +139,7 @@ Supported key values:
 - `alt-space`
 
 `trigger` sets the default expand key for all shells.
-Shell-specific keys like `bash`, `pwsh`, and `nu` override that default.
+Shell-specific keys like `bash`, `zsh`, `pwsh`, and `nu` override that default.
 
 Example override:
 
@@ -133,6 +147,7 @@ Example override:
 [keybind]
 trigger = "space"
 bash = "alt-space"
+zsh = "tab"
 ```
 
 If you want multiple shells or environments to share one physical config file, set `RUNEX_CONFIG` to that path before loading `runex`.

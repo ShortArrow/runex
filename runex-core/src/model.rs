@@ -13,6 +13,7 @@ pub enum TriggerKey {
 pub struct KeybindConfig {
     pub trigger: Option<TriggerKey>,
     pub bash: Option<TriggerKey>,
+    pub zsh: Option<TriggerKey>,
     pub pwsh: Option<TriggerKey>,
     pub nu: Option<TriggerKey>,
 }
@@ -85,11 +86,13 @@ mod tests {
         let k = KeybindConfig {
             trigger: Some(TriggerKey::Space),
             bash: Some(TriggerKey::AltSpace),
+            zsh: Some(TriggerKey::Space),
             pwsh: Some(TriggerKey::Tab),
             nu: None,
         };
         assert_eq!(k.trigger, Some(TriggerKey::Space));
         assert_eq!(k.bash, Some(TriggerKey::AltSpace));
+        assert_eq!(k.zsh, Some(TriggerKey::Space));
         assert_eq!(k.pwsh, Some(TriggerKey::Tab));
         assert_eq!(k.nu, None);
     }
