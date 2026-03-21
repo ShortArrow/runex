@@ -31,6 +31,11 @@ cargo install runex
 
 Generated shell scripts and your `config.toml` are part of your local shell environment. Only load and sync files you trust.
 
+If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
+
+- Unix-like shells: `~/.cargo/bin`
+- Windows: `%USERPROFILE%\.cargo\bin`
+
 ## Setup
 
 ### PowerShell

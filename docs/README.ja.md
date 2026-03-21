@@ -32,6 +32,11 @@ cargo install runex
 
 生成されたシェルスクリプトと `config.toml` は、そのままローカルのシェル環境へ入ります。同期・読込するファイルは、自分で信頼できるものだけにしてください。
 
+インストール後に `runex` が見つからない場合は、Cargo の bin ディレクトリが `PATH` に入っているか確認してください。
+
+- Unix 系シェル: `~/.cargo/bin`
+- Windows: `%USERPROFILE%\.cargo\bin`
+
 ## 導入儀式
 
 ### PowerShell
