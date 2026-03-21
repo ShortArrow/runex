@@ -9,12 +9,17 @@ $env.config.keybindings = ($env.config.keybindings | append {
         send: executehostcommand
         cmd: "
             let line = (commandline)
-            let token = ($line | split row ' ' | first)
-            let expanded = ({BIN} expand --token $token | complete | get stdout)
-            if $expanded != $token {
-                commandline edit --replace ($expanded + ($line | str substring ($token | str length)..))
+            let cursor = (commandline get-cursor)
+            if $cursor < ($line | str length) {
+                commandline edit --insert ' '
+            } else {
+                let token = ($line | split row ' ' | first)
+                let expanded = ({BIN} expand --token $token | complete | get stdout)
+                if $expanded != $token {
+                    commandline edit --replace ($expanded + ($line | str substring ($token | str length)..))
+                }
+                commandline edit --append ' '
             }
-            commandline edit --append ' '
         "
     }
 })

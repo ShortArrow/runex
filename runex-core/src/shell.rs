@@ -89,12 +89,14 @@ mod tests {
         let s = export_script(Shell::Bash, "runex");
         assert!(s.contains("bind"), "bash script must use bind");
         assert!(s.contains("READLINE_LINE"), "bash script must use READLINE_LINE");
+        assert!(s.contains("READLINE_POINT"), "bash script must inspect the cursor");
     }
 
     #[test]
     fn pwsh_script_has_psreadline() {
         let s = export_script(Shell::Pwsh, "runex");
         assert!(s.contains("Set-PSReadLineKeyHandler"), "pwsh script must use PSReadLine");
+        assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
     }
 
     #[test]
@@ -107,5 +109,6 @@ mod tests {
     fn nu_script_has_keybindings() {
         let s = export_script(Shell::Nu, "runex");
         assert!(s.contains("keybindings"), "nu script must reference keybindings");
+        assert!(s.contains("commandline get-cursor"), "nu script must inspect the cursor");
     }
 }

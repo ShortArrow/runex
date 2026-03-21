@@ -90,6 +90,34 @@ mod bash {
         p.exp_string("<echo EXPANDED >").unwrap();
     }
 
+    /// Mid-line space insertion should not trigger expansion.
+    #[test]
+    #[ignore]
+    fn test_midline_space_is_plain_insert() {
+        let config = write_config();
+        let mut p = spawn_bash_with_integration(&config);
+
+        p.send_line(
+            "READLINE_LINE='gcm tail'; READLINE_POINT=1; __runex_expand; printf '<%s>\\n' \"$READLINE_LINE\"",
+        )
+        .unwrap();
+        p.exp_string("<g cm tail>").unwrap();
+    }
+
+    /// The token immediately before the cursor is expanded without touching the prefix.
+    #[test]
+    #[ignore]
+    fn test_expand_token_before_cursor() {
+        let config = write_config();
+        let mut p = spawn_bash_with_integration(&config);
+
+        p.send_line(
+            "READLINE_LINE='echo gcm'; READLINE_POINT=8; __runex_expand; printf '<%s>\\n' \"$READLINE_LINE\"",
+        )
+        .unwrap();
+        p.exp_string("<echo echo EXPANDED >").unwrap();
+    }
+
     /// Unknown token is not expanded — stays as-is.
     #[test]
     #[ignore]
