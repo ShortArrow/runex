@@ -163,6 +163,14 @@ fn nu_keycode(trigger: TriggerKey) -> &'static str {
     }
 }
 
+fn clink_key_sequence(trigger: TriggerKey) -> &'static str {
+    match trigger {
+        TriggerKey::Space => r#"" ""#,
+        TriggerKey::Tab => r#""\t""#,
+        TriggerKey::AltSpace => r#""\e ""#,
+    }
+}
+
 fn bash_bind_lines(trigger: Option<TriggerKey>) -> String {
     let mut lines = vec![
         r#"bind -r "\x20" 2>/dev/null || true"#.to_string(),
@@ -215,18 +223,29 @@ fn nu_bindings(trigger: Option<TriggerKey>, bin: &str) -> String {
     blocks.join(" | append ")
 }
 
-fn clink_registration(trigger: Option<TriggerKey>) -> String {
-    if trigger.is_none() {
+fn clink_binding(trigger: Option<TriggerKey>) -> String {
+    let Some(trigger) = trigger else {
         return String::new();
-    }
+    };
 
-    r#"clink.onfilterinput(function(line)
-    local result = runex_expand(line)
-    if result then
-        return result
-    end
-end)"#
-        .to_string()
+    let key = clink_key_sequence(trigger);
+    [
+        format!(
+            r#"do
+    local ok = rl.setbinding([[{key}]], [["luafunc:runex_expand"]], "emacs")
+    runex_debug_log("bind emacs ok=" .. tostring(ok) .. " binding=" .. tostring(rl.getbinding([[{key}]], "emacs")))
+end"#,
+            key = key
+        ),
+        format!(
+            r#"do
+    local ok = rl.setbinding([[{key}]], [["luafunc:runex_expand"]], "vi-insert")
+    runex_debug_log("bind vi-insert ok=" .. tostring(ok) .. " binding=" .. tostring(rl.getbinding([[{key}]], "vi-insert")))
+end"#,
+            key = key
+        ),
+    ]
+    .join("\n")
 }
 
 /// Generate a shell integration script.
@@ -247,8 +266,8 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
         .replace("{BASH_BIND_LINES}", &bash_bind_lines(trigger))
         .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
         .replace("{CLINK_BIN}", &lua_quote_string(bin))
+        .replace("{CLINK_BINDING}", &clink_binding(trigger))
         .replace("{CLINK_KNOWN_CASES}", &clink_known_cases(config))
-        .replace("{CLINK_REGISTRATION}", &clink_registration(trigger))
         .replace("{PWSH_BIN}", &pwsh_quote_string(bin))
         .replace("{PWSH_REGISTER_LINES}", &pwsh_register_lines(trigger))
         .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
@@ -361,6 +380,27 @@ mod tests {
         assert!(s.contains("clink"), "clink script must reference clink");
         assert!(s.contains("local RUNEX_BIN = \"runex\""), "clink script must quote the executable");
         assert!(s.contains("local RUNEX_KNOWN = {"), "clink script must embed known keys");
+        assert!(s.contains(r#"rl.setbinding([[" "]], [["luafunc:runex_expand"]], "emacs")"#), "clink script must bind the trigger key in emacs mode");
+        assert!(s.contains(r#"rl.setbinding([[" "]], [["luafunc:runex_expand"]], "vi-insert")"#), "clink script must bind the trigger key in vi insert mode");
+        assert!(s.contains("rl_buffer:getcursor()"), "clink script must inspect the cursor");
+        assert!(!s.contains("clink.onfilterinput"), "clink script must not use onfilterinput for realtime expansion");
+    }
+
+    #[test]
+    fn clink_script_uses_alt_space_sequence() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                trigger: Some(TriggerKey::AltSpace),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Clink, "runex", Some(&config));
+        assert!(
+            s.contains(r#"rl.setbinding([["\e "]], [["luafunc:runex_expand"]], "emacs")"#),
+            "clink script must use the alt-space sequence"
+        );
     }
 
     #[test]
@@ -499,7 +539,7 @@ mod tests {
             abbr: vec![],
         }));
         assert!(
-            !s.contains("clink.onfilterinput"),
+            !s.contains("rl.setbinding("),
             "clink script should not register handlers by default"
         );
     }
