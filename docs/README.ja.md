@@ -65,7 +65,7 @@ eval "$(runex export bash)"
 永続化（`~/.bashrc`）:
 
 ```bash
-echo 'eval "$(runex export bash)"' >> ~/.bashrc
+eval "$(runex export bash)"
 ```
 
 ### zsh
@@ -79,7 +79,7 @@ eval "$(runex export zsh)"
 永続化（`~/.zshrc`）:
 
 ```zsh
-echo 'eval "$(runex export zsh)"' >> ~/.zshrc
+eval "$(runex export zsh)"
 ```
 
 ### Nushell（Experimental）
@@ -137,6 +137,8 @@ expand = "lsd"
 key = "gcm"
 expand = "git commit -m"
 ```
+
+`expand` はそのまま各シェルのネイティブな文字列として扱われます。`runex` はその中身を再解釈したり、シェル向けに再エスケープしたりしません。
 
 指定できるキー:
 

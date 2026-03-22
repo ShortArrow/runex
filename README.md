@@ -66,7 +66,7 @@ eval "$(runex export bash)"
 Persistent (`~/.bashrc`):
 
 ```bash
-echo 'eval "$(runex export bash)"' >> ~/.bashrc
+eval "$(runex export bash)"
 ```
 
 ### zsh
@@ -80,7 +80,7 @@ eval "$(runex export zsh)"
 Persistent (`~/.zshrc`):
 
 ```zsh
-echo 'eval "$(runex export zsh)"' >> ~/.zshrc
+eval "$(runex export zsh)"
 ```
 
 ### Nushell (Experimental)
@@ -138,6 +138,8 @@ expand = "lsd"
 key = "gcm"
 expand = "git commit -m"
 ```
+
+`expand` is inserted as shell-native text. `runex` does not reinterpret or re-escape it for you.
 
 Supported key values:
 

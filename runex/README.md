@@ -30,13 +30,13 @@ If `runex` is not found after install, make sure Cargo's bin directory is on you
 ### bash
 
 ```bash
-echo 'eval "$(runex export bash)"' >> ~/.bashrc
+eval "$(runex export bash)"
 ```
 
 ### zsh
 
 ```zsh
-echo 'eval "$(runex export zsh)"' >> ~/.zshrc
+eval "$(runex export zsh)"
 ```
 
 ### PowerShell
@@ -68,6 +68,8 @@ expand = "git commit -m"
 key = "ll"
 expand = "lsd -l"
 ```
+
+`expand` is passed through as shell-native text. If you need literal `$` or other metacharacters, quote or escape them for the shell that will execute the command.
 
 ## Commands
 
