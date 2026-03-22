@@ -42,28 +42,15 @@ If `runex` is not found after install, make sure Cargo's bin directory is on you
 
 ### PowerShell
 
-Temporary:
+`$PROFILE`:
 
 ```powershell
 Invoke-Expression ((& runex export pwsh) -join "`n")
 ```
 
-Persistent (`$PROFILE`):
-
-```powershell
-if (!(Test-Path $PROFILE)) { New-Item -Type File -Path $PROFILE -Force }
-Add-Content $PROFILE 'Invoke-Expression ((& runex export pwsh) -join "`n")'
-```
-
 ### bash
 
-Temporary:
-
-```bash
-eval "$(runex export bash)"
-```
-
-Persistent (`~/.bashrc`):
+`~/.bashrc`:
 
 ```bash
 eval "$(runex export bash)"
@@ -71,13 +58,7 @@ eval "$(runex export bash)"
 
 ### zsh
 
-Temporary:
-
-```zsh
-eval "$(runex export zsh)"
-```
-
-Persistent (`~/.zshrc`):
+`~/.zshrc`:
 
 ```zsh
 eval "$(runex export zsh)"
@@ -87,13 +68,7 @@ eval "$(runex export zsh)"
 
 Nushell integration is currently experimental and not considered stable yet.
 
-Temporary:
-
-```nu
-runex export nu | save ~/.config/nu/runex.nu
-```
-
-Persistent (`config.nu`):
+`config.nu`:
 
 ```nu
 mkdir ~/.config/nu
@@ -109,14 +84,11 @@ source ~/.config/nu/runex.nu
 
 ### cmd (Clink)
 
-Temporary / install script:
+`%LOCALAPPDATA%\clink\runex.lua`:
 
 ```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua
 ```
-
-Persistent:
-If Clink is installed and loads `%LOCALAPPDATA%\clink\*.lua`, the file above is enough.
 
 ## Config
 

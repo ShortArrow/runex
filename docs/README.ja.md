@@ -41,28 +41,15 @@ cargo install runex
 
 ### PowerShell
 
-一時適用:
+`$PROFILE`:
 
 ```powershell
 Invoke-Expression ((& runex export pwsh) -join "`n")
 ```
 
-永続化（`$PROFILE`）:
-
-```powershell
-if (!(Test-Path $PROFILE)) { New-Item -Type File -Path $PROFILE -Force }
-Add-Content $PROFILE 'Invoke-Expression ((& runex export pwsh) -join "`n")'
-```
-
 ### bash
 
-一時適用:
-
-```bash
-eval "$(runex export bash)"
-```
-
-永続化（`~/.bashrc`）:
+`~/.bashrc`:
 
 ```bash
 eval "$(runex export bash)"
@@ -70,13 +57,7 @@ eval "$(runex export bash)"
 
 ### zsh
 
-一時適用:
-
-```zsh
-eval "$(runex export zsh)"
-```
-
-永続化（`~/.zshrc`）:
+`~/.zshrc`:
 
 ```zsh
 eval "$(runex export zsh)"
@@ -86,13 +67,7 @@ eval "$(runex export zsh)"
 
 Nushell 連携は現状 experimental 扱いで、まだ安定サポートとは見なしていません。
 
-一時適用:
-
-```nu
-runex export nu | save ~/.config/nu/runex.nu
-```
-
-永続化（`config.nu`）:
+`config.nu`:
 
 ```nu
 mkdir ~/.config/nu
@@ -108,14 +83,11 @@ source ~/.config/nu/runex.nu
 
 ### cmd (Clink)
 
-一時適用 / スクリプト配置:
+`%LOCALAPPDATA%\clink\runex.lua`:
 
 ```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua
 ```
-
-永続化:
-Clink が `%LOCALAPPDATA%\clink\*.lua` を読む設定なら、上の配置だけで有効です。
 
 ## 設定
 

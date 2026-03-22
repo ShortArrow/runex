@@ -29,11 +29,15 @@ If `runex` is not found after install, make sure Cargo's bin directory is on you
 
 ### bash
 
+`~/.bashrc`:
+
 ```bash
 eval "$(runex export bash)"
 ```
 
 ### zsh
+
+`~/.zshrc`:
 
 ```zsh
 eval "$(runex export zsh)"
@@ -41,12 +45,15 @@ eval "$(runex export zsh)"
 
 ### PowerShell
 
+`$PROFILE`:
+
 ```powershell
-if (!(Test-Path $PROFILE)) { New-Item -Type File -Path $PROFILE -Force }
-Add-Content $PROFILE 'Invoke-Expression ((& runex export pwsh) -join "`n")'
+Invoke-Expression ((& runex export pwsh) -join "`n")
 ```
 
 ### cmd (Clink)
+
+`%LOCALAPPDATA%\clink\runex.lua`:
 
 ```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua
