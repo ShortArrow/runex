@@ -274,17 +274,11 @@ fn clink_binding(trigger: Option<TriggerKey>) -> String {
     let key = clink_key_sequence(trigger);
     [
         format!(
-            r#"do
-    local ok = rl.setbinding([[{key}]], [["luafunc:runex_expand"]], "emacs")
-    runex_debug_log("bind emacs ok=" .. tostring(ok) .. " binding=" .. tostring(rl.getbinding([[{key}]], "emacs")))
-end"#,
+            r#"pcall(rl.setbinding, [[{key}]], [["luafunc:runex_expand"]], "emacs")"#,
             key = key
         ),
         format!(
-            r#"do
-    local ok = rl.setbinding([[{key}]], [["luafunc:runex_expand"]], "vi-insert")
-    runex_debug_log("bind vi-insert ok=" .. tostring(ok) .. " binding=" .. tostring(rl.getbinding([[{key}]], "vi-insert")))
-end"#,
+            r#"pcall(rl.setbinding, [[{key}]], [["luafunc:runex_expand"]], "vi-insert")"#,
             key = key
         ),
     ]
@@ -450,8 +444,8 @@ mod tests {
         assert!(s.contains("clink"), "clink script must reference clink");
         assert!(s.contains("local RUNEX_BIN = \"runex\""), "clink script must quote the executable");
         assert!(s.contains("local RUNEX_KNOWN = {"), "clink script must embed known keys");
-        assert!(s.contains(r#"rl.setbinding([[" "]], [["luafunc:runex_expand"]], "emacs")"#), "clink script must bind the trigger key in emacs mode");
-        assert!(s.contains(r#"rl.setbinding([[" "]], [["luafunc:runex_expand"]], "vi-insert")"#), "clink script must bind the trigger key in vi insert mode");
+        assert!(s.contains(r#"pcall(rl.setbinding, [[" "]], [["luafunc:runex_expand"]], "emacs")"#), "clink script must bind the trigger key in emacs mode");
+        assert!(s.contains(r#"pcall(rl.setbinding, [[" "]], [["luafunc:runex_expand"]], "vi-insert")"#), "clink script must bind the trigger key in vi insert mode");
         assert!(s.contains("rl_buffer:getcursor()"), "clink script must inspect the cursor");
         assert!(!s.contains("clink.onfilterinput"), "clink script must not use onfilterinput for realtime expansion");
     }
@@ -468,7 +462,7 @@ mod tests {
         };
         let s = export_script(Shell::Clink, "runex", Some(&config));
         assert!(
-            s.contains(r#"rl.setbinding([["\e "]], [["luafunc:runex_expand"]], "emacs")"#),
+            s.contains(r#"pcall(rl.setbinding, [["\e "]], [["luafunc:runex_expand"]], "emacs")"#),
             "clink script must use the alt-space sequence"
         );
     }
