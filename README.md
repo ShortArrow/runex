@@ -6,6 +6,8 @@ English | [日本語](docs/README.ja.md)
 
 runex is a cross-shell abbreviation engine that expands short tokens into full commands in real-time.
 
+![runex demo](https://raw.githubusercontent.com/ShortArrow/runex/main/docs/vhs/demo.gif)
+
 ## Features
 
 - Cross-shell support (bash / zsh / pwsh / cmd)
