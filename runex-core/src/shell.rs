@@ -227,11 +227,7 @@ fn zsh_bind_lines(trigger: Option<TriggerKey>) -> String {
 }
 
 fn pwsh_register_lines(trigger: Option<TriggerKey>) -> String {
-    let mut lines = vec![
-        "    Set-PSReadLineKeyHandler -Chord ' ' -Function SelfInsert".to_string(),
-        "    Set-PSReadLineKeyHandler -Chord 'Tab' -Function Complete".to_string(),
-        "    Set-PSReadLineKeyHandler -Chord 'Alt+Spacebar' -Function SelfInsert".to_string(),
-    ];
+    let mut lines = Vec::new();
     if let Some(trigger) = trigger {
         lines.push(format!(
             "    __runex_register_expand_handler '{}'",
@@ -395,14 +391,42 @@ mod tests {
         );
         assert!(s.contains("Set-PSReadLineKeyHandler"), "pwsh script must use PSReadLine");
         assert!(
-            s.contains("Set-PSReadLineKeyHandler -Chord 'Tab' -Function Complete"),
-            "pwsh script must restore default handlers before adding custom ones"
+            !s.contains("Set-PSReadLineKeyHandler -Chord 'Tab' -Function Complete"),
+            "pwsh script must not clobber the user's Tab binding"
         );
         assert!(s.contains("$expanded = & 'runex' expand"), "pwsh script must quote the executable");
         assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
         assert!(s.contains("EditMode"), "pwsh script must handle PSReadLine edit mode");
         assert!(s.contains("__runex_is_command_position"), "pwsh script must detect command position");
         assert!(!s.contains("{PWSH_REGISTER_LINES}"), "pwsh script must resolve register lines");
+    }
+
+    #[test]
+    fn pwsh_script_short_circuits_non_candidates() {
+        let s = export_script(
+            Shell::Pwsh,
+            "runex",
+            Some(&Config {
+                version: 1,
+                keybind: crate::model::KeybindConfig {
+                    trigger: Some(TriggerKey::Space),
+                    ..crate::model::KeybindConfig::default()
+                },
+                abbr: vec![],
+            }),
+        );
+        assert!(
+            s.contains("function __runex_get_expand_candidate"),
+            "pwsh script must define a fast precheck helper"
+        );
+        assert!(
+            s.contains("$candidate = __runex_get_expand_candidate $line $cursor"),
+            "pwsh handler must skip full expansion logic for non-candidates"
+        );
+        assert!(
+            s.contains("[Microsoft.PowerShell.PSConsoleReadLine]::Insert(' ')"),
+            "pwsh handler must insert a plain space on the fast path"
+        );
     }
 
     #[test]
@@ -552,10 +576,6 @@ mod tests {
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
         assert!(
-            s.contains("Set-PSReadLineKeyHandler -Chord 'Alt+Spacebar' -Function SelfInsert"),
-            "pwsh script must use PowerShell's Spacebar key name"
-        );
-        assert!(
             s.contains("__runex_register_expand_handler 'Alt+Spacebar'"),
             "pwsh script must register Alt+Space using Spacebar"
         );
@@ -596,8 +616,8 @@ mod tests {
             "pwsh script should not register expand handlers by default"
         );
         assert!(
-            s.contains("Set-PSReadLineKeyHandler -Chord ' ' -Function SelfInsert"),
-            "pwsh script should restore defaults even without custom handlers"
+            !s.contains("Set-PSReadLineKeyHandler -Chord ' ' -Function SelfInsert"),
+            "pwsh script should not clobber default key handlers when no trigger is configured"
         );
 
         let s = export_script(Shell::Clink, "runex", Some(&Config {

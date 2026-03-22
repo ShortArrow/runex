@@ -2,6 +2,7 @@
 mod pwsh {
     use std::io::Write;
     use std::process::Command;
+    use base64::Engine;
     use tempfile::NamedTempFile;
 
     fn write_config() -> NamedTempFile {
@@ -22,7 +23,9 @@ mod pwsh {
     fn run_helper(config: &NamedTempFile, line: &str, cursor: usize) -> String {
         let script = r#"
 Invoke-Expression ((& $env:RUNEX_BIN export pwsh --bin $env:RUNEX_BIN) -join "`n")
-$state = __runex_expand_space $env:RUNEX_LINE ([int]$env:RUNEX_CURSOR)
+$line = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:RUNEX_LINE_B64))
+$candidate = __runex_get_expand_candidate $line ([int]$env:RUNEX_CURSOR)
+$state = __runex_expand_space $line ([int]$env:RUNEX_CURSOR) $candidate
 Write-Output "$($state.Line)|$($state.Cursor)"
 "#;
 
@@ -30,7 +33,10 @@ Write-Output "$($state.Line)|$($state.Cursor)"
             .args(["-NoLogo", "-NoProfile", "-Command", script])
             .env("RUNEX_BIN", bin_path())
             .env("RUNEX_CONFIG", config.path())
-            .env("RUNEX_LINE", line)
+            .env(
+                "RUNEX_LINE_B64",
+                base64::engine::general_purpose::STANDARD.encode(line),
+            )
             .env("RUNEX_CURSOR", cursor.to_string())
             .output()
             .unwrap();
@@ -100,5 +106,14 @@ Write-Output "$($state.Line)|$($state.Cursor)"
     fn known_token_in_argument_position_does_not_expand() {
         let config = write_config();
         assert_eq!(run_helper(&config, "echo gcm", 8), "echo gcm |9");
+    }
+
+    #[test]
+    fn path_argument_with_backslashes_stays_intact() {
+        let config = write_config();
+        assert_eq!(
+            run_helper(&config, r"cd .\ShortArrow.github.io\", 26),
+            r"cd .\ShortArrow.github.io\ |27"
+        );
     }
 }
