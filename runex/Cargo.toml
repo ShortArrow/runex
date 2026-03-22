@@ -1,6 +1,6 @@
 [package]
 name = "runex"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Cross-shell abbreviation engine that expands short tokens into full commands"
 license = "MIT"
@@ -14,7 +14,7 @@ name = "runex"
 path = "src/main.rs"
 
 [dependencies]
-runex-core = { version = "0.1.1", path = "../runex-core" }
+runex-core = { version = "0.1.2", path = "../runex-core" }
 clap = { version = "4", features = ["derive"] }
 which = "7"
 
