@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/ShortArrow/runex"
 keywords = ["shell", "abbreviation", "alias", "expansion", "cli"]
 categories = ["command-line-utilities"]
-readme = "../README.md"
+readme = "README.md"
 
 [[bin]]
 name = "runex"
