@@ -65,7 +65,7 @@ eval "$(runex export zsh)"
 
 ### Nushell（Experimental）
 
-Nushell 連携は現状 experimental 扱いで、まだ安定サポートとは見なしていません。
+Nushell 連携は現状 experimental です。
 
 `config.nu`:
 
@@ -102,8 +102,12 @@ version = 1
 trigger = "space"
 
 [[abbr]]
-key = "ls"
-expand = "lsd"
+key = "ll."
+expand = "ls -la"
+
+[[abbr]]
+key = "ll"
+expand = "ls -l"
 
 [[abbr]]
 key = "gcm"
@@ -176,9 +180,9 @@ runex export <shell>      # シェル連携スクリプトを生成
 
 ## 名の由来
 
-- run + ex = expand / execute / expression / extension
+- run + ex = expand / execute / express / extract / explode
 - rune x (like 7z's "x" for extract)
-- rune +x (like chrome's "x" for extensions)
+- rune +x (like chmod's "+x" execute)
 
 ## ライセンス
 

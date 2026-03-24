@@ -2,17 +2,14 @@
 
 Core library for `runex`, a cross-shell abbreviation engine.
 
-This crate is primarily used by the `runex` CLI and contains:
+This crate is primarily internal to the `runex` CLI.
 
-- config parsing
-- shell export generation
-- doctor diagnostics
-- abbreviation expansion logic
-
-Most users want the CLI instead:
+Most users should install the CLI instead:
 
 ```bash
 cargo install runex
 ```
 
-Repository and documentation: <https://github.com/ShortArrow/runex>
+Project documentation:
+
+- <https://github.com/ShortArrow/runex#readme>

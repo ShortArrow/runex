@@ -182,6 +182,9 @@ Output: git commit -m ␣
 - **run** (execute)
 - **ex** (expand / execute)
 - **rune** (compressed command)
+- **run** + **ex** = expand / execute / express / extract / explode
+- **rune x** (like 7z's "x" for extract)
+- **rune +x** (like chmod's "+x" execute)
 
 ## License
 
