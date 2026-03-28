@@ -211,11 +211,18 @@ fn format_skip_reason(i: usize, reason: &expand::SkipReason, why: bool) -> Strin
         expand::SkipReason::SelfLoop => {
             format!("\n  rule #{} skipped: key == expand (self-loop)", i + 1)
         }
-        expand::SkipReason::ConditionFailed { missing_commands } => {
+        expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
+            let mut parts = Vec::new();
+            for cmd in found_commands {
+                parts.push(format!("{cmd}: found"));
+            }
+            for cmd in missing_commands {
+                parts.push(format!("{cmd}: NOT FOUND"));
+            }
             format!(
-                "\n  rule #{} skipped: when_command_exists missing: {}",
+                "\n  rule #{} skipped: when_command_exists [{}]",
                 i + 1,
-                missing_commands.join(", ")
+                parts.join(", ")
             )
         }
     }
@@ -247,18 +254,36 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
             s
         }
         WhichResult::AllSkipped { token, skipped } => {
-            let mut s = if let Some((_, reason)) = skipped.last() {
-                match reason {
-                    expand::SkipReason::ConditionFailed { missing_commands } => {
-                        format!("{token}  [skipped: {} not found]", missing_commands.join(", "))
-                    }
-                    expand::SkipReason::SelfLoop => {
-                        format!("{token}  [no-op: key and expansion are identical]")
-                    }
+            // Collect distinct skip reasons across all matching rules for the headline.
+            let has_condition_fail = skipped.iter().any(|(_, r)| {
+                matches!(r, expand::SkipReason::ConditionFailed { .. })
+            });
+            let has_self_loop = skipped
+                .iter()
+                .any(|(_, r)| matches!(r, expand::SkipReason::SelfLoop));
+            let headline = match (has_condition_fail, has_self_loop) {
+                (true, true) => format!(
+                    "{token}  [skipped: condition failed on some rules; others are self-loops]"
+                ),
+                (true, false) => {
+                    // Collect all missing commands across all ConditionFailed rules.
+                    let all_missing: Vec<&str> = skipped
+                        .iter()
+                        .flat_map(|(_, r)| match r {
+                            expand::SkipReason::ConditionFailed { missing_commands, .. } => {
+                                missing_commands.iter().map(String::as_str).collect::<Vec<_>>()
+                            }
+                            _ => vec![],
+                        })
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect();
+                    format!("{token}  [skipped: {} not found]", all_missing.join(", "))
                 }
-            } else {
-                format!("{token}: no rule found")
+                (false, true) => format!("{token}  [no-op: key and expansion are identical]"),
+                (false, false) => format!("{token}: no rule found"),
             };
+            let mut s = headline;
             if why {
                 for (i, reason) in skipped {
                     s.push_str(&format_skip_reason(*i, reason, true));
@@ -286,12 +311,14 @@ fn format_dry_run_result(token: &str, result: &WhichResult) -> String {
                     expand::SkipReason::SelfLoop => {
                         out.push_str(&format!("rule #{} skipped: self-loop\n", i + 1));
                     }
-                    expand::SkipReason::ConditionFailed { missing_commands } => {
-                        out.push_str(&format!(
-                            "rule #{} skipped: when_command_exists missing: {}\n",
-                            i + 1,
-                            missing_commands.join(", ")
-                        ));
+                    expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
+                        out.push_str(&format!("rule #{} skipped: when_command_exists\n", i + 1));
+                        for cmd in found_commands {
+                            out.push_str(&format!("  {cmd}: found\n"));
+                        }
+                        for cmd in missing_commands {
+                            out.push_str(&format!("  {cmd}: NOT FOUND\n"));
+                        }
                     }
                 }
             }
@@ -312,12 +339,14 @@ fn format_dry_run_result(token: &str, result: &WhichResult) -> String {
                     expand::SkipReason::SelfLoop => {
                         out.push_str(&format!("rule #{} skipped: self-loop\n", i + 1));
                     }
-                    expand::SkipReason::ConditionFailed { missing_commands } => {
-                        out.push_str(&format!(
-                            "rule #{} skipped: when_command_exists missing: {}\n",
-                            i + 1,
-                            missing_commands.join(", ")
-                        ));
+                    expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
+                        out.push_str(&format!("rule #{} skipped: when_command_exists\n", i + 1));
+                        for cmd in found_commands {
+                            out.push_str(&format!("  {cmd}: found\n"));
+                        }
+                        for cmd in missing_commands {
+                            out.push_str(&format!("  {cmd}: NOT FOUND\n"));
+                        }
                     }
                 }
             }
@@ -788,7 +817,7 @@ mod tests {
         };
         let result = expand::which_abbr(&config, "ls", |_| false);
         let out = format_dry_run_result("ls", &result);
-        assert!(out.contains("missing: lsd"), "out: {out}");
+        assert!(out.contains("lsd: NOT FOUND"), "out: {out}");
         assert!(out.contains("pass-through"), "out: {out}");
     }
 

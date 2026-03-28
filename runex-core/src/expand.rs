@@ -6,7 +6,10 @@ pub enum SkipReason {
     /// key == expand (self-loop guard).
     SelfLoop,
     /// One or more `when_command_exists` commands were absent.
-    ConditionFailed { missing_commands: Vec<String> },
+    ConditionFailed {
+        found_commands: Vec<String>,
+        missing_commands: Vec<String>,
+    },
 }
 
 /// Result of a `which` lookup — mirrors `expand()` scan order exactly.
@@ -85,13 +88,16 @@ where
             continue;
         }
         if let Some(cmds) = &abbr.when_command_exists {
-            let missing: Vec<String> = cmds
-                .iter()
-                .filter(|c| !command_exists(c))
-                .cloned()
-                .collect();
+            let (found, missing): (Vec<String>, Vec<String>) =
+                cmds.iter().cloned().partition(|c| command_exists(c));
             if !missing.is_empty() {
-                skipped.push((i, SkipReason::ConditionFailed { missing_commands: missing }));
+                skipped.push((
+                    i,
+                    SkipReason::ConditionFailed {
+                        found_commands: found,
+                        missing_commands: missing,
+                    },
+                ));
                 continue;
             }
         }
@@ -253,7 +259,7 @@ mod tests {
                 assert_eq!(skipped.len(), 1);
                 assert!(matches!(
                     &skipped[0].1,
-                    SkipReason::ConditionFailed { missing_commands }
+                    SkipReason::ConditionFailed { missing_commands, .. }
                     if missing_commands == &["lsd"]
                 ));
             }

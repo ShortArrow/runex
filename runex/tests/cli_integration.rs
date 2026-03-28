@@ -130,7 +130,7 @@ fn dry_run_shows_condition_failed() {
     let (stdout, _, ok) =
         run(&["expand", "--token", "ls", "--dry-run"], Some(cfg.path()), None);
     assert!(ok);
-    assert!(stdout.contains("missing: __runex_fake_lsd__"), "stdout: {stdout}");
+    assert!(stdout.contains("__runex_fake_lsd__: NOT FOUND"), "stdout: {stdout}");
     assert!(stdout.contains("pass-through"), "stdout: {stdout}");
 }
 
@@ -373,10 +373,10 @@ fn export_explicit_invalid_config_fails() {
 }
 
 #[test]
-fn export_no_config_succeeds_gracefully() {
-    // Without --config, export degrades gracefully even if default config missing
-    let (stdout, _, ok) = run(&["--config", "/nonexistent/config.toml", "export", "bash"], None, None);
-    // With explicit --config pointing to missing file, it should fail
+fn export_explicit_missing_config_also_fails() {
+    // A second way to pass --config before the subcommand — must also fail.
+    let (stdout, _, ok) =
+        run(&["--config", "/nonexistent/config.toml", "export", "bash"], None, None);
     assert!(!ok, "stdout: {stdout}");
 }
 
