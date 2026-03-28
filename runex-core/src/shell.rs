@@ -203,24 +203,26 @@ fn clink_key_sequence(trigger: TriggerKey) -> &'static str {
 }
 
 fn bash_bind_lines(trigger: Option<TriggerKey>) -> String {
-    let mut lines = vec![
-        r#"bind -r "\x20" 2>/dev/null || true"#.to_string(),
-        r#"bind -r "\C-i" 2>/dev/null || true"#.to_string(),
-        r#"bind -r "\e " 2>/dev/null || true"#.to_string(),
-    ];
+    let mut lines = Vec::new();
+    // Only unbind and rebind the key that runex is configured to use.
     if let Some(trigger) = trigger {
+        lines.push(format!(
+            r#"bind -r "{}" 2>/dev/null || true"#,
+            bash_chord(trigger)
+        ));
         lines.push(format!("bind -x '\"{}\": __runex_expand'", bash_chord(trigger)));
     }
     lines.join("\n")
 }
 
 fn zsh_bind_lines(trigger: Option<TriggerKey>) -> String {
-    let mut lines = vec![
-        r#"bindkey -r " " 2>/dev/null"#.to_string(),
-        r#"bindkey -r "^I" 2>/dev/null"#.to_string(),
-        r#"bindkey -r "^[ " 2>/dev/null"#.to_string(),
-    ];
+    let mut lines = Vec::new();
+    // Only unbind and rebind the key that runex is configured to use.
     if let Some(trigger) = trigger {
+        lines.push(format!(
+            r#"bindkey -r "{}" 2>/dev/null"#,
+            zsh_chord(trigger)
+        ));
         lines.push(format!(r#"bindkey "{}" __runex_expand"#, zsh_chord(trigger)));
     }
     lines.join("\n")
@@ -368,7 +370,8 @@ mod tests {
             }),
         );
         assert!(s.contains("bind -x"), "bash script must use bind");
-        assert!(s.contains(r#"bind -r "\x20""#), "bash script must clean up prior bindings");
+        // Space trigger → only the space keybind should be removed before rebinding.
+        assert!(s.contains(r#"bind -r "\x20""#), "bash script must remove the space binding before rebinding");
         assert!(s.contains("expanded=$('runex' expand"), "bash script must quote the executable");
         assert!(s.contains("READLINE_LINE"), "bash script must use READLINE_LINE");
         assert!(s.contains("READLINE_POINT"), "bash script must inspect the cursor");
@@ -604,7 +607,7 @@ mod tests {
             abbr: vec![],
         }));
         assert!(!s.contains("bind -x"), "bash script should not bind keys by default");
-        assert!(s.contains(r#"bind -r "\x20""#), "bash cleanup should still be emitted");
+        assert!(!s.contains(r#"bind -r"#), "bash script should not remove keybinds when no trigger is configured");
 
         let s = export_script(Shell::Pwsh, "runex", Some(&Config {
             version: 1,

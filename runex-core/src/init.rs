@@ -22,9 +22,15 @@ pub fn integration_line(shell: Shell, bin: &str) -> String {
         Shell::Bash => format!("eval \"$({bin} export bash)\""),
         Shell::Zsh => format!("eval \"$({bin} export zsh)\""),
         Shell::Pwsh => format!("Invoke-Expression (& {bin} export pwsh | Out-String)"),
-        Shell::Nu => format!(
-            "{bin} export nu | save --force ~/.config/runex/runex.nu\nsource ~/.config/runex/runex.nu"
-        ),
+        Shell::Nu => {
+            // Use the XDG config dir at runtime if we can; fall back to ~/.config.
+            let cfg_dir = dirs::config_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "~/.config".to_string());
+            format!(
+                "{bin} export nu | save --force {cfg_dir}/runex/runex.nu\nsource {cfg_dir}/runex/runex.nu"
+            )
+        }
         Shell::Clink => format!("-- add '{bin} export clink' output to your clink scripts directory"),
     }
 }
@@ -44,11 +50,11 @@ pub fn rc_file_for(shell: Shell) -> Option<PathBuf> {
             };
             Some(base.join("Microsoft.PowerShell_profile.ps1"))
         }
-        Shell::Nu => Some(
-            home.join(".config")
-                .join("nushell")
-                .join("env.nu"),
-        ),
+        Shell::Nu => {
+            // Prefer XDG config dir over hard-coded ~/.config.
+            let cfg = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
+            Some(cfg.join("nushell").join("env.nu"))
+        }
         Shell::Clink => None,
     }
 }
