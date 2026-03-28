@@ -50,6 +50,7 @@ pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
 mod tests {
     use super::*;
     use crate::model::TriggerKey;
+    use serial_test::serial;
 
     #[test]
     fn parse_minimal_toml() {
@@ -145,10 +146,42 @@ expand = "git commit -m"
     }
 
     #[test]
+    #[serial]
     fn default_config_path_env_override() {
+        // RUNEX_CONFIG takes priority over XDG_CONFIG_HOME.
+        std::env::remove_var("XDG_CONFIG_HOME");
         std::env::set_var("RUNEX_CONFIG", "/tmp/custom.toml");
         let path = default_config_path().unwrap();
-        assert_eq!(path, PathBuf::from("/tmp/custom.toml"));
         std::env::remove_var("RUNEX_CONFIG");
+        assert_eq!(path, PathBuf::from("/tmp/custom.toml"));
+    }
+
+    #[test]
+    #[serial]
+    fn xdg_config_home_uses_env_var() {
+        std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-test");
+        let dir = xdg_config_home().unwrap();
+        std::env::remove_var("XDG_CONFIG_HOME");
+        assert_eq!(dir, PathBuf::from("/tmp/xdg-test"));
+    }
+
+    #[test]
+    #[serial]
+    fn xdg_config_home_empty_env_falls_back_to_home() {
+        std::env::set_var("XDG_CONFIG_HOME", "");
+        let dir = xdg_config_home().unwrap();
+        std::env::remove_var("XDG_CONFIG_HOME");
+        // Falls back to home/.config — must end with .config
+        assert!(dir.ends_with(".config"), "expected ~/.config fallback, got {dir:?}");
+    }
+
+    #[test]
+    #[serial]
+    fn default_config_path_uses_xdg_config_home() {
+        std::env::remove_var("RUNEX_CONFIG");
+        std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-runex-test");
+        let path = default_config_path().unwrap();
+        std::env::remove_var("XDG_CONFIG_HOME");
+        assert_eq!(path, PathBuf::from("/tmp/xdg-runex-test/runex/config.toml"));
     }
 }
