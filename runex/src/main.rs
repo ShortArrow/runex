@@ -18,6 +18,7 @@ const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_GREEN: &str = "\x1b[32m";
 const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_RED: &str = "\x1b[31m";
+const GIT_COMMIT: Option<&str> = option_env!("RUNEX_GIT_COMMIT");
 
 struct Spinner {
     done: Arc<AtomicBool>,
@@ -80,6 +81,8 @@ enum Commands {
     List,
     /// Check environment health
     Doctor,
+    /// Show build version information
+    Version,
     /// Export shell integration script
     Export {
         /// Target shell: bash, zsh, pwsh, clink, nu
@@ -105,6 +108,14 @@ fn format_check_line(check: &Check) -> String {
         check.name,
         check.detail
     )
+}
+
+fn version_line() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    match GIT_COMMIT {
+        Some(commit) if !commit.is_empty() => format!("runex {version} ({commit})"),
+        _ => format!("runex {version}"),
+    }
 }
 
 fn parse_pwsh_alias_lines(stdout: &str) -> HashMap<String, String> {
@@ -262,6 +273,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{key}\t{exp}");
             }
         }
+        Commands::Version => {
+            println!("{}", version_line());
+        }
         Commands::Export { shell, bin } => {
             let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
                 Box::<dyn std::error::Error>::from(e.to_string())
@@ -352,5 +366,11 @@ mod tests {
         let aliases = parse_bash_alias_lines("alias ls='ls --color=auto'\nalias nv='nvim'\n");
         assert_eq!(aliases.get("ls").map(String::as_str), Some("'ls --color=auto'"));
         assert_eq!(aliases.get("nv").map(String::as_str), Some("'nvim'"));
+    }
+
+    #[test]
+    fn version_line_contains_pkg_version() {
+        let line = version_line();
+        assert!(line.starts_with(&format!("runex {}", env!("CARGO_PKG_VERSION"))));
     }
 }

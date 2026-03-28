@@ -2,6 +2,7 @@
 name = "runex"
 version = "0.1.3"
 edition = "2021"
+build = "build.rs"
 description = "Cross-shell abbreviation engine that expands short tokens into full commands"
 license = "MIT"
 repository = "https://github.com/ShortArrow/runex"

@@ -147,6 +147,7 @@ If you use `trigger = "space"`, there are a few practical ways to avoid expansio
 runex expand --token ls   # expand a single token
 runex list                # list all runes
 runex doctor              # check config and environment
+runex version             # show version and build commit
 runex export <shell>      # generate shell integration script
 ```
 
