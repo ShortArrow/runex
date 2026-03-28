@@ -8,6 +8,8 @@ pub enum WhichResult {
         key: String,
         expansion: String,
         rule_index: usize,
+        /// Commands that were checked via `when_command_exists` and passed.
+        satisfied_conditions: Vec<String>,
     },
     /// Token matched a rule but key == expand (self-loop guard fired).
     SelfLoop { key: String },
@@ -82,6 +84,11 @@ where
             key: abbr.key.clone(),
             expansion: abbr.expand.clone(),
             rule_index: i,
+            satisfied_conditions: abbr
+                .when_command_exists
+                .as_deref()
+                .unwrap_or(&[])
+                .to_vec(),
         };
     }
     WhichResult::NoMatch {

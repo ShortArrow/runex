@@ -7,7 +7,7 @@ use runex_core::model::{Abbr, Config, ExpandResult};
 use runex_core::shell::Shell;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -72,6 +72,14 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Override config file path (overrides RUNEX_CONFIG env var)
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    /// Prepend a directory to PATH for command existence checks
+    #[arg(long, global = true, value_name = "DIR")]
+    path_prepend: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -82,6 +90,9 @@ enum Commands {
     Expand {
         #[arg(long)]
         token: String,
+        /// Print diagnostic output instead of the final expansion
+        #[arg(long)]
+        dry_run: bool,
     },
     /// List all abbreviations
     List,
@@ -112,6 +123,56 @@ enum Commands {
         yes: bool,
     },
 }
+
+// ─── Config helpers ──────────────────────────────────────────────────────────
+
+/// Load config, erroring if the path or parse fails. Used by commands that
+/// require a valid config (Expand, List, Which).
+fn resolve_config(
+    config_override: Option<&Path>,
+) -> Result<(PathBuf, Config), Box<dyn std::error::Error>> {
+    if let Some(path) = config_override {
+        let config = load_config(path)?;
+        return Ok((path.to_path_buf(), config));
+    }
+    let path = default_config_path()?;
+    let config = load_config(&path)?;
+    Ok((path, config))
+}
+
+/// Load config, returning None on failure. Used by commands that degrade
+/// gracefully when config is absent (Doctor, Export).
+fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config>) {
+    if let Some(path) = config_override {
+        return (path.to_path_buf(), load_config(path).ok());
+    }
+    let path = default_config_path().unwrap_or_default();
+    let config = load_config(&path).ok();
+    (path, config)
+}
+
+// ─── Command existence resolver ───────────────────────────────────────────────
+
+/// Build a `command_exists` closure.
+///
+/// When `path_prepend` is `Some(dir)`, files inside `dir` are checked first
+/// (bare name, and `.exe` on Windows). Falls through to `which::which`.
+fn make_command_exists(path_prepend: Option<&Path>) -> impl Fn(&str) -> bool + '_ {
+    move |cmd: &str| -> bool {
+        if let Some(dir) = path_prepend {
+            if dir.join(cmd).is_file() {
+                return true;
+            }
+            #[cfg(windows)]
+            if dir.join(format!("{cmd}.exe")).is_file() {
+                return true;
+            }
+        }
+        which::which(cmd).is_ok()
+    }
+}
+
+// ─── Formatting helpers ───────────────────────────────────────────────────────
 
 fn format_check_tag(status: &CheckStatus) -> String {
     match status {
@@ -144,11 +205,18 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
             key,
             expansion,
             rule_index,
+            satisfied_conditions,
         } => {
             let mut s = format!("{key}  ->  {expansion}");
             if why {
                 s.push_str(&format!("\n  rule #{} matched", rule_index + 1));
-                s.push_str(", no conditions");
+                if satisfied_conditions.is_empty() {
+                    s.push_str(", no conditions");
+                } else {
+                    for cmd in satisfied_conditions {
+                        s.push_str(&format!("\n  condition: when_command_exists '{cmd}' -> found"));
+                    }
+                }
             }
             s
         }
@@ -161,7 +229,7 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
             let mut s = format!("{key}  [skipped: {missing} not found]");
             if why {
                 s.push_str(&format!("\n  rule #{} matched key '{key}'", rule_index + 1));
-                s.push_str(&format!("\n  condition: when_command_exists"));
+                s.push_str("\n  condition: when_command_exists");
                 s.push_str(&format!("\n  missing: {missing}"));
             }
             s
@@ -176,6 +244,64 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
         WhichResult::NoMatch { token } => format!("{token}: no rule found"),
     }
 }
+
+fn format_dry_run_result(token: &str, result: &WhichResult, config: &Config) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("token: {token}\n"));
+    match result {
+        WhichResult::Expanded {
+            key,
+            expansion,
+            rule_index,
+            satisfied_conditions,
+        } => {
+            out.push_str(&format!("matched rule #{} (key = '{key}')\n", rule_index + 1));
+            if satisfied_conditions.is_empty() {
+                out.push_str("conditions: none\n");
+            } else {
+                out.push_str("conditions:\n");
+                for cmd in satisfied_conditions {
+                    out.push_str(&format!("  when_command_exists '{cmd}': found\n"));
+                }
+            }
+            out.push_str(&format!("result: expanded  ->  {expansion}\n"));
+        }
+        WhichResult::ConditionFailed {
+            key,
+            missing_commands,
+            rule_index,
+        } => {
+            out.push_str(&format!("matched rule #{} (key = '{key}')\n", rule_index + 1));
+            if let Some(abbr) = config.abbr.get(*rule_index) {
+                if let Some(cmds) = &abbr.when_command_exists {
+                    out.push_str("conditions:\n");
+                    for cmd in cmds {
+                        let status = if missing_commands.contains(cmd) {
+                            "NOT FOUND"
+                        } else {
+                            "found"
+                        };
+                        out.push_str(&format!("  when_command_exists '{cmd}': {status}\n"));
+                    }
+                }
+            }
+            out.push_str("result: not expanded (condition failed)\n");
+        }
+        WhichResult::SelfLoop { key } => {
+            out.push_str(&format!(
+                "matched key '{key}' but key == expand (self-loop guard)\n"
+            ));
+            out.push_str("result: not expanded (self-loop)\n");
+        }
+        WhichResult::NoMatch { token } => {
+            out.push_str(&format!("no rule matched '{token}'\n"));
+            out.push_str("result: pass-through\n");
+        }
+    }
+    out
+}
+
+// ─── Shell helpers ────────────────────────────────────────────────────────────
 
 fn detect_shell() -> Option<Shell> {
     // Unix: $SHELL environment variable
@@ -278,9 +404,7 @@ fn load_bash_aliases() -> HashMap<String, String> {
         return HashMap::new();
     }
 
-    let output = Command::new("bash")
-        .args(["-ic", "alias"])
-        .output();
+    let output = Command::new("bash").args(["-ic", "alias"]).output();
 
     let Ok(output) = output else {
         return HashMap::new();
@@ -340,22 +464,28 @@ fn add_shell_alias_conflicts(result: &mut DiagResult, config: Option<&Config>) {
         ));
 }
 
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Expand { token } => {
-            let config_path = default_config_path()?;
-            let config = load_config(&config_path)?;
-            let result = expand::expand(&config, &token, |cmd| which::which(cmd).is_ok());
-            match result {
-                ExpandResult::Expanded(s) => print!("{s}"),
-                ExpandResult::PassThrough(s) => print!("{s}"),
+        Commands::Expand { token, dry_run } => {
+            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
+            let command_exists = make_command_exists(cli.path_prepend.as_deref());
+            if dry_run {
+                let result = expand::which_abbr(&config, &token, &command_exists);
+                print!("{}", format_dry_run_result(&token, &result, &config));
+            } else {
+                let result = expand::expand(&config, &token, &command_exists);
+                match result {
+                    ExpandResult::Expanded(s) => print!("{s}"),
+                    ExpandResult::PassThrough(s) => print!("{s}"),
+                }
             }
         }
         Commands::List => {
-            let config_path = default_config_path()?;
-            let config = load_config(&config_path)?;
+            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&config.abbr)?);
             } else {
@@ -385,18 +515,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
                 Box::<dyn std::error::Error>::from(e.to_string())
             })?;
-            let config_path = default_config_path().ok();
-            let config = config_path
-                .as_ref()
-                .and_then(|path| load_config(path).ok());
+            let (_config_path, config) = resolve_config_opt(cli.config.as_deref());
             print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
         }
         Commands::Doctor => {
-            let config_path = default_config_path().unwrap_or_default();
-            let config = load_config(&config_path).ok();
+            let (config_path, config) = resolve_config_opt(cli.config.as_deref());
+            let command_exists = make_command_exists(cli.path_prepend.as_deref());
             let spinner = Spinner::start("Checking environment...");
-            let mut result =
-                doctor::diagnose(&config_path, config.as_ref(), |cmd| which::which(cmd).is_ok());
+            let mut result = doctor::diagnose(&config_path, config.as_ref(), &command_exists);
             add_shell_alias_conflicts(&mut result, config.as_ref());
             spinner.stop();
 
@@ -413,14 +539,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Which { token, why } => {
-            let config_path = default_config_path()?;
-            let config = load_config(&config_path)?;
-            let result =
-                expand::which_abbr(&config, &token, |cmd| which::which(cmd).is_ok());
+            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
+            let command_exists = make_command_exists(cli.path_prepend.as_deref());
+            let result = expand::which_abbr(&config, &token, &command_exists);
             println!("{}", format_which_result(&result, why));
         }
         Commands::Init { yes } => {
-            let config_path = default_config_path()?;
+            let config_path = if let Some(p) = cli.config.as_deref() {
+                p.to_path_buf()
+            } else {
+                default_config_path()?
+            };
 
             // Step 1: config file
             if config_path.exists() {
@@ -543,7 +672,10 @@ mod tests {
     #[test]
     fn parse_bash_alias_lines_extracts_aliases() {
         let aliases = parse_bash_alias_lines("alias ls='ls --color=auto'\nalias nv='nvim'\n");
-        assert_eq!(aliases.get("ls").map(String::as_str), Some("'ls --color=auto'"));
+        assert_eq!(
+            aliases.get("ls").map(String::as_str),
+            Some("'ls --color=auto'")
+        );
         assert_eq!(aliases.get("nv").map(String::as_str), Some("'nvim'"));
     }
 
@@ -551,5 +683,72 @@ mod tests {
     fn version_line_contains_pkg_version() {
         let line = version_line();
         assert!(line.starts_with(&format!("runex {}", env!("CARGO_PKG_VERSION"))));
+    }
+
+    #[test]
+    fn make_command_exists_no_prepend_uses_which() {
+        let exists = make_command_exists(None);
+        // "cargo" is guaranteed to be on PATH in a Rust build environment
+        assert!(exists("cargo"));
+        assert!(!exists("__runex_fake_cmd_that_does_not_exist__"));
+    }
+
+    #[test]
+    fn make_command_exists_prepend_finds_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake_bin = dir.path().join("myfaketool");
+        std::fs::write(&fake_bin, b"").unwrap();
+        let exists = make_command_exists(Some(dir.path()));
+        assert!(exists("myfaketool"));
+        assert!(!exists("__runex_other_fake__"));
+    }
+
+    #[test]
+    fn format_dry_run_no_match() {
+        let config = runex_core::model::Config {
+            version: 1,
+            keybind: runex_core::model::KeybindConfig::default(),
+            abbr: vec![],
+        };
+        let result = expand::which_abbr(&config, "xyz", |_| true);
+        let out = format_dry_run_result("xyz", &result, &config);
+        assert!(out.contains("token: xyz"));
+        assert!(out.contains("no rule matched"));
+        assert!(out.contains("pass-through"));
+    }
+
+    #[test]
+    fn format_dry_run_expanded() {
+        let config = runex_core::model::Config {
+            version: 1,
+            keybind: runex_core::model::KeybindConfig::default(),
+            abbr: vec![runex_core::model::Abbr {
+                key: "gcm".into(),
+                expand: "git commit -m".into(),
+                when_command_exists: None,
+            }],
+        };
+        let result = expand::which_abbr(&config, "gcm", |_| true);
+        let out = format_dry_run_result("gcm", &result, &config);
+        assert!(out.contains("token: gcm"));
+        assert!(out.contains("expanded  ->  git commit -m"));
+        assert!(out.contains("conditions: none"));
+    }
+
+    #[test]
+    fn format_dry_run_condition_failed() {
+        let config = runex_core::model::Config {
+            version: 1,
+            keybind: runex_core::model::KeybindConfig::default(),
+            abbr: vec![runex_core::model::Abbr {
+                key: "ls".into(),
+                expand: "lsd".into(),
+                when_command_exists: Some(vec!["lsd".into()]),
+            }],
+        };
+        let result = expand::which_abbr(&config, "ls", |_| false);
+        let out = format_dry_run_result("ls", &result, &config);
+        assert!(out.contains("NOT FOUND"));
+        assert!(out.contains("condition failed"));
     }
 }
