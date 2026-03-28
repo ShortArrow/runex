@@ -1,5 +1,26 @@
 use crate::model::{Config, ExpandResult};
 
+/// Result of a `which` lookup — carries enough detail for `--why` output.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WhichResult {
+    /// Token matched a rule and all conditions passed.
+    Expanded {
+        key: String,
+        expansion: String,
+        rule_index: usize,
+    },
+    /// Token matched a rule but key == expand (self-loop guard fired).
+    SelfLoop { key: String },
+    /// Token matched a rule but one or more guard commands are absent.
+    ConditionFailed {
+        key: String,
+        missing_commands: Vec<String>,
+        rule_index: usize,
+    },
+    /// No rule matched this token.
+    NoMatch { token: String },
+}
+
 /// Expand a token using the config.
 ///
 /// `command_exists` is injected for testability (DI).
@@ -24,6 +45,48 @@ where
         return ExpandResult::Expanded(abbr.expand.clone());
     }
     ExpandResult::PassThrough(token.to_string())
+}
+
+/// Look up a token and return why it expands (or doesn't).
+///
+/// Unlike `expand()`, this returns a detailed result suitable for human display.
+/// `expand()` itself is unchanged to keep the hot path clean.
+pub fn which_abbr<F>(config: &Config, token: &str, command_exists: F) -> WhichResult
+where
+    F: Fn(&str) -> bool,
+{
+    for (i, abbr) in config.abbr.iter().enumerate() {
+        if abbr.key != token {
+            continue;
+        }
+        if abbr.key == abbr.expand {
+            return WhichResult::SelfLoop {
+                key: abbr.key.clone(),
+            };
+        }
+        if let Some(cmds) = &abbr.when_command_exists {
+            let missing: Vec<String> = cmds
+                .iter()
+                .filter(|c| !command_exists(c))
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                return WhichResult::ConditionFailed {
+                    key: abbr.key.clone(),
+                    missing_commands: missing,
+                    rule_index: i,
+                };
+            }
+        }
+        return WhichResult::Expanded {
+            key: abbr.key.clone(),
+            expansion: abbr.expand.clone(),
+            rule_index: i,
+        };
+    }
+    WhichResult::NoMatch {
+        token: token.to_string(),
+    }
 }
 
 /// List all abbreviations as (key, expand) pairs.

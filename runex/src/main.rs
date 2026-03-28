@@ -1,11 +1,13 @@
 use clap::{Parser, Subcommand};
 use runex_core::config::{default_config_path, load_config};
 use runex_core::doctor::{self, Check, CheckStatus, DiagResult};
-use runex_core::expand;
+use runex_core::expand::{self, WhichResult};
+use runex_core::init as runex_init;
 use runex_core::model::{Abbr, Config, ExpandResult};
 use runex_core::shell::Shell;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -66,6 +68,10 @@ impl Spinner {
 #[derive(Parser)]
 #[command(name = "runex", about = "Rune-to-cast expansion engine")]
 struct Cli {
+    /// Output as JSON
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -90,6 +96,20 @@ enum Commands {
         /// Binary name used in the generated script
         #[arg(long, default_value = "runex")]
         bin: String,
+    },
+    /// Show what a token expands to (and why it may be skipped)
+    Which {
+        /// The abbreviation key to look up
+        token: String,
+        /// Show detailed reasoning
+        #[arg(long)]
+        why: bool,
+    },
+    /// Initialize runex: create config and add shell integration
+    Init {
+        /// Skip confirmation prompts
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -116,6 +136,73 @@ fn version_line() -> String {
         Some(commit) if !commit.is_empty() => format!("runex {version} ({commit})"),
         _ => format!("runex {version}"),
     }
+}
+
+fn format_which_result(result: &WhichResult, why: bool) -> String {
+    match result {
+        WhichResult::Expanded {
+            key,
+            expansion,
+            rule_index,
+        } => {
+            let mut s = format!("{key}  ->  {expansion}");
+            if why {
+                s.push_str(&format!("\n  rule #{} matched", rule_index + 1));
+                s.push_str(", no conditions");
+            }
+            s
+        }
+        WhichResult::ConditionFailed {
+            key,
+            missing_commands,
+            rule_index,
+        } => {
+            let missing = missing_commands.join(", ");
+            let mut s = format!("{key}  [skipped: {missing} not found]");
+            if why {
+                s.push_str(&format!("\n  rule #{} matched key '{key}'", rule_index + 1));
+                s.push_str(&format!("\n  condition: when_command_exists"));
+                s.push_str(&format!("\n  missing: {missing}"));
+            }
+            s
+        }
+        WhichResult::SelfLoop { key } => {
+            let mut s = format!("{key}  [no-op: key and expansion are identical]");
+            if why {
+                s.push_str("\n  self-loop guard: key == expand, rule skipped");
+            }
+            s
+        }
+        WhichResult::NoMatch { token } => format!("{token}: no rule found"),
+    }
+}
+
+fn detect_shell() -> Option<Shell> {
+    // Unix: $SHELL environment variable
+    if let Ok(sh) = std::env::var("SHELL") {
+        let base = Path::new(&sh)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        if let Ok(s) = base.parse::<Shell>() {
+            return Some(s);
+        }
+    }
+    // Windows: presence of PSModulePath implies a PowerShell parent
+    if std::env::var("PSModulePath").is_ok() {
+        return Some(Shell::Pwsh);
+    }
+    None
+}
+
+fn prompt_confirm(msg: &str) -> bool {
+    eprint!("{msg} [y/N] ");
+    let _ = io::stderr().flush();
+    let mut input = String::new();
+    if io::stdin().read_line(&mut input).is_err() {
+        return false;
+    }
+    matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 fn parse_pwsh_alias_lines(stdout: &str) -> HashMap<String, String> {
@@ -269,12 +356,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::List => {
             let config_path = default_config_path()?;
             let config = load_config(&config_path)?;
-            for (key, exp) in expand::list(&config) {
-                println!("{key}\t{exp}");
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&config.abbr)?);
+            } else {
+                for (key, exp) in expand::list(&config) {
+                    println!("{key}\t{exp}");
+                }
             }
         }
         Commands::Version => {
-            println!("{}", version_line());
+            if cli.json {
+                #[derive(serde::Serialize)]
+                struct VersionJson<'a> {
+                    version: &'a str,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    commit: Option<&'a str>,
+                }
+                let v = VersionJson {
+                    version: env!("CARGO_PKG_VERSION"),
+                    commit: GIT_COMMIT.filter(|s| !s.is_empty()),
+                };
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            } else {
+                println!("{}", version_line());
+            }
         }
         Commands::Export { shell, bin } => {
             let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
@@ -295,12 +400,86 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             add_shell_alias_conflicts(&mut result, config.as_ref());
             spinner.stop();
 
-            for check in &result.checks {
-                println!("{}", format_check_line(check));
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result.checks)?);
+            } else {
+                for check in &result.checks {
+                    println!("{}", format_check_line(check));
+                }
             }
 
             if !result.is_healthy() {
                 std::process::exit(1);
+            }
+        }
+        Commands::Which { token, why } => {
+            let config_path = default_config_path()?;
+            let config = load_config(&config_path)?;
+            let result =
+                expand::which_abbr(&config, &token, |cmd| which::which(cmd).is_ok());
+            println!("{}", format_which_result(&result, why));
+        }
+        Commands::Init { yes } => {
+            let config_path = default_config_path()?;
+
+            // Step 1: config file
+            if config_path.exists() {
+                println!("Config already exists: {}", config_path.display());
+            } else {
+                let msg = format!("Create config at {}?", config_path.display());
+                if yes || prompt_confirm(&msg) {
+                    if let Some(parent) = config_path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&config_path, runex_init::default_config_content())?;
+                    println!("Created: {}", config_path.display());
+                } else {
+                    println!("Skipped config creation.");
+                }
+            }
+
+            // Step 2: shell integration
+            let shell = detect_shell().unwrap_or_else(|| {
+                eprintln!(
+                    "Could not detect shell. Defaulting to bash. \
+                     Use `runex export <shell>` to generate integration manually."
+                );
+                Shell::Bash
+            });
+
+            match runex_init::rc_file_for(shell) {
+                None => {
+                    println!(
+                        "Shell integration for {:?} must be added manually. \
+                         Run `runex export {:?}` for the script.",
+                        shell, shell
+                    );
+                }
+                Some(rc_path) => {
+                    let existing = std::fs::read_to_string(&rc_path).unwrap_or_default();
+                    if existing.contains(runex_init::RUNEX_INIT_MARKER) {
+                        println!(
+                            "Shell integration already present in {}",
+                            rc_path.display()
+                        );
+                    } else {
+                        let msg =
+                            format!("Append shell integration to {}?", rc_path.display());
+                        if yes || prompt_confirm(&msg) {
+                            let line = runex_init::integration_line(shell, "runex");
+                            let block =
+                                format!("\n{}\n{}\n", runex_init::RUNEX_INIT_MARKER, line);
+                            let mut file = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&rc_path)?;
+                            file.write_all(block.as_bytes())?;
+                            println!("Appended integration to {}", rc_path.display());
+                        } else {
+                            println!("Skipped shell integration.");
+                        }
+                    }
+                }
             }
         }
     }

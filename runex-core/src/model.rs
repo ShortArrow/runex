@@ -1,6 +1,6 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum TriggerKey {
     #[default]
@@ -9,7 +9,7 @@ pub enum TriggerKey {
     AltSpace,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
 pub struct KeybindConfig {
     pub trigger: Option<TriggerKey>,
     pub bash: Option<TriggerKey>,
@@ -19,7 +19,7 @@ pub struct KeybindConfig {
 }
 
 /// A single abbreviation rule: rune → cast.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Abbr {
     pub key: String,
     pub expand: String,
@@ -27,7 +27,7 @@ pub struct Abbr {
 }
 
 /// Top-level configuration.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Config {
     pub version: u32,
     #[serde(default)]

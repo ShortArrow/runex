@@ -466,6 +466,8 @@ dependencies = [
  "clap",
  "rexpect",
  "runex-core",
+ "serde",
+ "serde_json",
  "tempfile",
  "which",
 ]
