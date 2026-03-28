@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::config::xdg_config_home;
 use crate::shell::Shell;
 
 /// Marker comment written into rc files to enable idempotent init.
@@ -23,8 +24,7 @@ pub fn integration_line(shell: Shell, bin: &str) -> String {
         Shell::Zsh => format!("eval \"$({bin} export zsh)\""),
         Shell::Pwsh => format!("Invoke-Expression (& {bin} export pwsh | Out-String)"),
         Shell::Nu => {
-            // Use the XDG config dir at runtime if we can; fall back to ~/.config.
-            let cfg_dir = dirs::config_dir()
+            let cfg_dir = xdg_config_home()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "~/.config".to_string());
             format!(
@@ -51,8 +51,7 @@ pub fn rc_file_for(shell: Shell) -> Option<PathBuf> {
             Some(base.join("Microsoft.PowerShell_profile.ps1"))
         }
         Shell::Nu => {
-            // Prefer XDG config dir over hard-coded ~/.config.
-            let cfg = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
+            let cfg = xdg_config_home().unwrap_or_else(|| home.join(".config"));
             Some(cfg.join("nushell").join("env.nu"))
         }
         Shell::Clink => None,
