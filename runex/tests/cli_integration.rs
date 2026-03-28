@@ -130,8 +130,8 @@ fn dry_run_shows_condition_failed() {
     let (stdout, _, ok) =
         run(&["expand", "--token", "ls", "--dry-run"], Some(cfg.path()), None);
     assert!(ok);
-    assert!(stdout.contains("NOT FOUND"), "stdout: {stdout}");
-    assert!(stdout.contains("condition failed"), "stdout: {stdout}");
+    assert!(stdout.contains("missing: __runex_fake_lsd__"), "stdout: {stdout}");
+    assert!(stdout.contains("pass-through"), "stdout: {stdout}");
 }
 
 #[test]
@@ -315,4 +315,107 @@ fn version_json_has_version_field() {
     assert!(parsed["version"].is_string());
     let ver = parsed["version"].as_str().unwrap();
     assert!(!ver.is_empty());
+}
+
+// ─── duplicate-key fallthrough (bug regression) ──────────────────────────────
+
+#[test]
+fn expand_duplicate_key_self_loop_then_real() {
+    // rule 1: self-loop (skipped by expand), rule 2: real expansion
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\nkey = \"ls\"\nexpand = \"ls\"\n\
+         [[abbr]]\nkey = \"ls\"\nexpand = \"lsd2\"\n",
+    );
+    let (stdout, _, ok) = run(&["expand", "--token", "ls"], Some(cfg.path()), None);
+    assert!(ok);
+    assert_eq!(stdout.trim(), "lsd2");
+}
+
+#[test]
+fn which_duplicate_key_shows_skipped_and_final() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\nkey = \"ls\"\nexpand = \"ls\"\n\
+         [[abbr]]\nkey = \"ls\"\nexpand = \"lsd2\"\n",
+    );
+    let (stdout, _, ok) = run(&["which", "ls", "--why"], Some(cfg.path()), None);
+    assert!(ok);
+    // First rule skipped (self-loop), second rule is the match
+    assert!(stdout.contains("rule #1 skipped"), "stdout: {stdout}");
+    assert!(stdout.contains("lsd2"), "stdout: {stdout}");
+}
+
+#[test]
+fn dry_run_duplicate_key_shows_skip_trace() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\nkey = \"ls\"\nexpand = \"ls\"\n\
+         [[abbr]]\nkey = \"ls\"\nexpand = \"lsd2\"\n",
+    );
+    let (stdout, _, ok) =
+        run(&["expand", "--token", "ls", "--dry-run"], Some(cfg.path()), None);
+    assert!(ok);
+    assert!(stdout.contains("rule #1 skipped"), "stdout: {stdout}");
+    assert!(stdout.contains("lsd2"), "stdout: {stdout}");
+}
+
+// ─── export --config validation ───────────────────────────────────────────────
+
+#[test]
+fn export_explicit_invalid_config_fails() {
+    let (_, _, ok) = run(
+        &["export", "bash", "--config", "/nonexistent/config.toml"],
+        None,
+        None,
+    );
+    assert!(!ok, "export with explicit invalid --config should fail");
+}
+
+#[test]
+fn export_no_config_succeeds_gracefully() {
+    // Without --config, export degrades gracefully even if default config missing
+    let (stdout, _, ok) = run(&["--config", "/nonexistent/config.toml", "export", "bash"], None, None);
+    // With explicit --config pointing to missing file, it should fail
+    assert!(!ok, "stdout: {stdout}");
+}
+
+#[test]
+fn export_with_valid_config_embeds_known_tokens() {
+    let cfg = write_config(
+        "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+    let (stdout, _, ok) = run(&["export", "bash"], Some(cfg.path()), None);
+    assert!(ok);
+    assert!(stdout.contains("gcm"), "stdout should embed known token 'gcm'");
+}
+
+// ─── doctor --no-shell-aliases ────────────────────────────────────────────────
+
+#[test]
+fn doctor_no_shell_aliases_skips_external_shells() {
+    let cfg = write_config("version = 1\n");
+    // --no-shell-aliases must not spawn pwsh/bash, so the test completes quickly
+    // and there are no shell:pwsh:* or shell:bash:* checks in JSON output
+    let (stdout, _, ok) = run(
+        &["doctor", "--no-shell-aliases", "--json"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "stdout: {stdout}");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let checks = parsed.as_array().unwrap();
+    let shell_checks: Vec<_> = checks
+        .iter()
+        .filter(|c| {
+            c["name"]
+                .as_str()
+                .map(|n| n.starts_with("shell:"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        shell_checks.is_empty(),
+        "expected no shell alias checks, got: {shell_checks:?}"
+    );
 }

@@ -97,7 +97,11 @@ enum Commands {
     /// List all abbreviations
     List,
     /// Check environment health
-    Doctor,
+    Doctor {
+        /// Skip shell alias conflict checks (avoids spawning pwsh/bash)
+        #[arg(long)]
+        no_shell_aliases: bool,
+    },
     /// Show build version information
     Version,
     /// Export shell integration script
@@ -199,6 +203,24 @@ fn version_line() -> String {
     }
 }
 
+fn format_skip_reason(i: usize, reason: &expand::SkipReason, why: bool) -> String {
+    if !why {
+        return String::new();
+    }
+    match reason {
+        expand::SkipReason::SelfLoop => {
+            format!("\n  rule #{} skipped: key == expand (self-loop)", i + 1)
+        }
+        expand::SkipReason::ConditionFailed { missing_commands } => {
+            format!(
+                "\n  rule #{} skipped: when_command_exists missing: {}",
+                i + 1,
+                missing_commands.join(", ")
+            )
+        }
+    }
+}
+
 fn format_which_result(result: &WhichResult, why: bool) -> String {
     match result {
         WhichResult::Expanded {
@@ -206,9 +228,13 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
             expansion,
             rule_index,
             satisfied_conditions,
+            skipped,
         } => {
             let mut s = format!("{key}  ->  {expansion}");
             if why {
+                for (i, reason) in skipped {
+                    s.push_str(&format_skip_reason(*i, reason, true));
+                }
                 s.push_str(&format!("\n  rule #{} matched", rule_index + 1));
                 if satisfied_conditions.is_empty() {
                     s.push_str(", no conditions");
@@ -220,24 +246,23 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
             }
             s
         }
-        WhichResult::ConditionFailed {
-            key,
-            missing_commands,
-            rule_index,
-        } => {
-            let missing = missing_commands.join(", ");
-            let mut s = format!("{key}  [skipped: {missing} not found]");
+        WhichResult::AllSkipped { token, skipped } => {
+            let mut s = if let Some((_, reason)) = skipped.last() {
+                match reason {
+                    expand::SkipReason::ConditionFailed { missing_commands } => {
+                        format!("{token}  [skipped: {} not found]", missing_commands.join(", "))
+                    }
+                    expand::SkipReason::SelfLoop => {
+                        format!("{token}  [no-op: key and expansion are identical]")
+                    }
+                }
+            } else {
+                format!("{token}: no rule found")
+            };
             if why {
-                s.push_str(&format!("\n  rule #{} matched key '{key}'", rule_index + 1));
-                s.push_str("\n  condition: when_command_exists");
-                s.push_str(&format!("\n  missing: {missing}"));
-            }
-            s
-        }
-        WhichResult::SelfLoop { key } => {
-            let mut s = format!("{key}  [no-op: key and expansion are identical]");
-            if why {
-                s.push_str("\n  self-loop guard: key == expand, rule skipped");
+                for (i, reason) in skipped {
+                    s.push_str(&format_skip_reason(*i, reason, true));
+                }
             }
             s
         }
@@ -245,7 +270,7 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
     }
 }
 
-fn format_dry_run_result(token: &str, result: &WhichResult, config: &Config) -> String {
+fn format_dry_run_result(token: &str, result: &WhichResult) -> String {
     let mut out = String::new();
     out.push_str(&format!("token: {token}\n"));
     match result {
@@ -254,7 +279,22 @@ fn format_dry_run_result(token: &str, result: &WhichResult, config: &Config) -> 
             expansion,
             rule_index,
             satisfied_conditions,
+            skipped,
         } => {
+            for (i, reason) in skipped {
+                match reason {
+                    expand::SkipReason::SelfLoop => {
+                        out.push_str(&format!("rule #{} skipped: self-loop\n", i + 1));
+                    }
+                    expand::SkipReason::ConditionFailed { missing_commands } => {
+                        out.push_str(&format!(
+                            "rule #{} skipped: when_command_exists missing: {}\n",
+                            i + 1,
+                            missing_commands.join(", ")
+                        ));
+                    }
+                }
+            }
             out.push_str(&format!("matched rule #{} (key = '{key}')\n", rule_index + 1));
             if satisfied_conditions.is_empty() {
                 out.push_str("conditions: none\n");
@@ -266,32 +306,23 @@ fn format_dry_run_result(token: &str, result: &WhichResult, config: &Config) -> 
             }
             out.push_str(&format!("result: expanded  ->  {expansion}\n"));
         }
-        WhichResult::ConditionFailed {
-            key,
-            missing_commands,
-            rule_index,
-        } => {
-            out.push_str(&format!("matched rule #{} (key = '{key}')\n", rule_index + 1));
-            if let Some(abbr) = config.abbr.get(*rule_index) {
-                if let Some(cmds) = &abbr.when_command_exists {
-                    out.push_str("conditions:\n");
-                    for cmd in cmds {
-                        let status = if missing_commands.contains(cmd) {
-                            "NOT FOUND"
-                        } else {
-                            "found"
-                        };
-                        out.push_str(&format!("  when_command_exists '{cmd}': {status}\n"));
+        WhichResult::AllSkipped { token, skipped } => {
+            for (i, reason) in skipped {
+                match reason {
+                    expand::SkipReason::SelfLoop => {
+                        out.push_str(&format!("rule #{} skipped: self-loop\n", i + 1));
+                    }
+                    expand::SkipReason::ConditionFailed { missing_commands } => {
+                        out.push_str(&format!(
+                            "rule #{} skipped: when_command_exists missing: {}\n",
+                            i + 1,
+                            missing_commands.join(", ")
+                        ));
                     }
                 }
             }
-            out.push_str("result: not expanded (condition failed)\n");
-        }
-        WhichResult::SelfLoop { key } => {
-            out.push_str(&format!(
-                "matched key '{key}' but key == expand (self-loop guard)\n"
-            ));
-            out.push_str("result: not expanded (self-loop)\n");
+            out.push_str(&format!("no rule for '{token}' passed all conditions\n"));
+            out.push_str("result: pass-through\n");
         }
         WhichResult::NoMatch { token } => {
             out.push_str(&format!("no rule matched '{token}'\n"));
@@ -475,7 +506,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
             if dry_run {
                 let result = expand::which_abbr(&config, &token, &command_exists);
-                print!("{}", format_dry_run_result(&token, &result, &config));
+                print!("{}", format_dry_run_result(&token, &result));
             } else {
                 let result = expand::expand(&config, &token, &command_exists);
                 match result {
@@ -515,15 +546,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
                 Box::<dyn std::error::Error>::from(e.to_string())
             })?;
-            let (_config_path, config) = resolve_config_opt(cli.config.as_deref());
+            // Explicit --config must be valid; implicit default degrades gracefully.
+            let config = if cli.config.is_some() {
+                let (_path, cfg) = resolve_config(cli.config.as_deref())?;
+                Some(cfg)
+            } else {
+                let (_path, cfg) = resolve_config_opt(None);
+                cfg
+            };
             print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
         }
-        Commands::Doctor => {
+        Commands::Doctor { no_shell_aliases } => {
             let (config_path, config) = resolve_config_opt(cli.config.as_deref());
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
             let spinner = Spinner::start("Checking environment...");
             let mut result = doctor::diagnose(&config_path, config.as_ref(), &command_exists);
-            add_shell_alias_conflicts(&mut result, config.as_ref());
+            if !no_shell_aliases {
+                add_shell_alias_conflicts(&mut result, config.as_ref());
+            }
             spinner.stop();
 
             if cli.json {
@@ -711,7 +751,7 @@ mod tests {
             abbr: vec![],
         };
         let result = expand::which_abbr(&config, "xyz", |_| true);
-        let out = format_dry_run_result("xyz", &result, &config);
+        let out = format_dry_run_result("xyz", &result);
         assert!(out.contains("token: xyz"));
         assert!(out.contains("no rule matched"));
         assert!(out.contains("pass-through"));
@@ -729,7 +769,7 @@ mod tests {
             }],
         };
         let result = expand::which_abbr(&config, "gcm", |_| true);
-        let out = format_dry_run_result("gcm", &result, &config);
+        let out = format_dry_run_result("gcm", &result);
         assert!(out.contains("token: gcm"));
         assert!(out.contains("expanded  ->  git commit -m"));
         assert!(out.contains("conditions: none"));
@@ -747,8 +787,33 @@ mod tests {
             }],
         };
         let result = expand::which_abbr(&config, "ls", |_| false);
-        let out = format_dry_run_result("ls", &result, &config);
-        assert!(out.contains("NOT FOUND"));
-        assert!(out.contains("condition failed"));
+        let out = format_dry_run_result("ls", &result);
+        assert!(out.contains("missing: lsd"), "out: {out}");
+        assert!(out.contains("pass-through"), "out: {out}");
+    }
+
+    #[test]
+    fn format_dry_run_duplicate_key_fallthrough() {
+        // rule 1: self-loop (skipped), rule 2: actual expansion
+        let config = runex_core::model::Config {
+            version: 1,
+            keybind: runex_core::model::KeybindConfig::default(),
+            abbr: vec![
+                runex_core::model::Abbr {
+                    key: "ls".into(),
+                    expand: "ls".into(), // self-loop
+                    when_command_exists: None,
+                },
+                runex_core::model::Abbr {
+                    key: "ls".into(),
+                    expand: "lsd".into(),
+                    when_command_exists: None,
+                },
+            ],
+        };
+        let result = expand::which_abbr(&config, "ls", |_| true);
+        let out = format_dry_run_result("ls", &result);
+        assert!(out.contains("rule #1 skipped"), "out: {out}");
+        assert!(out.contains("expanded  ->  lsd"), "out: {out}");
     }
 }
