@@ -189,3 +189,5 @@ Output: git commit -m ␣
 ## License
 
 MIT
+
+Third-party dependency licenses are documented in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
