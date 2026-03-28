@@ -4,48 +4,53 @@
 
 > その一打を、術式へ昇華せよ。
 
-runex は、短いトークンをリアルタイムに完全なコマンドへ展開する、クロスシェル対応の略語エンジンです。  
-手数は最小に、発動する一撃は最大に。日々の反復入力を、即応の詠唱へ変換します。
+runex は、短いトークンをリアルタイムに完全なコマンドへ展開する、クロスシェル対応の略語エンジンです。
 
 ## 特性
 
-- クロスシェル対応（bash / zsh / pwsh / cmd）
-- リアルタイム展開（トリガは変更可能）
-- 設定ファイル1つで管理
-- 条件付きルール（OS / シェル / コマンド存在）
+- クロスシェル対応（bash / zsh / pwsh / cmd / nushell）
+- リアルタイム展開（トリガキー変更可能）
+- 設定ファイル1つで全シェルを管理
+- 条件付きルール（`when_command_exists`）
 - 高速・軽量（Rust コア）
 
-## 核となりし概念
+## 概念
 
 runex は短い入力を **ルーン（rune）** として受け取り、完全な **キャスト（cast）** に展開します。
 
-```text
+```
 gcm␣ → git commit -m
 ls␣  → lsd
 ```
 
-## 環境への召喚
+## インストール
 
 ```bash
 cargo install runex
 ```
 
-生成されたシェルスクリプトと `config.toml` は、そのままローカルのシェル環境へ入ります。同期・読込するファイルは、自分で信頼できるものだけにしてください。
-
 インストール後に `runex` が見つからない場合は、Cargo の bin ディレクトリが `PATH` に入っているか確認してください。
 
-- Unix 系シェル: `~/.cargo/bin`
+- Linux/macOS: `~/.cargo/bin`
 - Windows: `%USERPROFILE%\.cargo\bin`
 
-## 導入儀式
+生成されたシェルスクリプトと `config.toml` はローカルのシェル環境に入ります。信頼できるファイルだけを読み込んでください。
 
-### PowerShell
+## セットアップ
 
-`$PROFILE`:
+`runex init` が最短の方法です。設定ファイルを作成し、rc ファイルへのシェル連携行の追記を確認付きで行います：
 
-```powershell
-Invoke-Expression ((& runex export pwsh) -join "`n")
 ```
+$ runex init
+Create config at ~/.config/runex/config.toml? [y/N] y
+Created: ~/.config/runex/config.toml
+Append shell integration to ~/.bashrc? [y/N] y
+Appended integration to ~/.bashrc
+```
+
+`-y` を付けると確認プロンプトをすべてスキップします。Clink はシェル連携の自動追記に対応していないため、手動で追加してください（下記参照）。
+
+各シェルへ手動で設定する場合：
 
 ### bash
 
@@ -63,27 +68,28 @@ eval "$(runex export bash)"
 eval "$(runex export zsh)"
 ```
 
-### Nushell（Experimental）
+### PowerShell
 
-Nushell 連携は現状 experimental です。
+`$PROFILE`:
 
-`config.nu`:
-
-```nu
-mkdir ~/.config/nu
-runex export nu | save -f ~/.config/nu/runex.nu
-open ~/.config/nu/config.nu
+```powershell
+Invoke-Expression (& runex export pwsh | Out-String)
 ```
 
-次の1行を `config.nu` に追加:
+### Nushell（Experimental）
+
+Nushell 連携は experimental です。安定していない場合があります。
+
+`env.nu`（多くの環境では `~/.config/nushell/env.nu`）に追加：
 
 ```nu
-source ~/.config/nu/runex.nu
+runex export nu | save --force ~/.config/nushell/runex.nu
+source ~/.config/nushell/runex.nu
 ```
 
 ### cmd (Clink)
 
-`%LOCALAPPDATA%\clink\runex.lua`:
+シェル連携は手動で追加する必要があります。Clink のスクリプトディレクトリに保存してください：
 
 ```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua
@@ -91,7 +97,9 @@ runex export clink > %LOCALAPPDATA%\clink\runex.lua
 
 ## 設定
 
-`~/.config/runex/config.toml`
+デフォルトパス: `$XDG_CONFIG_HOME/runex/config.toml`（未設定なら `~/.config/runex/config.toml`、全プラットフォーム共通）。
+
+環境変数 `RUNEX_CONFIG` または `--config` フラグで上書きできます。
 
 keybind を設定するまでは、どのキーにも何も割り当てられません。
 
@@ -102,61 +110,49 @@ version = 1
 trigger = "space"
 
 [[abbr]]
-key = "ll."
-expand = "ls -la"
+key    = "ls"
+expand = "lsd"
+when_command_exists = ["lsd"]
 
 [[abbr]]
-key = "ll"
-expand = "ls -l"
-
-[[abbr]]
-key = "gcm"
+key    = "gcm"
 expand = "git commit -m"
 ```
 
-`expand` はそのまま各シェルのネイティブな文字列として扱われます。`runex` はその中身を再解釈したり、シェル向けに再エスケープしたりしません。
+全フィールド・評価順・フォールバックチェーンの詳細は [docs/config-reference.md](config-reference.md) を参照してください。
 
-指定できるキー:
+## コマンド
 
-- `space`
-- `tab`
-- `alt-space`
-
-`trigger` は全シェル共通の展開キーの既定値です。
-`bash`、`zsh`、`pwsh`、`nu` を書くと、そのシェルだけ個別に上書きできます。
-
-上書き例:
-
-```toml
-[keybind]
-trigger = "space"
-bash = "alt-space"
-zsh = "tab"
+```
+runex expand --token <token>              トークンを展開
+runex expand --token <token> --dry-run   展開せずマッチトレースを表示
+runex list                               全略語を一覧表示
+runex which <token>                      マッチするルールを表示
+runex which <token> --why                スキップ理由を含む全トレースを表示
+runex doctor                             設定と環境をチェック
+runex doctor --no-shell-aliases          alias 競合チェックをスキップ
+runex init                               設定ファイルを作成し、シェル連携を追記
+runex init -y                            確認プロンプトをスキップ
+runex export <shell>                     シェル連携スクリプトを生成
+runex export <shell> --bin <name>        スクリプト内のバイナリ名を変更
+runex version                            バージョンとビルドコミットを表示
 ```
 
-複数シェルや複数環境で物理的に同じ設定ファイルを共有したい場合は、`runex` 読み込み前に `RUNEX_CONFIG` でそのパスを指定します。
+グローバルフラグ（全サブコマンドで使用可能）：
+
+```
+--config <path>      設定ファイルパスを上書き
+--path-prepend <dir> コマンド存在チェック用に DIR を PATH の先頭に追加
+--json               JSON 形式で出力（対応コマンド: list, doctor, version）
+```
 
 ## 展開を回避したいとき
 
-`trigger = "space"` を使う場合、必要なときだけ展開を避ける方法があります。
+`trigger = "space"` を使う場合：
 
-- 多くの端末設定では、`Shift+Space` で `runex` を発火させずに普通の空白を入れられます。ただし、これは端末や line editor 依存です。
-- bash では、先頭に `\` を付けると一致しなくなるので、`\ls` のように書けば展開されません。`command ls` でも回避できます。
-- PowerShell では `\ls` は bash のような escape ではなく、ただ別のトークンになるだけです。`ls` のような標準 alias をそのまま使いたいなら、`Get-ChildItem` のように完全なコマンド名を書く方が安全です。
-
-## 詠唱一覧
-
-```bash
-runex expand --token ls   # 単一トークンを展開
-runex list                # 全ルーンを一覧表示
-runex doctor              # 設定と環境をチェック
-runex export <shell>      # シェル連携スクリプトを生成
-```
-
-## 発動例
-
-- 入力:  `gcm␣`
-- 出力:  `git commit -m ␣`
+- 多くの端末では `Shift+Space` で展開せずに空白を入力できます（端末依存）。
+- bash では先頭に `\` を付ける（例: `\ls`）か、`command ls` を使います。
+- PowerShell では `\ls` は別トークンになるだけです。標準 alias をそのまま使いたいなら `Get-ChildItem` のように完全なコマンド名を書いてください。
 
 ## alias との差異
 
@@ -176,14 +172,16 @@ runex export <shell>      # シェル連携スクリプトを生成
 
 - ファジーマッチングフォールバック
 - インタラクティブピッカー
-- エディタリレーション
+- エディタ連携
 
 ## 名の由来
 
 - run + ex = expand / execute / express / extract / explode
-- rune x (like 7z's "x" for extract)
-- rune +x (like chmod's "+x" execute)
+- rune x（7z の "x" で展開するように）
+- rune +x（chmod の "+x" で実行可能にするように）
 
 ## ライセンス
 
 MIT
+
+サードパーティライセンスは [THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md) に記載しています。
