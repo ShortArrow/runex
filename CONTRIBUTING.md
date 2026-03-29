@@ -5,7 +5,8 @@
 ### Prerequisites
 
 - Rust (stable)
-- PowerShell 7+ (`pwsh`) — only required on Windows for the pwsh integration tests; tests are skipped on other platforms
+- PowerShell 7+ (`pwsh`) — required for the pwsh integration tests; tests are skipped at runtime if `pwsh` is not found
+- bash 4+ — required for the bash integration tests; tests are skipped at runtime if bash < 4.0 is found. macOS ships bash 3.2; install a newer version via Homebrew (`brew install bash`)
 
 ### Build
 

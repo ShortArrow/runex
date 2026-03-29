@@ -56,6 +56,8 @@ Or set up manually for each shell:
 
 ### bash
 
+Requires bash 4.0 or later. macOS ships bash 3.2; install a newer version via Homebrew (`brew install bash`) and set it as your shell.
+
 `~/.bashrc`:
 
 ```bash

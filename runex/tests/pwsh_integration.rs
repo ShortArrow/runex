@@ -1,9 +1,12 @@
-#[cfg(target_os = "windows")]
 mod pwsh {
     use std::io::Write;
     use std::process::Command;
     use base64::Engine;
     use tempfile::NamedTempFile;
+
+    fn pwsh_available() -> bool {
+        which::which("pwsh").is_ok()
+    }
 
     fn write_config() -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();
@@ -92,6 +95,7 @@ Write-Output "$($state.Line)|$($state.Cursor)"
     /// collapse the array into a single string and work correctly.
     #[test]
     fn invoke_expression_bare_does_not_work() {
+        if !pwsh_available() { return; }
         let config = write_config();
         let result = run_with_invoke_expr(
             &config,
@@ -109,6 +113,7 @@ Write-Output "$($state.Line)|$($state.Cursor)"
     /// `| Out-String` is the documented form: readable and equivalent to -join.
     #[test]
     fn invoke_expression_out_string() {
+        if !pwsh_available() { return; }
         let config = write_config();
         let result = run_with_invoke_expr(
             &config,
@@ -126,6 +131,7 @@ Write-Output "$($state.Line)|$($state.Cursor)"
     /// `-join \"`n\"` also works and is kept as a reference for comparison.
     #[test]
     fn invoke_expression_join_n_also_works() {
+        if !pwsh_available() { return; }
         let config = write_config();
         let result = run_with_invoke_expr(
             &config,
@@ -142,18 +148,21 @@ Write-Output "$($state.Line)|$($state.Cursor)"
 
     #[test]
     fn expand_at_end() {
+        if !pwsh_available() { return; }
         let config = write_config();
         assert_eq!(run_helper(&config, "gcm", 3), "echo EXPANDED |14");
     }
 
     #[test]
     fn midline_space_is_plain_insert() {
+        if !pwsh_available() { return; }
         let config = write_config();
         assert_eq!(run_helper(&config, "gcm tail", 1), "g cm tail|2");
     }
 
     #[test]
     fn expands_token_before_cursor() {
+        if !pwsh_available() { return; }
         let config = write_config();
         assert_eq!(
             run_helper(&config, "echo gcm", 8),
@@ -163,6 +172,7 @@ Write-Output "$($state.Line)|$($state.Cursor)"
 
     #[test]
     fn expands_after_separator() {
+        if !pwsh_available() { return; }
         let config = write_config();
         assert_eq!(
             run_helper(&config, "echo foo && gcm", 15),
@@ -172,18 +182,21 @@ Write-Output "$($state.Line)|$($state.Cursor)"
 
     #[test]
     fn expands_after_sudo() {
+        if !pwsh_available() { return; }
         let config = write_config();
         assert_eq!(run_helper(&config, "sudo gcm", 8), "sudo echo EXPANDED |19");
     }
 
     #[test]
     fn unknown_token_stays_as_is() {
+        if !pwsh_available() { return; }
         let config = write_config();
         assert_eq!(run_helper(&config, "xyz", 3), "xyz |4");
     }
 
     #[test]
     fn option_like_token_stays_intact() {
+        if !pwsh_available() { return; }
         let config = write_config();
         assert_eq!(
             run_helper(&config, "cargo install --path", 20),
@@ -193,12 +206,14 @@ Write-Output "$($state.Line)|$($state.Cursor)"
 
     #[test]
     fn known_token_in_argument_position_does_not_expand() {
+        if !pwsh_available() { return; }
         let config = write_config();
         assert_eq!(run_helper(&config, "echo gcm", 8), "echo gcm |9");
     }
 
     #[test]
     fn path_argument_with_backslashes_stays_intact() {
+        if !pwsh_available() { return; }
         let config = write_config();
         assert_eq!(
             run_helper(&config, r"cd .\ShortArrow.github.io\", 26),

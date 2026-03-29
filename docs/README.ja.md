@@ -54,6 +54,8 @@ Appended integration to ~/.bashrc
 
 ### bash
 
+bash 4.0 以降が必要です。macOS には bash 3.2 が同梱されています。Homebrew で新しいバージョンをインストールしてください（`brew install bash`）。
+
 `~/.bashrc`:
 
 ```bash

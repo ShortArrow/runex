@@ -1,7 +1,7 @@
 [package]
 name = "runex"
-version = "0.1.5"
-edition = "2021"
+version = "0.1.6"
+edition = "2024"
 build = "build.rs"
 description = "Cross-shell abbreviation engine that expands short tokens into full commands"
 license = "MIT"
@@ -15,7 +15,7 @@ name = "runex"
 path = "src/main.rs"
 
 [dependencies]
-runex-core = { version = "0.1.5", path = "../runex-core" }
+runex-core = { version = "0.1.6", path = "../runex-core" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -24,6 +24,3 @@ which = "7"
 [dev-dependencies]
 tempfile = "3"
 base64 = "0.22"
-
-[target.'cfg(target_family = "unix")'.dev-dependencies]
-rexpect = "0.5"
