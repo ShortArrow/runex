@@ -155,7 +155,16 @@ See `docs/config-reference.md` for the full field reference.
 
 ---
 
-## 9. Future Extensions
+## 9. Roadmap
+
+### Near-term
+
+- Stabilize Nushell integration
+- Expand JSON output coverage beyond `list`, `doctor`, and `version`
+- Harden `doctor` and `init` around edge cases and clearer diagnostics
+- Improve config validation and error messages
+
+### Later
 
 - Fuzzy suggestions / fallback matching
 - Interactive picker

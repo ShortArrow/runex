@@ -8,6 +8,7 @@ license = "MIT"
 repository = "https://github.com/ShortArrow/runex"
 keywords = ["shell", "abbreviation", "alias", "expansion", "cli"]
 categories = ["command-line-utilities"]
+# crates.io README is intentionally minimal; canonical docs live in ../README.md
 readme = "README.md"
 
 [[bin]]
