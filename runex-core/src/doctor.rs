@@ -72,7 +72,31 @@ where
         },
     });
 
-    // 3. Check when_command_exists commands
+    // 3. Check abbr rule quality: empty key, self-loop
+    if let Some(cfg) = config {
+        for (i, abbr) in cfg.abbr.iter().enumerate() {
+            if abbr.key.is_empty() {
+                checks.push(Check {
+                    name: format!("abbr[{i}].empty_key"),
+                    status: CheckStatus::Warn,
+                    detail: format!("rule #{n} has an empty key — it will never match", n = i + 1),
+                });
+            }
+            if abbr.key == abbr.expand {
+                checks.push(Check {
+                    name: format!("abbr[{i}].self_loop"),
+                    status: CheckStatus::Warn,
+                    detail: format!(
+                        "rule #{n} key == expand ('{key}') — this rule is always skipped",
+                        n = i + 1,
+                        key = abbr.key
+                    ),
+                });
+            }
+        }
+    }
+
+    // 4. Check when_command_exists commands
     if let Some(cfg) = config {
         for abbr in &cfg.abbr {
             if let Some(cmds) = &abbr.when_command_exists {
@@ -160,6 +184,32 @@ mod tests {
         assert!(result.is_healthy());
         assert_eq!(result.checks[2].status, CheckStatus::Warn);
         assert!(result.checks[2].detail.contains("not found"));
+    }
+
+    fn abbr(key: &str, exp: &str) -> Abbr {
+        Abbr { key: key.into(), expand: exp.into(), when_command_exists: None }
+    }
+
+    #[test]
+    fn doctor_warns_empty_key() {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let cfg = test_config(vec![abbr("", "git commit -m")]);
+        let result = diagnose(&path, Some(&cfg), |_| true);
+        assert!(
+            result.checks.iter().any(|c| c.name.contains("empty_key") && c.status == CheckStatus::Warn),
+            "must warn on empty key: {:?}", result.checks
+        );
+    }
+
+    #[test]
+    fn doctor_warns_self_loop() {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let cfg = test_config(vec![abbr("ls", "ls")]);
+        let result = diagnose(&path, Some(&cfg), |_| true);
+        assert!(
+            result.checks.iter().any(|c| c.name.contains("self_loop") && c.status == CheckStatus::Warn),
+            "must warn on self-loop: {:?}", result.checks
+        );
     }
 
     #[test]

@@ -133,6 +133,20 @@ fn pwsh_quote_string(token: &str) -> String {
     format!("'{}'", token.replace('\'', "''"))
 }
 
+fn nu_quote_string(value: &str) -> String {
+    // Nu uses double-quoted strings. Escape backslash and double-quote.
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn lua_quote_string(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
@@ -252,7 +266,7 @@ fn nu_bindings(trigger: Option<TriggerKey>, bin: &str) -> String {
     if let Some(trigger) = trigger {
         blocks.push(
             include_str!("templates/nu_expand_binding.nu")
-                .replace("{BIN}", bin)
+                .replace("{NU_BIN}", &nu_quote_string(bin))
                 .replace("{NU_MODIFIER}", nu_modifier(trigger))
                 .replace("{NU_KEYCODE}", nu_keycode(trigger)),
         );
@@ -293,7 +307,6 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
     let trigger = trigger_for(shell, config);
     template
         .replace("\r\n", "\n")
-        .replace("{BIN}", bin)
         .replace("{BASH_BIN}", &bash_quote_string(bin))
         .replace("{BASH_BIND_LINES}", &bash_bind_lines(trigger))
         .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
@@ -628,6 +641,46 @@ mod tests {
             !s.contains("rl.setbinding("),
             "clink script should not register handlers by default"
         );
+    }
+
+    /// These tests verify that a bin value containing shell metacharacters does
+    /// not break out of the quoted context it is embedded in.
+    /// The dangerous case is a quote character that closes the surrounding literal
+    /// and allows arbitrary code to follow on the same line.
+    #[test]
+    fn bin_single_quote_is_escaped_in_bash() {
+        // A single quote in bin must not close the surrounding bash single-quote literal.
+        let s = export_script(Shell::Bash, "run'ex", None);
+        // bash_quote_string produces 'run'\''ex' — the raw ' must not appear unescaped
+        assert!(s.contains(r"'run'\''ex'"), "bash: single quote must be escaped as '\\''");
+    }
+
+    #[test]
+    fn bin_single_quote_is_escaped_in_zsh() {
+        let s = export_script(Shell::Zsh, "run'ex", None);
+        assert!(s.contains(r"'run'\''ex'"), "zsh: single quote must be escaped as '\\''");
+    }
+
+    #[test]
+    fn bin_single_quote_is_escaped_in_pwsh() {
+        // pwsh_quote_string doubles single quotes: run'ex → 'run''ex'
+        let s = export_script(Shell::Pwsh, "run'ex", None);
+        assert!(s.contains("'run''ex'"), "pwsh: single quote must be doubled");
+    }
+
+    #[test]
+    fn bin_double_quote_is_escaped_in_clink() {
+        // lua_quote_string escapes " as \" inside a double-quoted Lua string
+        let s = export_script(Shell::Clink, r#"run"ex"#, None);
+        assert!(s.contains(r#""run\"ex""#), "clink: double quote must be escaped");
+    }
+
+    #[test]
+    fn bin_with_special_chars_is_safe_in_nu() {
+        // Nu template embeds {BIN} directly as a command name; must be quoted.
+        // A bin containing a space or semicolon must not become two tokens.
+        let s = export_script(Shell::Nu, "runex; echo INJECTED", None);
+        assert!(!s.contains("echo INJECTED"), "nu: bin value must be quoted");
     }
 
     #[test]

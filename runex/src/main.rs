@@ -136,11 +136,15 @@ fn resolve_config(
     config_override: Option<&Path>,
 ) -> Result<(PathBuf, Config), Box<dyn std::error::Error>> {
     if let Some(path) = config_override {
-        let config = load_config(path)?;
+        let config = load_config(path).map_err(|e| {
+            format!("failed to load config {}: {e}", path.display())
+        })?;
         return Ok((path.to_path_buf(), config));
     }
     let path = default_config_path()?;
-    let config = load_config(&path)?;
+    let config = load_config(&path).map_err(|e| {
+        format!("failed to load config {}: {e}", path.display())
+    })?;
     Ok((path, config))
 }
 

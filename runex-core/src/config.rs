@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use crate::model::Config;
 
+const MAX_CONFIG_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
+const MAX_ABBR_RULES: usize = 10_000;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("TOML parse error: {0}")]
@@ -10,11 +13,18 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
     #[error("cannot determine config directory")]
     NoConfigDir,
+    #[error("config file exceeds maximum size of 10 MB")]
+    FileTooLarge,
+    #[error("config has too many abbr rules (max {MAX_ABBR_RULES})")]
+    TooManyRules,
 }
 
 /// Parse a TOML string into Config.
 pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(s)?;
+    if config.abbr.len() > MAX_ABBR_RULES {
+        return Err(ConfigError::TooManyRules);
+    }
     Ok(config)
 }
 
@@ -42,6 +52,10 @@ pub(crate) fn xdg_config_home() -> Option<PathBuf> {
 
 /// Load config from a file path.
 pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
+    let meta = std::fs::metadata(path)?;
+    if meta.len() > MAX_CONFIG_FILE_BYTES {
+        return Err(ConfigError::FileTooLarge);
+    }
     let content = std::fs::read_to_string(path)?;
     parse_config(&content)
 }
@@ -189,5 +203,44 @@ expand = "git commit -m"
         let path = default_config_path().unwrap();
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         assert_eq!(path, PathBuf::from("/tmp/xdg-runex-test/runex/config.toml"));
+    }
+
+    #[test]
+    fn parse_config_rejects_too_many_abbr() {
+        let mut s = String::from("version = 1\n");
+        for i in 0..10_001 {
+            s.push_str(&format!("[[abbr]]\nkey = \"k{i}\"\nexpand = \"v{i}\"\n"));
+        }
+        assert!(parse_config(&s).is_err(), "must reject configs with more than 10,000 abbr rules");
+    }
+
+    #[test]
+    fn parse_config_accepts_max_abbr() {
+        let mut s = String::from("version = 1\n");
+        for i in 0..10_000 {
+            s.push_str(&format!("[[abbr]]\nkey = \"k{i}\"\nexpand = \"v{i}\"\n"));
+        }
+        assert!(parse_config(&s).is_ok(), "must accept exactly 10,000 abbr rules");
+    }
+
+    #[test]
+    fn load_config_rejects_oversized_file() {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        // Write 11 MB of data (above 10 MB limit)
+        f.write_all(&vec![b'x'; 11 * 1024 * 1024]).unwrap();
+        f.flush().unwrap();
+        assert!(load_config(f.path()).is_err(), "must reject files larger than 10 MB");
+    }
+
+    /// Canary: version=99 currently passes validation.
+    /// Update this test when explicit version validation is added.
+    #[test]
+    fn parse_version_99_currently_passes() {
+        let toml = "version = 99\n";
+        assert!(
+            parse_config(toml).is_ok(),
+            "version=99 currently passes — update this test when version validation is added"
+        );
     }
 }

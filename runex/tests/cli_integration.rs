@@ -390,6 +390,78 @@ fn export_with_valid_config_embeds_known_tokens() {
     assert!(stdout.contains("gcm"), "stdout should embed known token 'gcm'");
 }
 
+// ─── config error policy ─────────────────────────────────────────────────────
+
+#[test]
+fn explicit_config_not_found_exits_nonzero_and_mentions_path() {
+    let (_, stderr, ok) = run(&["list"], Some(std::path::Path::new("/nonexistent/config.toml")), None);
+    assert!(!ok, "list with missing --config must exit non-zero");
+    assert!(stderr.contains("nonexistent"), "stderr must mention the path: {stderr}");
+}
+
+#[test]
+fn explicit_config_parse_error_exits_nonzero() {
+    let cfg = write_config("this is not valid toml [[[");
+    let (_, _, ok) = run(&["list"], Some(cfg.path()), None);
+    assert!(!ok, "list with broken config must exit non-zero");
+}
+
+#[test]
+fn doctor_with_missing_explicit_config_exits_nonzero() {
+    // doctor reports config_file as Error when the file doesn't exist → exit 1
+    let (_, _, ok) = run(&["doctor"], Some(std::path::Path::new("/nonexistent/config.toml")), None);
+    assert!(!ok, "doctor must exit non-zero when config file is missing");
+}
+
+#[test]
+fn expand_with_missing_explicit_config_exits_nonzero() {
+    let (_, _, ok) = run(&["expand", "--token", "ls"], Some(std::path::Path::new("/nonexistent/config.toml")), None);
+    assert!(!ok, "expand with missing config must exit non-zero");
+}
+
+#[test]
+fn which_with_missing_explicit_config_exits_nonzero() {
+    let (_, _, ok) = run(&["which", "ls"], Some(std::path::Path::new("/nonexistent/config.toml")), None);
+    assert!(!ok, "which with missing config must exit non-zero");
+}
+
+// ─── JSON schema regression ───────────────────────────────────────────────────
+
+#[test]
+fn json_version_has_required_fields() {
+    let (stdout, _, ok) = run(&["version", "--json"], None, None);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("version --json is not valid JSON: {e}\nstdout: {stdout}"));
+    assert!(v.get("version").and_then(|v| v.as_str()).is_some(), "must have string 'version' field");
+}
+
+#[test]
+fn json_list_is_array_with_key_and_expand() {
+    let cfg = write_config("version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n");
+    let (stdout, _, ok) = run(&["list", "--json"], Some(cfg.path()), None);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("list --json is not valid JSON: {e}"));
+    let arr = v.as_array().expect("list --json must be an array");
+    assert!(!arr.is_empty());
+    assert!(arr[0].get("key").is_some(), "each entry must have 'key'");
+    assert!(arr[0].get("expand").is_some(), "each entry must have 'expand'");
+}
+
+#[test]
+fn json_doctor_is_array_with_name_and_status() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(&["doctor", "--json"], Some(cfg.path()), None);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}"));
+    let arr = v.as_array().expect("doctor --json must be an array");
+    assert!(!arr.is_empty());
+    assert!(arr[0].get("name").is_some(), "each check must have 'name'");
+    assert!(arr[0].get("status").is_some(), "each check must have 'status'");
+}
+
 // ─── doctor --no-shell-aliases ────────────────────────────────────────────────
 
 #[test]
