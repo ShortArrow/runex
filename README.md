@@ -10,10 +10,10 @@ runex is a cross-shell abbreviation engine that expands short tokens into full c
 
 ## Features
 
-- Cross-shell support (bash / zsh / pwsh / cmd)
-- Real-time expansion (customizable trigger)
-- Single config file
-- Conditional rules (OS / shell / command existence)
+- Cross-shell support (bash / zsh / pwsh / cmd / nushell)
+- Real-time expansion (customizable trigger key)
+- Single config file shared across shells
+- Conditional rules (`when_command_exists`)
 - Fast and lightweight (Rust core)
 
 ## Concept
@@ -31,22 +31,28 @@ ls␣  → lsd
 cargo install runex
 ```
 
-Generated shell scripts and your `config.toml` are part of your local shell environment. Only load and sync files you trust.
-
 If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
 
-- Unix-like shells: `~/.cargo/bin`
+- Linux/macOS: `~/.cargo/bin`
 - Windows: `%USERPROFILE%\.cargo\bin`
+
+Generated shell scripts and your `config.toml` are part of your local shell environment. Only load and sync files you trust.
 
 ## Setup
 
-### PowerShell
+`runex init` is the quickest way to get started. It creates the config file and appends the shell integration line to your rc file, with a confirmation prompt at each step:
 
-`$PROFILE`:
-
-```powershell
-Invoke-Expression ((& runex export pwsh) -join "`n")
 ```
+$ runex init
+Create config at ~/.config/runex/config.toml? [y/N] y
+Created: ~/.config/runex/config.toml
+Append shell integration to ~/.bashrc? [y/N] y
+Appended integration to ~/.bashrc
+```
+
+Pass `-y` to skip all prompts. For Clink, shell integration must be added manually (see below).
+
+Or set up manually for each shell:
 
 ### bash
 
@@ -64,27 +70,28 @@ eval "$(runex export bash)"
 eval "$(runex export zsh)"
 ```
 
-### Nushell (Experimental)
+### PowerShell
 
-Nushell integration is currently experimental and not considered stable yet.
+`$PROFILE`:
 
-`config.nu`:
-
-```nu
-mkdir ~/.config/nu
-runex export nu | save -f ~/.config/nu/runex.nu
-open ~/.config/nu/config.nu
+```powershell
+Invoke-Expression (& runex export pwsh | Out-String)
 ```
 
-Then add this line to `config.nu`:
+### Nushell (Experimental)
+
+Nushell integration is experimental and not considered stable yet.
+
+Add to `env.nu` (typically `~/.config/nushell/env.nu`):
 
 ```nu
-source ~/.config/nu/runex.nu
+runex export nu | save --force ~/.config/nushell/runex.nu
+source ~/.config/nushell/runex.nu
 ```
 
 ### cmd (Clink)
 
-`%LOCALAPPDATA%\clink\runex.lua`:
+Shell integration must be added manually. Save the script to Clink's script directory:
 
 ```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua
@@ -92,7 +99,9 @@ runex export clink > %LOCALAPPDATA%\clink\runex.lua
 
 ## Config
 
-`~/.config/runex/config.toml`
+Default path: `$XDG_CONFIG_HOME/runex/config.toml`, falling back to `~/.config/runex/config.toml` on all platforms.
+
+Override with the `RUNEX_CONFIG` environment variable or the `--config` flag.
 
 No keybindings are active until you configure them.
 
@@ -103,60 +112,49 @@ version = 1
 trigger = "space"
 
 [[abbr]]
-key = "ls"
+key    = "ls"
 expand = "lsd"
+when_command_exists = ["lsd"]
 
 [[abbr]]
-key = "gcm"
+key    = "gcm"
 expand = "git commit -m"
 ```
 
-`expand` is inserted as shell-native text. `runex` does not reinterpret or re-escape it for you.
-
-Supported key values:
-
-- `space`
-- `tab`
-- `alt-space`
-
-`trigger` sets the default expand key for all shells.
-Shell-specific keys like `bash`, `zsh`, `pwsh`, and `nu` override that default.
-
-Example override:
-
-```toml
-[keybind]
-trigger = "space"
-bash = "alt-space"
-zsh = "tab"
-```
-
-If you want multiple shells or environments to share one physical config file, set `RUNEX_CONFIG` to that path before loading `runex`.
-
-## Avoiding Expansion
-
-If you use `trigger = "space"`, there are a few practical ways to avoid expansion when needed.
-
-- In many terminal setups, `Shift+Space` inserts a plain space without triggering `runex`. This is convenient, but terminal- and shell-dependent.
-- In bash, prefixing the token with `\` avoids a match, so `\ls` stays literal. `command ls` also works.
-- In PowerShell, `\ls` is just a different token, not a built-in escape. For built-in aliases such as `ls`, prefer the full command name such as `Get-ChildItem`.
+See [docs/config-reference.md](docs/config-reference.md) for the full reference, including evaluation order, fallback chains, and all accepted fields.
 
 ## Commands
 
-```bash
-runex expand --token ls   # expand a single token
-runex list                # list all runes
-runex doctor              # check config and environment
-runex version             # show version and build commit
-runex export <shell>      # generate shell integration script
+```
+runex expand --token <token>              expand a token
+runex expand --token <token> --dry-run   show match trace without expanding
+runex list                               list all abbreviations
+runex which <token>                      show which rule matches
+runex which <token> --why                show full match trace with skip reasons
+runex doctor                             check config and environment
+runex doctor --no-shell-aliases          skip alias conflict checks
+runex init                               create config and append shell integration
+runex init -y                            same, skip confirmation prompts
+runex export <shell>                     generate shell integration script
+runex export <shell> --bin <name>        use a custom binary name in the script
+runex version                            show version and build commit
 ```
 
-## Example
+Global flags (available on every subcommand):
 
 ```
-Input:  gcm␣
-Output: git commit -m ␣
+--config <path>      override config file path
+--path-prepend <dir> prepend a directory to PATH for command existence checks
+--json               JSON output (supported by: list, doctor, version)
 ```
+
+## Avoiding Expansion
+
+If you use `trigger = "space"`, there are a few practical ways to avoid expansion:
+
+- `Shift+Space` inserts a plain space in many terminals without triggering runex (terminal-dependent).
+- In bash, prefix the token with `\` — e.g. `\ls` — or use `command ls`.
+- In PowerShell, `\ls` is just a different token. For built-in aliases, prefer the full command name (e.g. `Get-ChildItem`).
 
 ## Why not alias?
 

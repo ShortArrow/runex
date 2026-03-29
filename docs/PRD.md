@@ -35,9 +35,10 @@ The core concept is **"rune-to-cast expansion"**.
 ### 3.2 Value Proposition
 
 - Cross-shell shared abbreviation definitions
-- Real-time expansion on space trigger
-- Conditional expansion (command existence / OS / shell)
-- Centralized management via a single config.toml
+- Real-time expansion on a configurable trigger key
+- Conditional expansion (`when_command_exists`) for graceful multi-machine fallback
+- Centralized management via a single `config.toml`
+- Debuggability: `which --why` and `expand --dry-run` explain every expansion decision
 
 ---
 
@@ -46,9 +47,10 @@ The core concept is **"rune-to-cast expansion"**.
 ### Supported Shells
 
 - bash
+- zsh
 - PowerShell (pwsh)
 - cmd (via Clink)
-- Nushell (nu)
+- Nushell (nu, experimental)
 
 ---
 
@@ -57,13 +59,14 @@ The core concept is **"rune-to-cast expansion"**.
 ```text
 config.toml
     ↓
-runex core (Rust)
+runex core (Rust library crate: runex-core)
     ↓
 shell adapters
-├─ pwsh (PSReadLine)
-├─ bash (readline)
-├─ clink (lua)
-└─ nu (script)
+├─ pwsh  (PSReadLine)
+├─ bash  (readline / bind)
+├─ zsh   (zle / bindkey)
+├─ clink (Lua)
+└─ nu    (script)
 ```
 
 ---
@@ -72,65 +75,92 @@ shell adapters
 
 ### 6.1 Core
 
-- Token → expansion
-- Conditional expansion
-- Fallback (pass through undefined tokens)
-- Shell-aware behavior
+- Token → expansion (first passing rule wins)
+- Self-loop guard: `key == expand` → skip rule, continue evaluation
+- `when_command_exists`: skip rule if any listed command is absent from PATH; continue evaluation
+- Fallback: pass through undefined tokens unchanged
+- Multiple rules with the same key: evaluated in order as a fallback chain
 
 ### 6.2 CLI
 
-```bash
-runex expand --token ls
-runex list
-runex doctor
-runex export pwsh
-runex export bash
-runex export nu
-runex export clink
+```
+runex expand --token <token>              expand a token
+runex expand --token <token> --dry-run   simulate expansion, show match trace
+runex list                               list all abbreviations
+runex which <token>                      show which rule matches
+runex which <token> --why                show full match trace with skip reasons
+runex doctor                             check config and environment
+runex doctor --no-shell-aliases          skip alias conflict checks (avoids spawning shells)
+runex init                               create config and append shell integration to rc file
+runex init -y                            same, skip confirmation prompts
+runex export <shell>                     generate shell integration script
+runex export <shell> --bin <name>        use a custom binary name in the script
+runex version                            show version and build commit
+```
+
+Global flags (accepted by every subcommand):
+
+```
+--config <path>      override config file path (overrides RUNEX_CONFIG)
+--path-prepend <dir> prepend directory to PATH for command existence checks
+--json               JSON output (supported by: list, doctor, version)
 ```
 
 ### 6.3 Config File
 
-`~/.config/runex/config.toml`
+Default: `$XDG_CONFIG_HOME/runex/config.toml`, falling back to `~/.config/runex/config.toml` on all platforms.
+Override: `RUNEX_CONFIG` env var or `--config` flag.
 
 ```toml
 version = 1
 
+[keybind]
+trigger = "space"        # default trigger for all shells
+bash    = "alt-space"    # shell-specific override (optional)
+
 [[abbr]]
-key = "ls"
+key    = "ls"
 expand = "lsd"
 when_command_exists = ["lsd"]
 
 [[abbr]]
-key = "gcm"
+key    = "ls"
+expand = "ls --color=auto"
+
+[[abbr]]
+key    = "gcm"
 expand = "git commit -m"
 ```
+
+See `docs/config-reference.md` for the full field reference.
 
 ---
 
 ## 7. Non-Functional Requirements
 
-- Fast (<1ms level)
-- Cross-platform (Windows / Linux / macOS)
-- Shell-independent logic
-- Safe (infinite loop prevention)
+- Fast: expansion path completes in <1 ms
+- Cross-platform: Windows / Linux / macOS
+- Shell-independent core logic (runex-core crate)
+- Safe: self-loop guard prevents infinite expansion
+- Testable: `command_exists` injected via dependency injection
 
 ---
 
 ## 8. Constraints
 
-- No full shell parser implementation
-- Token-level processing only
-- Quoted strings not supported initially
+- No full shell parser — token-level processing only
+- Quoted strings inside tokens are not interpreted
+- runex does not re-escape expansion text; the shell receives it as-is
+- Clink shell integration cannot be automatically appended by `runex init`
 
 ---
 
 ## 9. Future Extensions
 
-- Fuzzy suggestions
-- UI picker
+- Fuzzy suggestions / fallback matching
+- Interactive picker
 - History-based learning
-- IDE integration (Neovim, etc.)
+- IDE integration (Neovim, VS Code)
 
 ---
 
@@ -138,7 +168,7 @@ expand = "git commit -m"
 
 - All shells unified under a single config file
 - Perceived reduction in typing time
-- Reduction in alias count
+- Reduction in per-shell alias sprawl
 
 ---
 
