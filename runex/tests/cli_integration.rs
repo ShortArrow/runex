@@ -237,6 +237,29 @@ fn which_why_shows_rule_index() {
 }
 
 #[test]
+fn which_json_is_valid_json() {
+    let cfg = write_config(
+        "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+    let (stdout, _, ok) = run(&["which", "gcm", "--json"], Some(cfg.path()), None);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("which --json is not valid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(v["result"], "expanded");
+    assert_eq!(v["expansion"], "git commit -m");
+}
+
+#[test]
+fn which_json_no_match() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(&["which", "zzz", "--json"], Some(cfg.path()), None);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("which --json is not valid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(v["result"], "no_match");
+}
+
+#[test]
 fn which_with_path_prepend_resolves_condition() {
     let cfg = write_config(
         "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"__runex_fake_lsd__\"\nwhen_command_exists = [\"__runex_fake_lsd__\"]\n",
@@ -460,6 +483,57 @@ fn json_doctor_is_array_with_name_and_status() {
     assert!(!arr.is_empty());
     assert!(arr[0].get("name").is_some(), "each check must have 'name'");
     assert!(arr[0].get("status").is_some(), "each check must have 'status'");
+}
+
+// ─── expand --json ───────────────────────────────────────────────────────────
+
+#[test]
+fn expand_json_expanded() {
+    let cfg = write_config("version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n");
+    let (stdout, _, ok) = run(&["expand", "--token", "gcm", "--json"], Some(cfg.path()), None);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expand --json is not valid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(v["result"], "expanded");
+    assert_eq!(v["expansion"], "git commit -m");
+}
+
+#[test]
+fn expand_json_pass_through() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(&["expand", "--token", "xyz", "--json"], Some(cfg.path()), None);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expand --json is not valid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(v["result"], "pass_through");
+}
+
+#[test]
+fn dry_run_json_expanded() {
+    let cfg = write_config("version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n");
+    let (stdout, _, ok) = run(
+        &["expand", "--token", "gcm", "--dry-run", "--json"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expand --dry-run --json is not valid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(v["result"], "expanded");
+}
+
+#[test]
+fn dry_run_json_no_match() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(
+        &["expand", "--token", "xyz", "--dry-run", "--json"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expand --dry-run --json is not valid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(v["result"], "no_match");
 }
 
 // ─── doctor --no-shell-aliases ────────────────────────────────────────────────

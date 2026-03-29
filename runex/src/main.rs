@@ -539,12 +539,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
             if dry_run {
                 let result = expand::which_abbr(&config, &token, &command_exists);
-                print!("{}", format_dry_run_result(&token, &result));
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    print!("{}", format_dry_run_result(&token, &result));
+                }
             } else {
                 let result = expand::expand(&config, &token, &command_exists);
-                match result {
-                    ExpandResult::Expanded(s) => print!("{s}"),
-                    ExpandResult::PassThrough(s) => print!("{s}"),
+                if cli.json {
+                    let v = match &result {
+                        ExpandResult::Expanded(s) => serde_json::json!({
+                            "result": "expanded",
+                            "token": token,
+                            "expansion": s,
+                        }),
+                        ExpandResult::PassThrough(s) => serde_json::json!({
+                            "result": "pass_through",
+                            "token": s,
+                        }),
+                    };
+                    println!("{}", serde_json::to_string_pretty(&v)?);
+                } else {
+                    match result {
+                        ExpandResult::Expanded(s) => print!("{s}"),
+                        ExpandResult::PassThrough(s) => print!("{s}"),
+                    }
                 }
             }
         }
@@ -615,7 +634,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
             let result = expand::which_abbr(&config, &token, &command_exists);
-            println!("{}", format_which_result(&result, why));
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}", format_which_result(&result, why));
+            }
         }
         Commands::Init { yes } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
