@@ -150,12 +150,8 @@ fn lua_quote_string(value: &str) -> String {
 
 fn pwsh_known_cases(config: Option<&Config>) -> String {
     let Some(config) = config else {
-        return "        default { return $true }".to_string();
+        return String::new();
     };
-
-    if config.abbr.is_empty() {
-        return "        default { return $true }".to_string();
-    }
 
     let mut lines = Vec::with_capacity(config.abbr.len());
     for abbr in &config.abbr {
@@ -632,5 +628,24 @@ mod tests {
             !s.contains("rl.setbinding("),
             "clink script should not register handlers by default"
         );
+    }
+
+    #[test]
+    fn pwsh_script_has_single_default_clause() {
+        // Regression: empty abbr list used to emit a duplicate `default` clause
+        // inside the switch statement, causing a PowerShell parse error.
+        for abbr in [vec![], vec![crate::model::Abbr {
+            key: "gcm".into(),
+            expand: "git commit -m".into(),
+            when_command_exists: None,
+        }]] {
+            let s = export_script(Shell::Pwsh, "runex", Some(&Config {
+                version: 1,
+                keybind: crate::model::KeybindConfig::default(),
+                abbr,
+            }));
+            let default_count = s.matches("default {").count();
+            assert_eq!(default_count, 1, "pwsh script must have exactly one default clause, got {default_count}");
+        }
     }
 }
