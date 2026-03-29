@@ -1,6 +1,6 @@
 [package]
 name = "runex"
-version = "0.1.3"
+version = "0.1.5"
 edition = "2021"
 build = "build.rs"
 description = "Cross-shell abbreviation engine that expands short tokens into full commands"
@@ -15,7 +15,7 @@ name = "runex"
 path = "src/main.rs"
 
 [dependencies]
-runex-core = { version = "0.1.3", path = "../runex-core" }
+runex-core = { version = "0.1.5", path = "../runex-core" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
