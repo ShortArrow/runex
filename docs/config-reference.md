@@ -1,6 +1,6 @@
 # Config Reference
 
-Default path: `$XDG_CONFIG_HOME/runex/config.toml`, falling back to `~/.config/runex/config.toml` on all platforms.
+Default path: `$XDG_CONFIG_HOME/runex/config.toml`, falling back to `~/.config/runex/config.toml` on all platforms including Windows.
 
 Override with the `RUNEX_CONFIG` environment variable or the `--config` flag.
 
