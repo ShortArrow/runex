@@ -172,7 +172,16 @@ If you use `trigger = "space"`, there are a few practical ways to avoid expansio
 - Minimal typing, maximal power
 - Runes over repetition
 
-## Future
+## Roadmap
+
+Near-term:
+
+- Stabilize Nushell integration
+- Expand JSON output coverage beyond `list`, `doctor`, and `version`
+- Harden `doctor` and `init` around edge cases and clearer diagnostics
+- Improve config validation and error messages
+
+Later:
 
 - Fuzzy suggestions
 - Interactive picker
