@@ -145,43 +145,49 @@ expand = "git commit -m"
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Safety: env mutation is serialized via `#[serial]`; no concurrent
+    /// env access within this test suite. External concurrent access is
+    /// not fully excluded but acceptable in test context.
     #[test]
     #[serial]
     fn default_config_path_env_override() {
         // RUNEX_CONFIG takes priority over XDG_CONFIG_HOME.
-        std::env::remove_var("XDG_CONFIG_HOME");
-        std::env::set_var("RUNEX_CONFIG", "/tmp/custom.toml");
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+        unsafe { std::env::set_var("RUNEX_CONFIG", "/tmp/custom.toml") };
         let path = default_config_path().unwrap();
-        std::env::remove_var("RUNEX_CONFIG");
+        unsafe { std::env::remove_var("RUNEX_CONFIG") };
         assert_eq!(path, PathBuf::from("/tmp/custom.toml"));
     }
 
+    /// Safety: see `default_config_path_env_override`.
     #[test]
     #[serial]
     fn xdg_config_home_uses_env_var() {
-        std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-test");
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-test") };
         let dir = xdg_config_home().unwrap();
-        std::env::remove_var("XDG_CONFIG_HOME");
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         assert_eq!(dir, PathBuf::from("/tmp/xdg-test"));
     }
 
+    /// Safety: see `default_config_path_env_override`.
     #[test]
     #[serial]
     fn xdg_config_home_empty_env_falls_back_to_home() {
-        std::env::set_var("XDG_CONFIG_HOME", "");
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", "") };
         let dir = xdg_config_home().unwrap();
-        std::env::remove_var("XDG_CONFIG_HOME");
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         // Falls back to home/.config — must end with .config
         assert!(dir.ends_with(".config"), "expected ~/.config fallback, got {dir:?}");
     }
 
+    /// Safety: see `default_config_path_env_override`.
     #[test]
     #[serial]
     fn default_config_path_uses_xdg_config_home() {
-        std::env::remove_var("RUNEX_CONFIG");
-        std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-runex-test");
+        unsafe { std::env::remove_var("RUNEX_CONFIG") };
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-runex-test") };
         let path = default_config_path().unwrap();
-        std::env::remove_var("XDG_CONFIG_HOME");
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         assert_eq!(path, PathBuf::from("/tmp/xdg-runex-test/runex/config.toml"));
     }
 }
