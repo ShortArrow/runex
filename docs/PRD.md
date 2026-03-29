@@ -170,6 +170,7 @@ See `docs/config-reference.md` for the full field reference.
 - Interactive picker
 - History-based learning
 - IDE integration (Neovim, VS Code)
+- Broader distribution channels (GitHub Releases, `cargo-binstall`, `winget`, `mise github:`)
 
 ---
 

@@ -31,6 +31,12 @@ ls␣  → lsd
 cargo install runex
 ```
 
+Or with `mise`:
+
+```bash
+mise use -g cargo:runex
+```
+
 If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
 
 - Linux/macOS: `~/.cargo/bin`
@@ -186,6 +192,7 @@ Later:
 - Fuzzy suggestions
 - Interactive picker
 - Editor integrations
+- Broader distribution channels (GitHub Releases, `cargo-binstall`, `winget`, `mise github:`)
 
 ## Name
 

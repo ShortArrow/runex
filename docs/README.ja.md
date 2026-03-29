@@ -29,6 +29,12 @@ ls␣  → lsd
 cargo install runex
 ```
 
+`mise` を使う場合:
+
+```bash
+mise use -g cargo:runex
+```
+
 インストール後に `runex` が見つからない場合は、Cargo の bin ディレクトリが `PATH` に入っているか確認してください。
 
 - Linux/macOS: `~/.cargo/bin`
@@ -184,6 +190,7 @@ runex version                            バージョンとビルドコミット
 - ファジーマッチングフォールバック
 - インタラクティブピッカー
 - エディタ連携
+- 配布チャネル拡充（GitHub Releases、`cargo-binstall`、`winget`、`mise github:`）
 
 ## 名の由来
 

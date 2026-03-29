@@ -15,6 +15,12 @@ Keep detailed user documentation in the repository root README.
 cargo install runex
 ```
 
+Or with `mise`:
+
+```bash
+mise use -g cargo:runex
+```
+
 If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
 
 - Unix-like shells: `~/.cargo/bin`

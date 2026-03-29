@@ -170,6 +170,7 @@ expand = "git commit -m"
 - インタラクティブピッカー
 - 履歴学習
 - IDE 連携（Neovim、VS Code）
+- 配布チャネル拡充（GitHub Releases、`cargo-binstall`、`winget`、`mise github:`）
 
 ---
 
