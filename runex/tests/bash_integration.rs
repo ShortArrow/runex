@@ -10,10 +10,6 @@ mod bash {
     use std::process::Command;
     use tempfile::NamedTempFile;
 
-    fn bash_available() -> bool {
-        which::which("bash").is_ok()
-    }
-
     fn bin_path() -> &'static str {
         env!("CARGO_BIN_EXE_runex")
     }
@@ -27,6 +23,25 @@ mod bash {
         .unwrap();
         f.flush().unwrap();
         f
+    }
+
+    /// Returns false if bash is not found or is too old (< 4.0).
+    /// macOS ships bash 3.2 (GPLv2 constraint) which does not support
+    /// process substitution in non-interactive mode. Require bash 4+.
+    fn bash_available() -> bool {
+        let Ok(path) = which::which("bash") else { return false };
+        let out = Command::new(path)
+            .args(["--norc", "--noprofile", "-c", "echo $BASH_VERSION"])
+            .output();
+        let Ok(out) = out else { return false };
+        let ver = String::from_utf8_lossy(&out.stdout);
+        // BASH_VERSION looks like "5.2.37(1)-release"; major version must be >= 4
+        ver.trim()
+            .split('.')
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+            .map(|major| major >= 4)
+            .unwrap_or(false)
     }
 
     /// Run a snippet inside a non-interactive bash that has sourced the runex
