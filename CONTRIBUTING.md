@@ -5,7 +5,7 @@
 ### Prerequisites
 
 - Rust (stable)
-- PowerShell 7+ (`pwsh`) — only required on Windows for the pwsh integration tests; tests are skipped on other platforms
+- PowerShell 7+ (`pwsh`) — required for the pwsh integration tests; tests are skipped at runtime if `pwsh` is not found
 
 ### Build
 
