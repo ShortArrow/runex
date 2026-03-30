@@ -694,6 +694,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let line = runex_init::integration_line(shell, "runex");
                             let block =
                                 format!("\n{}\n{}\n", runex_init::RUNEX_INIT_MARKER, line);
+                            if let Some(parent) = rc_path.parent() {
+                                std::fs::create_dir_all(parent)?;
+                            }
                             let mut file = std::fs::OpenOptions::new()
                                 .create(true)
                                 .append(true)

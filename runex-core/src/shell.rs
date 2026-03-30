@@ -77,7 +77,7 @@ fn bash_quote_pattern(token: &str) -> String {
     format!("'{}'", token.replace('\'', r#"'\''"#))
 }
 
-fn bash_quote_string(value: &str) -> String {
+pub(crate) fn bash_quote_string(value: &str) -> String {
     format!("'{}'", value.replace('\'', r#"'\''"#))
 }
 
@@ -129,13 +129,15 @@ fn pwsh_chord(trigger: TriggerKey) -> &'static str {
     }
 }
 
-fn pwsh_quote_string(token: &str) -> String {
+pub(crate) fn pwsh_quote_string(token: &str) -> String {
     format!("'{}'", token.replace('\'', "''"))
 }
 
-fn nu_quote_string(value: &str) -> String {
-    // Nu uses double-quoted strings. Escape backslash and double-quote.
-    let mut out = String::from("\"");
+pub(crate) fn nu_quote_string(value: &str) -> String {
+    // Nu external-command syntax: ^"..." forces execution as an external command.
+    // Without the ^ prefix, a quoted string is a string literal, not a command.
+    // Escape backslash and double-quote inside the double-quoted string.
+    let mut out = String::from("^\"");
     for ch in value.chars() {
         match ch {
             '\\' => out.push_str("\\\\"),
@@ -681,6 +683,38 @@ mod tests {
         // A bin containing a space or semicolon must not become two tokens.
         let s = export_script(Shell::Nu, "runex; echo INJECTED", None);
         assert!(!s.contains("echo INJECTED"), "nu: bin value must be quoted");
+    }
+
+    #[test]
+    fn nu_bin_uses_caret_external_command_syntax() {
+        // In Nu, quoting a command name as "runex" makes it a string, not a command.
+        // The correct external-command syntax is ^"runex" — the ^ forces external execution.
+        // The {NU_BIN} placeholder is only emitted when a trigger keybind is configured.
+        use crate::model::{Config, KeybindConfig, TriggerKey};
+        let config = Config {
+            version: 1,
+            keybind: KeybindConfig { trigger: Some(TriggerKey::Space), ..Default::default() },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Nu, "runex", Some(&config));
+        assert!(
+            s.contains("^\"runex\""),
+            "nu: bin must use ^\"...\" external command syntax, got snippet: {:?}",
+            s.lines().find(|l| l.contains("runex")).unwrap_or("<not found>")
+        );
+    }
+
+    #[test]
+    fn nu_bin_with_special_chars_uses_caret_syntax() {
+        // Special chars in bin must be escaped but still use ^ prefix
+        use crate::model::{Config, KeybindConfig, TriggerKey};
+        let config = Config {
+            version: 1,
+            keybind: KeybindConfig { trigger: Some(TriggerKey::Space), ..Default::default() },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Nu, "my\"app", Some(&config));
+        assert!(s.contains("^\"my\\\"app\""), "nu: special chars must be escaped: {s}");
     }
 
     #[test]

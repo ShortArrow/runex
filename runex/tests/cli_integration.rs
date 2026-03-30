@@ -512,6 +512,33 @@ fn init_config_creates_file_at_given_path() {
     assert!(config_path.exists(), "config file must be created at the given path");
 }
 
+/// init must succeed even when the shell rc file's parent directory does not yet exist.
+/// On a fresh HOME, ~/.config/powershell/ (or ~/.bashrc parent) may be absent.
+#[test]
+fn init_creates_rc_parent_dir_if_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+
+    let out = Command::new(bin())
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        // XDG_CONFIG_HOME inside the temp dir so Nu/pwsh rc paths are also rooted there
+        .env("XDG_CONFIG_HOME", dir.path().join(".config"))
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "init",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "init must exit 0 even when rc parent dir is missing\nstderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn init_config_already_exists_does_not_overwrite() {
     let cfg = write_config("version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n");
