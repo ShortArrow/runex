@@ -299,6 +299,39 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
     }
 }
 
+/// Convert a `WhichResult` to a JSON value with 1-based rule indices.
+///
+/// `WhichResult` stores 0-based indices internally (matching `enumerate()`).
+/// The text output already presents these as `rule #1`, `rule #2`, etc., so
+/// JSON must use the same numbering for consistency.
+fn which_result_to_json(result: &WhichResult) -> serde_json::Value {
+    match result {
+        WhichResult::Expanded {
+            key,
+            expansion,
+            rule_index,
+            satisfied_conditions,
+            skipped,
+        } => serde_json::json!({
+            "result": "expanded",
+            "key": key,
+            "expansion": expansion,
+            "rule_index": rule_index + 1,
+            "satisfied_conditions": satisfied_conditions,
+            "skipped": skipped.iter().map(|(i, r)| serde_json::json!([i + 1, r])).collect::<Vec<_>>(),
+        }),
+        WhichResult::AllSkipped { token, skipped } => serde_json::json!({
+            "result": "all_skipped",
+            "token": token,
+            "skipped": skipped.iter().map(|(i, r)| serde_json::json!([i + 1, r])).collect::<Vec<_>>(),
+        }),
+        WhichResult::NoMatch { token } => serde_json::json!({
+            "result": "no_match",
+            "token": token,
+        }),
+    }
+}
+
 fn format_dry_run_result(token: &str, result: &WhichResult) -> String {
     let mut out = String::new();
     out.push_str(&format!("token: {token}\n"));
@@ -540,7 +573,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if dry_run {
                 let result = expand::which_abbr(&config, &token, &command_exists);
                 if cli.json {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
                 } else {
                     print!("{}", format_dry_run_result(&token, &result));
                 }
@@ -635,7 +668,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
             let result = expand::which_abbr(&config, &token, &command_exists);
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
+                println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
             } else {
                 println!("{}", format_which_result(&result, why));
             }

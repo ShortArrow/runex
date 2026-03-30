@@ -260,6 +260,64 @@ fn which_json_no_match() {
 }
 
 #[test]
+fn which_json_rule_index_is_one_based() {
+    // JSON output must use 1-based rule_index to match the text output ("rule #1")
+    let cfg = write_config(
+        "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+    let (stdout, _, ok) = run(&["which", "gcm", "--json"], Some(cfg.path()), None);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        v["rule_index"], 1,
+        "rule_index must be 1-based (got {})",
+        v["rule_index"]
+    );
+}
+
+#[test]
+fn which_json_skipped_indices_are_one_based() {
+    // Skipped entries must also use 1-based indices
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\nkey = \"ls\"\nexpand = \"ls\"\n\
+         [[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\n",
+    );
+    let (stdout, _, ok) = run(&["which", "ls", "--json"], Some(cfg.path()), None);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["result"], "expanded");
+    // First rule (index 0 internally) was skipped as self-loop → must appear as 1
+    let skipped = v["skipped"].as_array().expect("skipped must be array");
+    assert!(!skipped.is_empty(), "expected at least one skipped entry");
+    assert_eq!(
+        skipped[0][0], 1,
+        "skipped rule index must be 1-based (got {})",
+        skipped[0][0]
+    );
+}
+
+#[test]
+fn dry_run_json_rule_index_is_one_based() {
+    let cfg = write_config(
+        "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+    let (stdout, _, ok) = run(
+        &["expand", "--token", "gcm", "--dry-run", "--json"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["result"], "expanded");
+    assert_eq!(
+        v["rule_index"], 1,
+        "dry-run --json rule_index must be 1-based (got {})",
+        v["rule_index"]
+    );
+}
+
+#[test]
 fn which_with_path_prepend_resolves_condition() {
     let cfg = write_config(
         "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"__runex_fake_lsd__\"\nwhen_command_exists = [\"__runex_fake_lsd__\"]\n",
@@ -487,15 +545,29 @@ fn json_doctor_is_array_with_name_and_status() {
 
 // ─── init --config ────────────────────────────────────────────────────────────
 
+/// Build a Command for `runex init` with HOME/USERPROFILE/PSModulePath/SHELL all
+/// redirected into `home_dir` so that shell detection and rc-file resolution
+/// stay entirely inside the temp directory on every platform.
+fn init_cmd_in_dir(home_dir: &std::path::Path) -> Command {
+    let mut cmd = Command::new(bin());
+    cmd.env("HOME", home_dir)
+        .env("USERPROFILE", home_dir)
+        .env("XDG_CONFIG_HOME", home_dir.join(".config"))
+        // Force bash detection so rc_file_for() → $HOME/.bashrc (inside temp dir).
+        // On Windows, PSModulePath triggers pwsh detection; removing it falls back
+        // to $SHELL, which we set to bash.
+        .env_remove("PSModulePath")
+        .env("SHELL", "/bin/bash");
+    cmd
+}
+
 #[test]
 fn init_config_creates_file_at_given_path() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("custom_config.toml");
     assert!(!config_path.exists());
 
-    let out = Command::new(bin())
-        .env("HOME", dir.path())
-        .env("USERPROFILE", dir.path())
+    let out = init_cmd_in_dir(dir.path())
         .args([
             "--config",
             config_path.to_str().unwrap(),
@@ -513,17 +585,12 @@ fn init_config_creates_file_at_given_path() {
 }
 
 /// init must succeed even when the shell rc file's parent directory does not yet exist.
-/// On a fresh HOME, ~/.config/powershell/ (or ~/.bashrc parent) may be absent.
 #[test]
 fn init_creates_rc_parent_dir_if_missing() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
 
-    let out = Command::new(bin())
-        .env("HOME", dir.path())
-        .env("USERPROFILE", dir.path())
-        // XDG_CONFIG_HOME inside the temp dir so Nu/pwsh rc paths are also rooted there
-        .env("XDG_CONFIG_HOME", dir.path().join(".config"))
+    let out = init_cmd_in_dir(dir.path())
         .args([
             "--config",
             config_path.to_str().unwrap(),
@@ -544,9 +611,7 @@ fn init_config_already_exists_does_not_overwrite() {
     let cfg = write_config("version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n");
     let dir = tempfile::tempdir().unwrap();
 
-    let out = Command::new(bin())
-        .env("HOME", dir.path())
-        .env("USERPROFILE", dir.path())
+    let out = init_cmd_in_dir(dir.path())
         .args([
             "--config",
             cfg.path().to_str().unwrap(),

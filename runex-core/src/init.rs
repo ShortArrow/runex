@@ -3,6 +3,22 @@ use std::path::PathBuf;
 use crate::config::xdg_config_home;
 use crate::shell::{bash_quote_string, nu_quote_string, pwsh_quote_string, Shell};
 
+/// Quote a filesystem path for embedding in a Nu shell string literal.
+/// Uses Nu double-quoted string syntax: escapes `\` and `"`.
+/// Unlike `nu_quote_string`, this does NOT add the `^` external-command prefix.
+fn nu_quote_path(path: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in path.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Marker comment written into rc files to enable idempotent init.
 pub const RUNEX_INIT_MARKER: &str = "# runex-init";
 
@@ -32,8 +48,10 @@ pub fn integration_line(shell: Shell, bin: &str) -> String {
                 .unwrap_or_else(|| "~/.config".to_string());
             // Nu requires ^"..." syntax to invoke an external command by quoted name.
             let nu_bin = nu_quote_string(bin);
+            // Paths must be quoted so spaces and backslashes don't break tokenization.
+            let nu_path = nu_quote_path(&format!("{cfg_dir}/runex/runex.nu"));
             format!(
-                "{nu_bin} export nu | save --force {cfg_dir}/runex/runex.nu\nsource {cfg_dir}/runex/runex.nu"
+                "{nu_bin} export nu | save --force {nu_path}\nsource {nu_path}"
             )
         }
         Shell::Clink => format!(
@@ -149,6 +167,34 @@ mod tests {
     fn integration_line_nu_escapes_special_chars_in_bin() {
         let line = integration_line(Shell::Nu, "my\"app");
         assert!(line.contains("^\"my\\\"app\""), "nu: special chars must be escaped: {line}");
+    }
+
+    #[test]
+    fn integration_line_nu_quotes_cfg_dir_with_spaces() {
+        // nu_quote_path must wrap the path in double quotes so Nu doesn't tokenize on spaces.
+        let quoted = nu_quote_path("/home/my user/.config");
+        assert_eq!(quoted, "\"/home/my user/.config\"");
+        assert!(!quoted.starts_with('/'), "path must be quoted, not raw");
+    }
+
+    #[test]
+    fn integration_line_nu_quotes_cfg_dir_with_backslash() {
+        // Windows paths: backslashes must be escaped inside Nu double-quoted strings.
+        let quoted = nu_quote_path(r"C:\Users\my user\AppData");
+        assert_eq!(quoted, r#""C:\\Users\\my user\\AppData""#);
+    }
+
+    #[test]
+    fn integration_line_nu_save_path_is_quoted() {
+        // The generated Nu integration line must quote the runex.nu path.
+        let line = integration_line(Shell::Nu, "runex");
+        // save and source must use quoted paths (starting with ")
+        for fragment in ["save --force \"", "source \""] {
+            assert!(
+                line.contains(fragment),
+                "nu line must contain `{fragment}`: {line}"
+            );
+        }
     }
 
     #[test]
