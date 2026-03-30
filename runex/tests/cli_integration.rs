@@ -485,6 +485,73 @@ fn json_doctor_is_array_with_name_and_status() {
     assert!(arr[0].get("status").is_some(), "each check must have 'status'");
 }
 
+// ─── init --config ────────────────────────────────────────────────────────────
+
+#[test]
+fn init_config_creates_file_at_given_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("custom_config.toml");
+    assert!(!config_path.exists());
+
+    let out = Command::new(bin())
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "init",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(config_path.exists(), "config file must be created at the given path");
+}
+
+#[test]
+fn init_config_already_exists_does_not_overwrite() {
+    let cfg = write_config("version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n");
+    let dir = tempfile::tempdir().unwrap();
+
+    let out = Command::new(bin())
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        .args([
+            "--config",
+            cfg.path().to_str().unwrap(),
+            "init",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("already exists"), "stdout: {stdout}");
+    let content = std::fs::read_to_string(cfg.path()).unwrap();
+    assert!(content.contains("gcm"), "config must not be overwritten");
+}
+
+// ─── --path-prepend silent ignore ────────────────────────────────────────────
+
+#[test]
+fn list_ignores_path_prepend() {
+    let cfg = write_config(
+        "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"lsd\"]\n",
+    );
+    let bins = fake_bin_dir(&["lsd"]);
+    let (stdout_with, _, ok_with) = run(&["list"], Some(cfg.path()), Some(bins.path()));
+    let (stdout_without, _, ok_without) = run(&["list"], Some(cfg.path()), None);
+    assert!(ok_with && ok_without);
+    assert_eq!(
+        stdout_with, stdout_without,
+        "--path-prepend must not affect list output"
+    );
+}
+
 // ─── expand --json ───────────────────────────────────────────────────────────
 
 #[test]
