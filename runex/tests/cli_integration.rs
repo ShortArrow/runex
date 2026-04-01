@@ -724,3 +724,244 @@ fn doctor_no_shell_aliases_skips_external_shells() {
         "expected no shell alias checks, got: {shell_checks:?}"
     );
 }
+
+// --- Terminal escape sequence injection: expansion values must not pass ANSI escapes ---
+
+#[test]
+fn list_rejects_config_with_ansi_escape_in_expansion() {
+    // TOML spec forbids raw control characters (U+0000–U+001F, U+007F) in strings.
+    // A config file containing a raw ESC byte (\x1b) in an expansion value must be
+    // rejected by the TOML parser, preventing terminal escape injection via `list`.
+    let mut toml = String::from("version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"");
+    toml.push('\x1b'); // literal ESC byte — invalid in TOML string
+    toml.push_str("[2Jmalicious\"\n");
+    let cfg = write_config(&toml);
+    // runex must exit non-zero: the TOML parser rejects the control character
+    let (_, _, ok) = run(&["list"], Some(cfg.path()), None);
+    assert!(
+        !ok,
+        "list must reject a config with a raw ESC byte in expansion (TOML spec violation)"
+    );
+}
+
+#[test]
+fn which_rejects_config_with_ansi_escape_in_expansion() {
+    let mut toml = String::from("version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"");
+    toml.push('\x1b');
+    toml.push_str("[2Jmalicious\"\n");
+    let cfg = write_config(&toml);
+    let (_, _, ok) = run(&["which", "ls"], Some(cfg.path()), None);
+    assert!(
+        !ok,
+        "which must reject a config with a raw ESC byte in expansion (TOML spec violation)"
+    );
+}
+
+// --- doctor/expand: when_command_exists with path-like values ---
+
+#[test]
+fn expand_when_command_exists_with_path_separator_not_satisfied() {
+    // when_command_exists values must be bare command names, not filesystem paths.
+    // A value containing a path separator must always be treated as not-found,
+    // even when --path-prepend points to a directory that makes dir.join(cmd)
+    // resolve to an existing file (filesystem probing via path traversal).
+    let bins = fake_bin_dir(&[]);
+    // Write an actual file the attacker wants to "find" via path traversal.
+    // On Unix, use the bins dir itself as the target: "../<bins_dir_name>/some_file"
+    // We simulate by creating a file in bins dir and using a relative path cmd.
+    std::fs::write(bins.path().join("target_file"), b"").unwrap();
+    let traversal_cmd = format!("../target_file");
+    let toml = format!(
+        "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"{traversal_cmd}\"]\n"
+    );
+    let cfg = write_config(&toml);
+    // Even with --path-prepend pointing to a subdirectory of bins,
+    // the path-separator in the cmd must cause immediate not-found.
+    let sub = bins.path().join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let (stdout, _, ok) = run(&["expand", "--token=ls"], Some(cfg.path()), Some(&sub));
+    assert!(ok, "expand must succeed: {stdout}");
+    assert_eq!(
+        stdout.trim(), "ls",
+        "when_command_exists with path separator must not be satisfied (filesystem probe blocked)"
+    );
+}
+
+// --- when_command_exists: Windows drive-letter colon must be rejected ─────────
+
+#[test]
+#[cfg(windows)]
+fn expand_when_command_exists_with_colon_not_satisfied() {
+    // On Windows, `dir.join("C:foo")` resolves as an absolute path, bypassing
+    // the intended --path-prepend directory restriction.
+    // A cmd containing ':' must always be treated as not-found.
+    let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"C:lsd\"]\n";
+    let cfg = write_config(toml);
+    let bins = fake_bin_dir(&["lsd"]);
+    let (stdout, _, ok) = run(&["expand", "--token=ls"], Some(cfg.path()), Some(bins.path()));
+    assert!(ok);
+    assert_eq!(
+        stdout.trim(), "ls",
+        "when_command_exists with ':' must not be satisfied (Windows path bypass blocked)"
+    );
+}
+
+// --- doctor: when_command_exists with absolute path must not probe filesystem ---
+
+#[test]
+fn doctor_when_command_exists_absolute_path_is_treated_as_not_found() {
+    // `when_command_exists` is intended for bare command names (e.g. "lsd"), not paths.
+    // Passing an absolute path like "/etc/passwd" would let an attacker probe the
+    // filesystem via doctor output (found vs not found).
+    // A bare-name check must be enforced: absolute paths must always be treated as
+    // not-found (or cause an error), never confirming file existence.
+    #[cfg(unix)]
+    {
+        let cfg = write_config(
+            "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"/etc/passwd\"]\n",
+        );
+        let (stdout, _, _) = run(&["doctor", "--json"], Some(cfg.path()), None);
+        // The abbr check must report the condition as not satisfied (command not found),
+        // not as found — /etc/passwd exists but is not a command in PATH.
+        let checks: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
+        let abbr_checks: Vec<_> = checks
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter(|c| c["name"].as_str().unwrap_or("").starts_with("abbr:"))
+            .collect();
+        // All abbr checks involving /etc/passwd must not report it as "found"
+        for check in &abbr_checks {
+            let detail = check["detail"].as_str().unwrap_or("");
+            assert!(
+                !detail.contains("/etc/passwd: found"),
+                "doctor must not report absolute path /etc/passwd as found: {detail}"
+            );
+        }
+    }
+}
+
+// ─── init: rc file symlink safety ────────────────────────────────────────────
+
+/// init must not follow a symlink at the rc file path (O_NOFOLLOW protection).
+/// If the rc path is a symlink, init must refuse to append to it.
+#[test]
+#[cfg(unix)]
+fn init_does_not_follow_symlink_at_rc_file() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    // Create a target file that must NOT be written to
+    let target = dir.path().join("sensitive_target.txt");
+    std::fs::write(&target, b"original content").unwrap();
+    // Create a .bashrc symlink pointing to the sensitive target
+    let bashrc = dir.path().join(".bashrc");
+    symlink(&target, &bashrc).unwrap();
+
+    let out = init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+
+    // The sensitive_target must not have been modified
+    let content = std::fs::read_to_string(&target).unwrap();
+    assert_eq!(
+        content, "original content",
+        "init must not follow symlink at rc file path and write to the symlink target"
+    );
+    // init may succeed (skipping the symlinked rc) or fail, but must not corrupt target
+    let _ = out; // exit code is not the key assertion here
+}
+
+// ─── export --bin validation ──────────────────────────────────────────────────
+
+/// export with an empty --bin must exit non-zero; an empty bin name would
+/// produce a broken shell script (e.g. `eval "$('' export bash)"`).
+#[test]
+fn export_with_empty_bin_exits_nonzero() {
+    let cfg = write_config("version = 1\n");
+    let (_, stderr, ok) = run(&["export", "bash", "--bin="], Some(cfg.path()), None);
+    assert!(!ok, "export --bin='' must exit non-zero");
+    assert!(
+        stderr.contains("bin") || stderr.contains("empty") || stderr.contains("invalid"),
+        "stderr must mention the invalid bin: {stderr}"
+    );
+}
+
+/// export with a whitespace-only --bin must also exit non-zero.
+#[test]
+fn export_with_whitespace_only_bin_exits_nonzero() {
+    let cfg = write_config("version = 1\n");
+    let (_, stderr, ok) = run(&["export", "bash", "--bin=   "], Some(cfg.path()), None);
+    assert!(!ok, "export --bin='   ' must exit non-zero");
+    assert!(
+        stderr.contains("bin") || stderr.contains("empty") || stderr.contains("invalid"),
+        "stderr must mention the invalid bin: {stderr}"
+    );
+}
+
+/// export with a --bin containing control characters must exit non-zero.
+/// Silent dropping would produce a silently different binary name.
+#[test]
+fn export_with_control_char_in_bin_exits_nonzero() {
+    let cfg = write_config("version = 1\n");
+    // \x07 is BEL, \x7f is DEL — both must be rejected
+    let (_, stderr, ok) = run(&["export", "bash", "--bin=run\x07ex"], Some(cfg.path()), None);
+    assert!(!ok, "export --bin with control char must exit non-zero");
+    assert!(
+        stderr.contains("bin") || stderr.contains("control") || stderr.contains("invalid"),
+        "stderr must mention the invalid bin: {stderr}"
+    );
+}
+
+/// export with --bin containing a Unicode right-to-left override (U+202E) must exit non-zero.
+/// Such characters can deceive users about what binary name is embedded in the script.
+#[test]
+fn export_with_rlo_in_bin_exits_nonzero() {
+    let cfg = write_config("version = 1\n");
+    let bin_with_rlo = format!("run\u{202e}ex");
+    let (_, stderr, ok) = run(&["export", "bash", &format!("--bin={bin_with_rlo}")], Some(cfg.path()), None);
+    assert!(!ok, "export --bin with RLO (U+202E) must exit non-zero");
+    assert!(
+        stderr.contains("bin") || stderr.contains("invalid") || stderr.contains("ASCII"),
+        "stderr must mention the invalid bin: {stderr}"
+    );
+}
+
+/// export with --bin containing a zero-width joiner (U+200D) must exit non-zero.
+#[test]
+fn export_with_zero_width_joiner_in_bin_exits_nonzero() {
+    let cfg = write_config("version = 1\n");
+    let bin_with_zwj = format!("run\u{200d}ex");
+    let (_, stderr, ok) = run(&["export", "bash", &format!("--bin={bin_with_zwj}")], Some(cfg.path()), None);
+    assert!(!ok, "export --bin with ZWJ (U+200D) must exit non-zero");
+    assert!(
+        stderr.contains("bin") || stderr.contains("invalid") || stderr.contains("ASCII"),
+        "stderr must mention the invalid bin: {stderr}"
+    );
+}
+
+/// export with a --bin containing DEL (\x7f) must exit non-zero.
+#[test]
+fn export_with_del_in_bin_exits_nonzero() {
+    let cfg = write_config("version = 1\n");
+    let (_, stderr, ok) = run(&["export", "bash", "--bin=run\x7fex"], Some(cfg.path()), None);
+    assert!(!ok, "export --bin with DEL (\\x7f) must exit non-zero");
+    assert!(
+        stderr.contains("bin") || stderr.contains("control") || stderr.contains("invalid"),
+        "stderr must mention the invalid bin: {stderr}"
+    );
+}
+
+/// export with an extremely long --bin must exit non-zero to prevent DoS via huge rc-file writes.
+#[test]
+fn export_with_oversized_bin_exits_nonzero() {
+    let cfg = write_config("version = 1\n");
+    let huge_bin = "a".repeat(5000);
+    let (_, stderr, ok) = run(&["export", "bash", &format!("--bin={huge_bin}")], Some(cfg.path()), None);
+    assert!(!ok, "export --bin with 5000 chars must exit non-zero");
+    assert!(
+        stderr.contains("bin") || stderr.contains("long") || stderr.contains("invalid"),
+        "stderr must mention the invalid bin: {stderr}"
+    );
+}

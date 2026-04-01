@@ -3,6 +3,20 @@ use std::path::Path;
 use crate::model::Config;
 use serde::Serialize;
 
+/// Remove ASCII control characters (U+0000–U+001F, U+007F) and Unicode line/paragraph
+/// separators (U+0085, U+2028, U+2029) from a string before embedding it in a
+/// human-readable detail message that may be printed to a terminal.
+fn sanitize_for_display(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            !c.is_ascii_control()
+                && c != '\u{0085}'
+                && c != '\u{2028}'
+                && c != '\u{2029}'
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
@@ -89,7 +103,7 @@ where
                     detail: format!(
                         "rule #{n} key == expand ('{key}') — this rule is always skipped",
                         n = i + 1,
-                        key = abbr.key
+                        key = sanitize_for_display(&abbr.key)
                     ),
                 });
             }
@@ -103,16 +117,16 @@ where
                 for cmd in cmds {
                     let exists = command_exists(cmd);
                     checks.push(Check {
-                        name: format!("command:{cmd}"),
+                        name: format!("command:{}", sanitize_for_display(cmd)),
                         status: if exists {
                             CheckStatus::Ok
                         } else {
                             CheckStatus::Warn
                         },
                         detail: if exists {
-                            format!("'{cmd}' found (required by '{}')", abbr.key)
+                            format!("'{}' found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
                         } else {
-                            format!("'{cmd}' not found (required by '{}')", abbr.key)
+                            format!("'{}' not found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
                         },
                     });
                 }
@@ -222,5 +236,61 @@ mod tests {
             }],
         };
         assert!(!result.is_healthy());
+    }
+
+    // ─── detail string must not contain control characters from user-controlled input ──
+
+    #[test]
+    fn doctor_self_loop_detail_strips_control_chars_from_key() {
+        // A key containing a BEL (\x07) control character (valid TOML via \uXXXX escape)
+        // must not appear raw in the detail string, which is printed to the terminal.
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let cfg = test_config(vec![abbr("key\x07evil", "key\x07evil")]);
+        let result = diagnose(&path, Some(&cfg), |_| true);
+        let self_loop = result.checks.iter().find(|c| c.name.contains("self_loop"));
+        let check = self_loop.expect("must produce a self_loop check for a self-loop key");
+        assert!(
+            !check.detail.contains('\x07'),
+            "detail must not contain raw control char BEL: {:?}", check.detail
+        );
+    }
+
+    #[test]
+    fn doctor_command_check_detail_strips_control_chars_from_cmd() {
+        // A cmd in when_command_exists containing a control char must not appear raw in detail.
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let cfg = test_config(vec![crate::model::Abbr {
+            key: "ls".into(),
+            expand: "lsd".into(),
+            when_command_exists: Some(vec!["cmd\x07inject".into()]),
+        }]);
+        let result = diagnose(&path, Some(&cfg), |_| false);
+        let cmd_check = result.checks.iter().find(|c| c.name.contains("command:"));
+        let check = cmd_check.expect("must produce a command check");
+        assert!(
+            !check.detail.contains('\x07'),
+            "detail must not contain raw control char from cmd: {:?}", check.detail
+        );
+    }
+
+    #[test]
+    fn doctor_command_check_name_strips_control_chars() {
+        // The `name` field "command:{cmd}" is printed to the terminal in human output.
+        // A cmd containing ANSI escape sequences (e.g. \x1b[2J = clear screen) must
+        // not appear raw in check.name — it must be sanitized the same way detail is.
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let cfg = test_config(vec![crate::model::Abbr {
+            key: "ls".into(),
+            expand: "lsd".into(),
+            // ESC [ 2 J = clear screen, a common terminal injection payload
+            when_command_exists: Some(vec!["cmd\x1b[2Jevil".into()]),
+        }]);
+        let result = diagnose(&path, Some(&cfg), |_| false);
+        let cmd_check = result.checks.iter().find(|c| c.name.starts_with("command:"));
+        let check = cmd_check.expect("must produce a command check");
+        assert!(
+            !check.name.contains('\x1b'),
+            "check.name must not contain raw ESC (ANSI injection risk): {:?}", check.name
+        );
     }
 }

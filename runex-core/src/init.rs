@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::config::xdg_config_home;
-use crate::shell::{bash_quote_string, nu_quote_string, pwsh_quote_string, Shell};
+use crate::shell::{bash_quote_string, lua_quote_string, nu_quote_string, pwsh_quote_string, Shell};
 
 /// Quote a filesystem path for embedding in a Nu shell string literal.
 /// Uses Nu double-quoted string syntax: escapes `\` and `"`.
@@ -12,6 +12,15 @@ fn nu_quote_path(path: &str) -> String {
         match ch {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
+            // '$' starts Nu variable/environment interpolation inside double-quoted strings.
+            // Escape it so $env.FOO and similar are not evaluated when the source line runs.
+            '$' => out.push_str("\\$"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' | '\x7f' => {} // NUL and DEL — drop
+            c if c.is_ascii_control() => {} // remaining C0 control chars — drop
+            '\u{0085}' | '\u{2028}' | '\u{2029}' => {} // Unicode line/paragraph separators — drop
             _ => out.push(ch),
         }
     }
@@ -55,8 +64,8 @@ pub fn integration_line(shell: Shell, bin: &str) -> String {
             )
         }
         Shell::Clink => format!(
-            "-- add '{} export clink' output to your clink scripts directory",
-            bin
+            "-- add {} export clink output to your clink scripts directory",
+            lua_quote_string(bin)
         ),
     }
 }
@@ -197,10 +206,137 @@ mod tests {
         }
     }
 
+    // --- Clink integration_line: bin quoting ---
+
+    #[test]
+    fn integration_line_clink_single_quote_in_bin_is_lua_quoted() {
+        // A single quote in bin must be passed through lua_quote_string.
+        // lua_quote_string("run'ex") = "run'ex" (single quotes need no escaping in Lua double-quoted strings)
+        let line = integration_line(Shell::Clink, "run'ex");
+        assert!(
+            line.contains("\"run'ex\""),
+            "bin must be lua-quoted in clink line: {line}"
+        );
+    }
+
+    #[test]
+    fn integration_line_clink_newline_in_bin_does_not_inject() {
+        // lua_quote_string escapes \n to \\n, preventing the Lua comment from being broken.
+        let line = integration_line(Shell::Clink, "runex\nos.execute('evil')");
+        assert!(
+            !line.contains('\n'),
+            "literal newline must be escaped in clink line: {line:?}"
+        );
+        assert!(
+            line.contains("\\n"),
+            "expected \\n escape sequence in clink line: {line:?}"
+        );
+    }
+
+    // --- nu_quote_path: \n/\r/NUL handling ---
+
+    #[test]
+    fn nu_quote_path_escapes_newline() {
+        let quoted = nu_quote_path("/home/user/.config\nevil");
+        assert!(!quoted.contains('\n'), "nu_quote_path must escape newline: {quoted}");
+        assert!(quoted.contains("\\n"), "expected \\n escape: {quoted}");
+    }
+
+    #[test]
+    fn nu_quote_path_escapes_carriage_return() {
+        let quoted = nu_quote_path("/path\r/evil");
+        assert!(!quoted.contains('\r'), "nu_quote_path must escape CR: {quoted}");
+        assert!(quoted.contains("\\r"), "expected \\r escape: {quoted}");
+    }
+
+    #[test]
+    fn integration_line_nu_newline_in_xdg_does_not_inject() {
+        // If XDG_CONFIG_HOME contains a newline, it must not inject Nu statements into env.nu.
+        let quoted = nu_quote_path("/home/user/.config\nsource /tmp/evil.nu\n#");
+        assert!(!quoted.contains('\n'), "newline injection must be escaped in nu path: {quoted}");
+    }
+
+    #[test]
+    fn nu_quote_path_escapes_nul() {
+        let quoted = nu_quote_path("path\x00evil");
+        assert!(!quoted.contains('\0'), "nu_quote_path must not produce literal NUL: {quoted:?}");
+        assert!(quoted.contains("path"), "path prefix must be preserved: {quoted:?}");
+    }
+
+    // --- nu_quote_path: missing \t, DEL, NEL, U+2028/U+2029 handling (issue A) ---
+
+    #[test]
+    fn nu_quote_path_escapes_tab() {
+        let quoted = nu_quote_path("path\t/evil");
+        assert!(!quoted.contains('\t'), "nu_quote_path must escape tab: {quoted:?}");
+        assert!(quoted.contains("\\t"), "expected \\t escape: {quoted:?}");
+    }
+
+    #[test]
+    fn nu_quote_path_drops_del() {
+        let quoted = nu_quote_path("path\x7fend");
+        assert!(!quoted.contains('\x7f'), "nu_quote_path must drop DEL: {quoted:?}");
+    }
+
+    #[test]
+    fn nu_quote_path_drops_unicode_line_separators() {
+        for ch in ['\u{0085}', '\u{2028}', '\u{2029}'] {
+            let input = format!("path{ch}end");
+            let quoted = nu_quote_path(&input);
+            assert!(!quoted.contains(ch), "nu_quote_path must drop U+{:04X}: {quoted:?}", ch as u32);
+        }
+    }
+
     #[test]
     fn rc_file_for_bash_ends_with_bashrc() {
         if let Some(path) = rc_file_for(Shell::Bash) {
             assert!(path.to_str().unwrap().ends_with(".bashrc"));
         }
+    }
+
+    #[test]
+    fn nu_quote_path_drops_remaining_c0_control_chars() {
+        // C0 control chars other than \n, \r, \t, \0, \x7f must be dropped.
+        let dangerous_c0: &[char] = &[
+            '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07',
+            '\x08', '\x0b', '\x0c', '\x0e', '\x0f',
+            '\x10', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17',
+            '\x18', '\x19', '\x1a', '\x1b',
+            '\x1c', '\x1d', '\x1e', '\x1f',
+        ];
+        for &ch in dangerous_c0 {
+            let input = format!("path{}end", ch);
+            let quoted = nu_quote_path(&input);
+            assert!(
+                !quoted.contains(ch),
+                "nu_quote_path must drop C0 control U+{:04X}: {quoted:?}",
+                ch as u32
+            );
+        }
+    }
+
+    #[test]
+    fn nu_quote_path_escapes_dollar_sign() {
+        // A '$' in XDG_CONFIG_HOME would allow Nu variable interpolation inside
+        // the double-quoted `source "..."` path. Must be escaped as \$.
+        let quoted = nu_quote_path("/home/$USER/.config");
+        // Every '$' must be preceded by an odd number of backslashes.
+        let bytes = quoted.as_bytes();
+        for i in 0..bytes.len() {
+            if bytes[i] == b'$' {
+                let mut preceding = 0usize;
+                let mut j = i;
+                while j > 0 && bytes[j - 1] == b'\\' {
+                    preceding += 1;
+                    j -= 1;
+                }
+                assert!(
+                    preceding % 2 == 1,
+                    "nu_quote_path: '$' at byte {i} has {preceding} preceding backslashes \
+                     (even = Nu interpolation not suppressed). Full output: {quoted:?}"
+                );
+            }
+        }
+        assert!(quoted.contains("\\$"), "expected \\$ in: {quoted:?}");
     }
 }

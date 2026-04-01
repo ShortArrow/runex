@@ -74,11 +74,40 @@ fn zsh_chord(trigger: TriggerKey) -> &'static str {
 }
 
 fn bash_quote_pattern(token: &str) -> String {
-    format!("'{}'", token.replace('\'', r#"'\''"#))
+    // Same escaping as bash_quote_string: single-quoted with '\'' for embedded quotes.
+    // Control characters and Unicode line/paragraph separators are dropped.
+    let mut out = String::from("'");
+    for ch in token.chars() {
+        match ch {
+            '\'' => out.push_str(r"'\''"),
+            c if c.is_ascii_control() => {}
+            '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
 }
 
 pub(crate) fn bash_quote_string(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r#"'\''"#))
+    // Bash single-quoted strings.
+    // Strategy:
+    //   - single quote  → '\''  (close quote, escaped quote, reopen quote)
+    //   - ASCII control chars (\x00–\x1f, \x7f) → dropped
+    //   - Unicode line/paragraph separators → dropped
+    //     Rationale: valid executable paths never contain these characters.
+    //     Using $'\n' inside eval "$(...)" would cause command splitting injection.
+    let mut out = String::from("'");
+    for ch in value.chars() {
+        match ch {
+            '\'' => out.push_str(r"'\''"),
+            c if c.is_ascii_control() => {}
+            '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
 }
 
 fn bash_known_cases(config: Option<&Config>) -> String {
@@ -130,18 +159,43 @@ fn pwsh_chord(trigger: TriggerKey) -> &'static str {
 }
 
 pub(crate) fn pwsh_quote_string(token: &str) -> String {
-    format!("'{}'", token.replace('\'', "''"))
+    // PowerShell single-quoted strings: single quote → ''
+    // Control characters are dropped — valid executable paths never contain them,
+    // and backtick-concat ('a'`n'b') risks token-splitting in some PS contexts.
+    // Unicode line/paragraph separators are also dropped.
+    let mut out = String::from("'");
+    for ch in token.chars() {
+        match ch {
+            '\'' => out.push_str("''"),
+            c if c.is_ascii_control() => {}
+            '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
 }
 
 pub(crate) fn nu_quote_string(value: &str) -> String {
     // Nu external-command syntax: ^"..." forces execution as an external command.
     // Without the ^ prefix, a quoted string is a string literal, not a command.
-    // Escape backslash and double-quote inside the double-quoted string.
+    // Escape backslash, double-quote, and newlines inside the double-quoted string.
     let mut out = String::from("^\"");
     for ch in value.chars() {
         match ch {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
+            // '$' starts Nu variable/environment interpolation inside double-quoted strings.
+            // Escape it so $env.FOO, $(cmd), etc. are not evaluated.
+            '$' => out.push_str("\\$"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' | '\x7f' => {} // NUL and DEL — drop
+            // All remaining ASCII control characters (C0: U+0001–U+001F except \n,\r,\t) — drop
+            c if c.is_ascii_control() => {}
+            // Unicode line/paragraph separators — drop (line-breaking chars in some runtimes)
+            '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
             _ => out.push(ch),
         }
     }
@@ -149,7 +203,59 @@ pub(crate) fn nu_quote_string(value: &str) -> String {
     out
 }
 
-fn lua_quote_string(value: &str) -> String {
+/// Like `nu_quote_string`, but the output is safe for embedding inside a Nu
+/// double-quoted string (e.g., inside `cmd: "..."`).  Each `\` and `"` in the
+/// *already-quoted* form must be escaped one more level so the outer Nu parser
+/// sees them as literal characters, not string delimiters.
+///
+/// Standalone:  ^"runex"
+/// Embedded:    ^\"runex\"
+fn nu_quote_string_embedded(value: &str) -> String {
+    // First build the standalone form, then escape for the outer Nu double-quoted
+    // string context (e.g. `cmd: "..."`).
+    //
+    // In the outer Nu double-quoted string:
+    //   \\  → literal \
+    //   \"  → literal "
+    //   \$  → literal $ (suppresses variable interpolation)
+    //   \\$ → literal \ then variable interpolation — UNSAFE
+    //
+    // nu_quote_string already escapes $ as \$ in the standalone form.
+    // When we embed that form, we must:
+    //   - escape \ as \\ (so literal backslashes survive one more level)
+    //   - escape " as \"
+    //   - keep \$ as \$ (do NOT turn the \ into \\, which would give \\$ = unsafe)
+    //     Implemented by treating the two-char sequence \$ atomically.
+    //
+    // Strategy: iterate the standalone string, and when we see '\' followed by '$',
+    // emit '\$' unchanged (the outer Nu parser interprets \$ as literal $).
+    // All other '\' are doubled to \\.
+    let standalone = nu_quote_string(value);
+    let bytes = standalone.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'$' {
+            // \$ from nu_quote_string: keep as \$ so the outer Nu string sees \$
+            // (literal $, no interpolation).
+            out.push('\\');
+            out.push('$');
+            i += 2;
+        } else if bytes[i] == b'\\' {
+            out.push_str("\\\\");
+            i += 1;
+        } else if bytes[i] == b'"' {
+            out.push_str("\\\"");
+            i += 1;
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+pub(crate) fn lua_quote_string(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
         match ch {
@@ -157,6 +263,15 @@ fn lua_quote_string(value: &str) -> String {
             '"' => out.push_str("\\\""),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => {} // NUL — drop; Lua uses C strings, NUL truncates
+            '\u{0085}' | '\u{2028}' | '\u{2029}' => {} // Unicode line/paragraph separators — drop
+            c if c.is_ascii_control() => {
+                // Remaining control chars: use 3-digit zero-padded decimal escape \DDD.
+                // Without zero-padding, \1 followed by a digit would be ambiguous
+                // (e.g. "\1" + "0" = "\10" which Lua reads as LF, not SOH + "0").
+                out.push_str(&format!("\\{:03}", c as u8));
+            }
             _ => out.push(ch),
         }
     }
@@ -268,7 +383,7 @@ fn nu_bindings(trigger: Option<TriggerKey>, bin: &str) -> String {
     if let Some(trigger) = trigger {
         blocks.push(
             include_str!("templates/nu_expand_binding.nu")
-                .replace("{NU_BIN}", &nu_quote_string(bin))
+                .replace("{NU_BIN}", &nu_quote_string_embedded(bin))
                 .replace("{NU_MODIFIER}", nu_modifier(trigger))
                 .replace("{NU_KEYCODE}", nu_keycode(trigger)),
         );
@@ -541,6 +656,52 @@ mod tests {
     }
 
     #[test]
+    fn export_script_placeholder_bin_does_not_cause_second_order_substitution() {
+        // If bin contains a placeholder string that exists in the same template
+        // (e.g. bash bin="{BASH_BIN}", zsh bin="{ZSH_BIN}"), the quoting functions
+        // wrap it in single quotes so the subsequent .replace() calls do NOT match.
+        // This test documents that invariant for each shell's own placeholder.
+        use crate::model::{Config, KeybindConfig, TriggerKey};
+        let config = Config {
+            version: 1,
+            keybind: KeybindConfig { trigger: Some(TriggerKey::Space), ..Default::default() },
+            abbr: vec![],
+        };
+
+        // Each shell: bin = that shell's own BIN placeholder.
+        // After quoting it becomes '...' and must not be replaced by the real binary path.
+        let cases: &[(&str, Shell, &str)] = &[
+            ("{BASH_BIN}", Shell::Bash, "'{BASH_BIN}'"),
+            ("{ZSH_BIN}", Shell::Zsh, "'{ZSH_BIN}'"),
+            ("{PWSH_BIN}", Shell::Pwsh, "'{PWSH_BIN}'"),
+        ];
+        for (placeholder, shell, expected_quoted) in cases {
+            let s = export_script(*shell, placeholder, Some(&config));
+            assert!(
+                s.contains(expected_quoted),
+                "bin={placeholder:?} for {shell:?} must appear as quoted literal {expected_quoted:?} in script"
+            );
+        }
+    }
+
+    #[test]
+    fn bash_script_does_not_eval_debug_trap() {
+        // `eval "$runex_debug_trap"` allows arbitrary code execution if bash-preexec or
+        // another framework installed a DEBUG trap with an attacker-controlled string.
+        // The script must NOT use eval to restore the trap.
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig { trigger: Some(TriggerKey::Space), ..Default::default() },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Bash, "runex", Some(&config));
+        assert!(
+            !s.contains("eval \"$runex_debug_trap\"") && !s.contains("eval '$runex_debug_trap'"),
+            "bash script must not eval the captured debug trap: {s}"
+        );
+    }
+
+    #[test]
     fn bash_script_embeds_known_tokens() {
         let config = Config {
             version: 1,
@@ -689,6 +850,7 @@ mod tests {
     fn nu_bin_uses_caret_external_command_syntax() {
         // In Nu, quoting a command name as "runex" makes it a string, not a command.
         // The correct external-command syntax is ^"runex" — the ^ forces external execution.
+        // Inside the cmd: "..." heredoc string, the quotes must be escaped: ^\"runex\".
         // The {NU_BIN} placeholder is only emitted when a trigger keybind is configured.
         use crate::model::{Config, KeybindConfig, TriggerKey};
         let config = Config {
@@ -697,16 +859,18 @@ mod tests {
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
+        // Inside cmd: "...", the bin appears as ^\"runex\" (backslash-escaped inner quotes).
         assert!(
-            s.contains("^\"runex\""),
-            "nu: bin must use ^\"...\" external command syntax, got snippet: {:?}",
+            s.contains("^\\\"runex\\\""),
+            "nu: bin inside cmd string must use ^\\\"...\\\" syntax, got snippet: {:?}",
             s.lines().find(|l| l.contains("runex")).unwrap_or("<not found>")
         );
     }
 
     #[test]
     fn nu_bin_with_special_chars_uses_caret_syntax() {
-        // Special chars in bin must be escaped but still use ^ prefix
+        // Special chars in bin must be escaped but still use ^ prefix.
+        // Inside cmd: "...", an additional level of escaping is applied.
         use crate::model::{Config, KeybindConfig, TriggerKey};
         let config = Config {
             version: 1,
@@ -714,7 +878,518 @@ mod tests {
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "my\"app", Some(&config));
-        assert!(s.contains("^\"my\\\"app\""), "nu: special chars must be escaped: {s}");
+        // standalone: ^"my\"app"  →  embedded: ^\"my\\\"app\"
+        assert!(s.contains("^\\\"my\\\\\\\"app\\\""), "nu: special chars must be escaped in embedded context: {s}");
+    }
+
+    #[test]
+    fn nu_bin_in_cmd_string_does_not_break_outer_quotes() {
+        // REGRESSION: {NU_BIN} is substituted inside a `cmd: "..."` double-quoted Nu string.
+        // If the substitution produces ^"runex", the `"` terminates the outer string → syntax error.
+        // The substitution must use \" (escaped) inside the cmd context: ^\"runex\"
+        use crate::model::{Config, KeybindConfig, TriggerKey};
+        let config = Config {
+            version: 1,
+            keybind: KeybindConfig { trigger: Some(TriggerKey::Space), ..Default::default() },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Nu, "runex", Some(&config));
+        // The cmd: "..." block starts at `cmd: "` and ends at the closing `"`.
+        // Inside it, the bin must appear as ^\"runex\" (escaped), not ^"runex" (unescaped).
+        // Find the cmd block and verify no bare (unescaped) double-quote surrounds runex.
+        let cmd_start = s.find("cmd: \"").expect("cmd: block not found");
+        let cmd_block = &s[cmd_start..];
+        // ^\"runex\" inside cmd string — backslash before the inner quote
+        assert!(
+            cmd_block.contains("^\\\"runex\\\""),
+            "nu: bin inside cmd string must use ^\\\"...\\\" syntax (escaped quotes), got:\n{}",
+            cmd_block.lines().find(|l| l.contains("runex")).unwrap_or("<not found>")
+        );
+    }
+
+    // --- nu_quote_string: \n/\r escaping ---
+
+    #[test]
+    fn nu_quote_string_escapes_newline() {
+        let s = nu_quote_string("run\nex");
+        assert!(!s.contains('\n'), "nu_quote_string must escape newline: {s}");
+        assert!(s.contains("\\n"), "expected \\n escape: {s}");
+    }
+
+    #[test]
+    fn nu_quote_string_escapes_carriage_return() {
+        let s = nu_quote_string("run\rex");
+        assert!(!s.contains('\r'), "nu_quote_string must escape CR: {s}");
+        assert!(s.contains("\\r"), "expected \\r escape: {s}");
+    }
+
+    #[test]
+    fn nu_token_uses_equals_form_to_prevent_argument_injection() {
+        // `expand --token $token` (space-separated) is vulnerable to argument injection:
+        // if $token is "--dry-run", Clap receives ["expand", "--token", "--dry-run"] and
+        // may treat "--dry-run" as a separate flag rather than the value for --token.
+        // The safe form is `expand --token=($token)` which passes the value as part of
+        // the same argument, preventing Clap from treating it as a flag.
+        // Note: ($token) here is Nu's parenthesized expression, NOT string interpolation
+        // (which would be $"--token=($token)"). `--token=($token)` is safe because Nu
+        // evaluates ($token) as a value and passes `--token=<value>` as a single argument.
+        use crate::model::{Config, KeybindConfig, TriggerKey};
+        let config = Config {
+            version: 1,
+            keybind: KeybindConfig { trigger: Some(TriggerKey::Space), ..Default::default() },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Nu, "runex", Some(&config));
+        // Must NOT use the space-separated form (argument injection risk)
+        assert!(
+            !s.contains("--token $token"),
+            "Nu script must not use space-separated --token (argument injection risk): {s}"
+        );
+        // Must NOT use Nu string interpolation (code execution risk)
+        assert!(
+            !s.contains("$\"--token=($token)\"") && !s.contains("\"--token=("),
+            "Nu script must not use string interpolation for --token: {s}"
+        );
+        // Must use the --token=($token) form (safe: value bound to flag, no interpolation)
+        assert!(
+            s.contains("--token=($token)"),
+            "Nu script must use --token=($token) form to prevent argument injection: {s}"
+        );
+    }
+
+    #[test]
+    fn nu_bin_newline_does_not_inject_into_cmd_block() {
+        // A newline in bin must not break out of the cmd: "..." block.
+        // \n is escaped to \\n so no literal newline appears in the script.
+        use crate::model::{Config, KeybindConfig, TriggerKey};
+        let config = Config {
+            version: 1,
+            keybind: KeybindConfig { trigger: Some(TriggerKey::Space), ..Default::default() },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Nu, "runex\nsource /tmp/evil.nu\n", Some(&config));
+        // "source /tmp/evil.nu" must not appear as a standalone line
+        let lines: Vec<&str> = s.lines().collect();
+        assert!(
+            !lines.iter().any(|l| l.trim() == "source /tmp/evil.nu"),
+            "newline must not create an injected source line: {s}"
+        );
+    }
+
+    // --- bash_quote_string / pwsh_quote_string: control char handling ---
+
+    #[test]
+    fn bash_quote_string_drops_newline() {
+        // Control chars are dropped; $'\n' inside eval "$(...)" causes command splitting injection.
+        let s = bash_quote_string("run\nex");
+        assert!(!s.contains('\n'), "bash_quote_string must drop newline: {s:?}");
+        assert!(!s.contains("$'"), "dollar-quote ANSI-C form must not be used: {s:?}");
+        assert!(s.contains("runex"), "remaining chars must be preserved: {s:?}");
+    }
+
+    #[test]
+    fn bash_quote_string_drops_carriage_return() {
+        let s = bash_quote_string("run\rex");
+        assert!(!s.contains('\r'), "bash_quote_string must drop CR: {s:?}");
+        assert!(s.contains("runex"), "remaining chars must be preserved: {s:?}");
+    }
+
+    #[test]
+    fn bash_quote_string_escapes_nul() {
+        let s = bash_quote_string("run\x00ex");
+        assert!(!s.contains('\0'), "bash_quote_string must drop NUL: {s:?}");
+    }
+
+    #[test]
+    fn pwsh_quote_string_drops_newline() {
+        // Backtick-concat ('a'`n'b') risks token-splitting; control chars are dropped instead.
+        let s = pwsh_quote_string("run\nex");
+        assert!(!s.contains('\n'), "pwsh_quote_string must drop newline: {s:?}");
+        assert!(!s.contains("'`"), "backtick-concat form must not be used: {s:?}");
+        assert!(s.contains("runex"), "remaining chars must be preserved: {s:?}");
+    }
+
+    #[test]
+    fn pwsh_quote_string_drops_carriage_return() {
+        let s = pwsh_quote_string("run\rex");
+        assert!(!s.contains('\r'), "pwsh_quote_string must drop CR: {s:?}");
+        assert!(s.contains("runex"), "remaining chars must be preserved: {s:?}");
+    }
+
+    #[test]
+    fn pwsh_quote_string_escapes_nul() {
+        let s = pwsh_quote_string("run\x00ex");
+        assert!(!s.contains('\0'), "pwsh_quote_string must drop NUL: {s:?}");
+    }
+
+    #[test]
+    fn nu_quote_string_escapes_nul() {
+        let s = nu_quote_string("run\x00ex");
+        assert!(!s.contains('\0'), "nu_quote_string must drop NUL: {s:?}");
+    }
+
+    // --- bash_quote_string: safe in eval "$(...)" context ---
+
+    #[test]
+    fn bash_quote_string_newline_safe_in_eval_context() {
+        // $'\n' inside eval "$(...)" expands to a literal newline, acting as a command separator.
+        // The safe approach is to drop control characters rather than use $'...' ANSI-C quoting.
+        let line = bash_quote_string("runex\necho INJECTED");
+        assert!(!line.contains('\n'), "literal newline must not appear: {line:?}");
+        assert!(!line.contains("$'"), "dollar-quote ANSI-C form must not be used (eval injection risk): {line:?}");
+    }
+
+    #[test]
+    fn bash_quote_string_cr_safe_in_eval_context() {
+        let line = bash_quote_string("runex\recho INJECTED");
+        assert!(!line.contains('\r'), "literal CR must not appear: {line:?}");
+        assert!(!line.contains("$'"), "dollar-quote ANSI-C form must not be used: {line:?}");
+    }
+
+    // --- bash_quote_pattern: control char handling ---
+
+    #[test]
+    fn bash_quote_pattern_escapes_newline() {
+        let s = bash_quote_pattern("key\nwith newline");
+        assert!(!s.contains('\n'), "bash_quote_pattern must not produce literal newline: {s:?}");
+    }
+
+    #[test]
+    fn bash_quote_pattern_escapes_carriage_return() {
+        let s = bash_quote_pattern("key\rwith cr");
+        assert!(!s.contains('\r'), "bash_quote_pattern must not produce literal CR: {s:?}");
+    }
+
+    // --- lua_quote_string: NUL and control char handling ---
+
+    #[test]
+    fn lua_quote_string_escapes_nul() {
+        let s = lua_quote_string("run\x00ex");
+        assert!(!s.contains('\0'), "lua_quote_string must not produce literal NUL: {s:?}");
+    }
+
+    #[test]
+    fn lua_quote_string_escapes_tab() {
+        let s = lua_quote_string("run\tex");
+        assert!(!s.contains('\t'), "lua_quote_string must escape tab: {s:?}");
+    }
+
+    // --- nu_quote_string: NUL should be dropped, not embedded ---
+
+    #[test]
+    fn nu_quote_string_nul_is_dropped_not_embedded() {
+        // Embedding \u{0000} and passing it to the OS via execve truncates the path silently.
+        // Drop NUL instead.
+        let s = nu_quote_string("run\x00ex");
+        assert!(!s.contains("\\u{0000}"), "NUL must be dropped, not embedded as \\u{{0000}}: {s:?}");
+        assert!(!s.contains('\0'), "literal NUL must not appear: {s:?}");
+        assert!(s.contains("runex"), "remaining chars must be preserved: {s:?}");
+    }
+
+    // --- pwsh_quote_string: backtick-concat safety ---
+
+    #[test]
+    fn pwsh_quote_string_newline_not_using_backtick_concat() {
+        // 'a'`n'b' risks token-splitting in some PowerShell execution contexts.
+        // Control chars are dropped instead.
+        let s = pwsh_quote_string("run\nex");
+        assert!(!s.contains('\n'), "literal newline must not appear: {s:?}");
+        assert!(!s.contains("'`"), "backtick-concat form must not be used (token split risk): {s:?}");
+    }
+
+    // --- Issue 1: Clink io.popen RUNEX_BIN double-quote injection ---
+
+    #[test]
+    fn clink_script_double_quote_in_bin_does_not_inject_into_popen() {
+        // RUNEX_BIN value with a double quote must not break the io.popen shell command.
+        // The io.popen call wraps RUNEX_BIN in double quotes at runtime:
+        //   '"' .. RUNEX_BIN .. '" expand ...'
+        // If RUNEX_BIN contains a literal " it terminates the shell double-quote, injecting code.
+        // Fix: use single-quote wrapping in the shell command, with ' escaped as '\''
+        let s = export_script(Shell::Clink, "run\"ex", Some(&Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![],
+        }));
+        // The generated script must not produce a command string that embeds a bare "
+        // in a position that would close the outer shell double-quote.
+        // Simplest check: the io.popen command line must use single-quote wrapping.
+        assert!(
+            !s.contains(r#"'"' .. RUNEX_BIN .. '"'"#),
+            "io.popen must not wrap RUNEX_BIN in shell double-quotes: {s}"
+        );
+    }
+
+    #[test]
+    fn clink_script_bin_with_double_quote_uses_single_quote_shell_wrapping() {
+        // The io.popen command must wrap RUNEX_BIN with single quotes so that
+        // a double quote in the bin value cannot terminate a shell double-quoted string.
+        let s = export_script(Shell::Clink, "run\"ex", Some(&Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![],
+        }));
+        // The popen command should use single-quote shell wrapping via a helper
+        assert!(
+            s.contains("runex_shell_quote"),
+            "clink script must use a shell-quoting helper for RUNEX_BIN in io.popen: {s}"
+        );
+    }
+
+    // --- Issue 2: nu_quote_string / nu_quote_path: tab not escaped ---
+
+    #[test]
+    fn nu_quote_string_escapes_tab() {
+        let s = nu_quote_string("run\tex");
+        assert!(!s.contains('\t'), "nu_quote_string must escape tab: {s:?}");
+        assert!(s.contains("\\t"), "expected \\t escape: {s:?}");
+    }
+
+    // --- Issue 3: Unicode line separators pass through all quote functions ---
+
+    #[test]
+    fn bash_quote_string_drops_unicode_line_separator() {
+        let s = bash_quote_string("run\u{2028}ex");
+        assert!(!s.contains('\u{2028}'), "bash_quote_string must drop U+2028: {s:?}");
+    }
+
+    #[test]
+    fn pwsh_quote_string_drops_unicode_line_separator() {
+        let s = pwsh_quote_string("run\u{2028}ex");
+        assert!(!s.contains('\u{2028}'), "pwsh_quote_string must drop U+2028: {s:?}");
+    }
+
+    #[test]
+    fn nu_quote_string_drops_unicode_line_separator() {
+        let s = nu_quote_string("run\u{2028}ex");
+        assert!(!s.contains('\u{2028}'), "nu_quote_string must drop U+2028: {s:?}");
+    }
+
+    // --- Issue 4: nu_quote_string DEL (\x7f) not dropped ---
+
+    #[test]
+    fn nu_quote_string_drops_del() {
+        let s = nu_quote_string("run\x7fex");
+        assert!(!s.contains('\x7f'), "nu_quote_string must drop DEL (\\x7f): {s:?}");
+    }
+
+    #[test]
+    fn nu_quote_string_escapes_dollar_sign() {
+        // A '$' in bin would allow Nu variable interpolation inside a Nu double-quoted
+        // string (e.g. $env.PATH). Must be escaped as \$ so Nu treats it as a literal.
+        let s = nu_quote_string("run$exenv");
+        // The raw '$' must not appear unescaped — only '\$' (backslash-dollar) is allowed.
+        // We check that every '$' in the output is immediately preceded by '\'.
+        let raw_dollar = s
+            .char_indices()
+            .filter(|(_, c)| *c == '$')
+            .any(|(i, _)| i == 0 || s.as_bytes()[i - 1] != b'\\');
+        assert!(
+            !raw_dollar,
+            "nu_quote_string must escape '$' to prevent Nu variable interpolation: {s:?}"
+        );
+        assert!(s.contains("\\$"), "expected \\$ escape sequence in: {s:?}");
+    }
+
+    #[test]
+    fn nu_quote_string_embedded_escapes_dollar_sign() {
+        // In a Nu double-quoted string (the outer `cmd: "..."` context):
+        //   \\ → literal \
+        //   \$ → literal $ (suppresses variable interpolation)
+        //   \\$ → literal \ followed by variable interpolation of $var — UNSAFE
+        //
+        // nu_quote_string produces \$ for a literal $. When embedded, we must
+        // represent \$ as \\\$ so the outer Nu parser sees \$ (literal $), not \\$.
+        //
+        // Chain for input "$":
+        //   nu_quote_string("$") produces: ^"\$"
+        //   The \$ sequence in the embedded form must become \\\$ so that the
+        //   outer Nu double-quoted string delivers \$ to the inner context.
+        let s = nu_quote_string_embedded("run$exenv");
+        // The embedded form must NOT contain the two-character sequence \\ followed by $
+        // because that would allow Nu variable interpolation in the outer cmd: string.
+        let has_unsafe_dollar = s
+            .as_bytes()
+            .windows(2)
+            .any(|w| w == b"\\$" && {
+                // Check that the preceding char is also backslash (making it \\$)
+                false // checked via windows(3) below
+            });
+        let _ = has_unsafe_dollar;
+        // More precisely: find any $-preceded-only-by-even-number-of-backslashes
+        // A $ is "unprotected" if the number of immediately preceding \ is even (incl. 0).
+        let bytes = s.as_bytes();
+        for i in 0..bytes.len() {
+            if bytes[i] == b'$' {
+                let mut preceding_backslashes = 0usize;
+                let mut j = i;
+                while j > 0 && bytes[j - 1] == b'\\' {
+                    preceding_backslashes += 1;
+                    j -= 1;
+                }
+                assert!(
+                    preceding_backslashes % 2 == 1,
+                    "nu_quote_string_embedded: '$' at byte {i} has {preceding_backslashes} preceding backslashes \
+                     (even = Nu interpolation NOT suppressed). Full output: {s:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nu_quote_string_drops_remaining_c0_control_chars() {
+        // \x01–\x08, \x0b, \x0c, \x0e–\x1f must be dropped (not passed through raw).
+        // \n(\x0a), \r(\x0d), \t(\x09) are escaped to \\n/\\r/\\t, not dropped.
+        let dangerous_c0: &[char] = &[
+            '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07', // BEL
+            '\x08', '\x0b', '\x0c', '\x0e', '\x0f',
+            '\x10', '\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17',
+            '\x18', '\x19', '\x1a', '\x1b', // ESC
+            '\x1c', '\x1d', '\x1e', '\x1f',
+        ];
+        for &ch in dangerous_c0 {
+            let input = format!("run{}ex", ch);
+            let s = nu_quote_string(&input);
+            assert!(
+                !s.contains(ch),
+                "nu_quote_string must drop C0 control U+{:04X}: {s:?}",
+                ch as u32
+            );
+        }
+    }
+
+    // --- bash_quote_pattern: missing U+0085/U+2028/U+2029 (issue B) ---
+
+    #[test]
+    fn bash_quote_pattern_drops_unicode_line_separators() {
+        for ch in ['\u{0085}', '\u{2028}', '\u{2029}'] {
+            let input = format!("key{ch}end");
+            let s = bash_quote_pattern(&input);
+            assert!(!s.contains(ch), "bash_quote_pattern must drop U+{:04X}: {s:?}", ch as u32);
+        }
+    }
+
+    // --- lua_quote_string: DEL and U+2028/U+2029 pass through (issue C) ---
+
+    #[test]
+    fn lua_quote_string_drops_del() {
+        let s = lua_quote_string("run\x7fex");
+        assert!(!s.contains('\x7f'), "lua_quote_string must drop DEL: {s:?}");
+    }
+
+    #[test]
+    fn lua_quote_string_drops_unicode_line_separators() {
+        for ch in ['\u{0085}', '\u{2028}', '\u{2029}'] {
+            let input = format!("run{ch}ex");
+            let s = lua_quote_string(&input);
+            assert!(!s.contains(ch), "lua_quote_string must drop U+{:04X}: {s:?}", ch as u32);
+        }
+    }
+
+    #[test]
+    fn lua_quote_string_decimal_escape_not_ambiguous_with_following_digit() {
+        // \x01 followed by "0": naive format!("\\{}", 1) produces "\1" + "0" = "\10" in Lua (LF).
+        // Must use 3-digit zero-padded form "\001" so Lua reads \001 + "0".
+        let s = lua_quote_string("\x010");
+        // "\10" is LF in Lua (decimal 10). The result must NOT contain that sequence.
+        assert!(
+            !s.contains("\\10"),
+            "lua_quote_string: \\x01 + '0' must not produce ambiguous \\10: {s:?}"
+        );
+        // Must use the 3-digit form.
+        assert!(
+            s.contains("\\001"),
+            "lua_quote_string: \\x01 must be escaped as \\001: {s:?}"
+        );
+    }
+
+    // ─── bash/zsh case pattern: single-quoted globs are literal ─────────────
+    //
+    // In bash/zsh `case` patterns, characters enclosed in single quotes are
+    // treated as literals, not glob wildcards. `'*'` matches only a literal
+    // asterisk, not every string. `bash_quote_pattern` wraps keys in single
+    // quotes, so `*`, `?`, `[...]` are all safe in case patterns.
+    // These tests document that invariant and guard against regressions.
+
+    #[test]
+    fn bash_case_pattern_star_key_matches_only_literal_star() {
+        // key="*" produces `'*') return 0 ;;` — in bash case, single-quoted
+        // '*' is a literal match, not a glob. Only the token "*" itself matches.
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![crate::model::Abbr {
+                key: "*".into(),
+                expand: "echo star".into(),
+                when_command_exists: None,
+            }],
+        };
+        let s = export_script(Shell::Bash, "runex", Some(&config));
+        // The quoted pattern must appear in the script.
+        assert!(
+            s.contains("        '*') return 0 ;;"),
+            "bash case must embed the single-quoted star key: {s}"
+        );
+        // The catch-all fall-through must also be present.
+        assert!(s.contains("*) return 1 ;;"), "bash case must have a catch-all *) return 1 ;; arm");
+    }
+
+    #[test]
+    fn bash_case_pattern_question_key_is_literal() {
+        // Single-quoted '?' in a bash case pattern matches only a literal '?'.
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![crate::model::Abbr {
+                key: "g?".into(),
+                expand: "git".into(),
+                when_command_exists: None,
+            }],
+        };
+        let s = export_script(Shell::Bash, "runex", Some(&config));
+        assert!(
+            s.contains("        'g?') return 0 ;;"),
+            "bash case must embed the single-quoted key with '?': {s}"
+        );
+    }
+
+    #[test]
+    fn bash_case_pattern_bracket_key_is_literal() {
+        // Single-quoted '[cm]' in a bash case pattern is literal, not a character class.
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![crate::model::Abbr {
+                key: "g[cm]".into(),
+                expand: "git".into(),
+                when_command_exists: None,
+            }],
+        };
+        let s = export_script(Shell::Bash, "runex", Some(&config));
+        assert!(
+            s.contains("        'g[cm]') return 0 ;;"),
+            "bash case must embed the single-quoted bracket key literally: {s}"
+        );
+    }
+
+    #[test]
+    fn zsh_case_pattern_star_key_matches_only_literal_star() {
+        // Same as bash: single-quoted '*' in zsh case is literal.
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig::default(),
+            abbr: vec![crate::model::Abbr {
+                key: "*".into(),
+                expand: "echo star".into(),
+                when_command_exists: None,
+            }],
+        };
+        let s = export_script(Shell::Zsh, "runex", Some(&config));
+        assert!(
+            s.contains("        '*') return 0 ;;"),
+            "zsh case must embed the single-quoted star key: {s}"
+        );
+        assert!(s.contains("*) return 1 ;;"), "zsh case must have a catch-all *) return 1 ;; arm");
     }
 
     #[test]

@@ -75,14 +75,9 @@ __runex_expand() {
         fi
         local suffix="${READLINE_LINE:READLINE_POINT}"
         local expanded
-        local runex_debug_trap
-        runex_debug_trap="$(trap -p DEBUG)"
         trap - DEBUG
         PROMPT_COMMAND=
         expanded=$({BASH_BIN} expand --token="$token" 2>/dev/null)
-        if [ -n "$runex_debug_trap" ]; then
-            eval "$runex_debug_trap"
-        fi
         if [ "$expanded" != "$token" ]; then
             READLINE_LINE="${prefix}${expanded}${suffix}"
             READLINE_POINT=$((token_start + ${#expanded}))

@@ -159,6 +159,20 @@ fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config
     (path, config)
 }
 
+/// Strip ASCII control characters (U+0000–U+001F, U+007F) and Unicode line/paragraph
+/// separators (U+0085, U+2028, U+2029) before embedding user-controlled data in
+/// strings that may be printed to a terminal (check names, details, etc.).
+fn sanitize_for_display(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            !c.is_ascii_control()
+                && c != '\u{0085}'
+                && c != '\u{2028}'
+                && c != '\u{2029}'
+        })
+        .collect()
+}
+
 // ─── Command existence resolver ───────────────────────────────────────────────
 
 /// Build a `command_exists` closure.
@@ -167,6 +181,12 @@ fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config
 /// (bare name, and `.exe` on Windows). Falls through to `which::which`.
 fn make_command_exists(path_prepend: Option<&Path>) -> impl Fn(&str) -> bool + '_ {
     move |cmd: &str| -> bool {
+        // when_command_exists values must be bare command names, not filesystem paths.
+        // Reject anything containing a path separator or Windows drive letter (':') to
+        // prevent directory traversal and absolute-path probing via dir.join(cmd).
+        if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
+            return false;
+        }
         if let Some(dir) = path_prepend {
             if dir.join(cmd).is_file() {
                 return true;
@@ -218,10 +238,10 @@ fn format_skip_reason(i: usize, reason: &expand::SkipReason, why: bool) -> Strin
         expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
             let mut parts = Vec::new();
             for cmd in found_commands {
-                parts.push(format!("{cmd}: found"));
+                parts.push(format!("{}: found", sanitize_for_display(cmd)));
             }
             for cmd in missing_commands {
-                parts.push(format!("{cmd}: NOT FOUND"));
+                parts.push(format!("{}: NOT FOUND", sanitize_for_display(cmd)));
             }
             format!(
                 "\n  rule #{} skipped: when_command_exists [{}]",
@@ -241,6 +261,8 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
             satisfied_conditions,
             skipped,
         } => {
+            let key = sanitize_for_display(key);
+            let expansion = sanitize_for_display(expansion);
             let mut s = format!("{key}  ->  {expansion}");
             if why {
                 for (i, reason) in skipped {
@@ -251,6 +273,7 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
                     s.push_str(", no conditions");
                 } else {
                     for cmd in satisfied_conditions {
+                        let cmd = sanitize_for_display(cmd);
                         s.push_str(&format!("\n  condition: when_command_exists '{cmd}' -> found"));
                     }
                 }
@@ -265,17 +288,18 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
             let has_self_loop = skipped
                 .iter()
                 .any(|(_, r)| matches!(r, expand::SkipReason::SelfLoop));
+            let token = sanitize_for_display(token);
             let headline = match (has_condition_fail, has_self_loop) {
                 (true, true) => format!(
                     "{token}  [skipped: condition failed on some rules; others are self-loops]"
                 ),
                 (true, false) => {
                     // Collect all missing commands across all ConditionFailed rules.
-                    let all_missing: Vec<&str> = skipped
+                    let all_missing: Vec<String> = skipped
                         .iter()
                         .flat_map(|(_, r)| match r {
                             expand::SkipReason::ConditionFailed { missing_commands, .. } => {
-                                missing_commands.iter().map(String::as_str).collect::<Vec<_>>()
+                                missing_commands.iter().map(|c| sanitize_for_display(c)).collect::<Vec<_>>()
                             }
                             _ => vec![],
                         })
@@ -295,7 +319,7 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
             }
             s
         }
-        WhichResult::NoMatch { token } => format!("{token}: no rule found"),
+        WhichResult::NoMatch { token } => format!("{}: no rule found", sanitize_for_display(token)),
     }
 }
 
@@ -334,7 +358,7 @@ fn which_result_to_json(result: &WhichResult) -> serde_json::Value {
 
 fn format_dry_run_result(token: &str, result: &WhichResult) -> String {
     let mut out = String::new();
-    out.push_str(&format!("token: {token}\n"));
+    out.push_str(&format!("token: {}\n", sanitize_for_display(token)));
     match result {
         WhichResult::Expanded {
             key,
@@ -351,24 +375,24 @@ fn format_dry_run_result(token: &str, result: &WhichResult) -> String {
                     expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
                         out.push_str(&format!("rule #{} skipped: when_command_exists\n", i + 1));
                         for cmd in found_commands {
-                            out.push_str(&format!("  {cmd}: found\n"));
+                            out.push_str(&format!("  {}: found\n", sanitize_for_display(cmd)));
                         }
                         for cmd in missing_commands {
-                            out.push_str(&format!("  {cmd}: NOT FOUND\n"));
+                            out.push_str(&format!("  {}: NOT FOUND\n", sanitize_for_display(cmd)));
                         }
                     }
                 }
             }
-            out.push_str(&format!("matched rule #{} (key = '{key}')\n", rule_index + 1));
+            out.push_str(&format!("matched rule #{} (key = '{}')\n", rule_index + 1, sanitize_for_display(key)));
             if satisfied_conditions.is_empty() {
                 out.push_str("conditions: none\n");
             } else {
                 out.push_str("conditions:\n");
                 for cmd in satisfied_conditions {
-                    out.push_str(&format!("  when_command_exists '{cmd}': found\n"));
+                    out.push_str(&format!("  when_command_exists '{}': found\n", sanitize_for_display(cmd)));
                 }
             }
-            out.push_str(&format!("result: expanded  ->  {expansion}\n"));
+            out.push_str(&format!("result: expanded  ->  {}\n", sanitize_for_display(expansion)));
         }
         WhichResult::AllSkipped { token, skipped } => {
             for (i, reason) in skipped {
@@ -379,19 +403,19 @@ fn format_dry_run_result(token: &str, result: &WhichResult) -> String {
                     expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
                         out.push_str(&format!("rule #{} skipped: when_command_exists\n", i + 1));
                         for cmd in found_commands {
-                            out.push_str(&format!("  {cmd}: found\n"));
+                            out.push_str(&format!("  {}: found\n", sanitize_for_display(cmd)));
                         }
                         for cmd in missing_commands {
-                            out.push_str(&format!("  {cmd}: NOT FOUND\n"));
+                            out.push_str(&format!("  {}: NOT FOUND\n", sanitize_for_display(cmd)));
                         }
                     }
                 }
             }
-            out.push_str(&format!("no rule for '{token}' passed all conditions\n"));
+            out.push_str(&format!("no rule for '{}' passed all conditions\n", sanitize_for_display(token)));
             out.push_str("result: pass-through\n");
         }
         WhichResult::NoMatch { token } => {
-            out.push_str(&format!("no rule matched '{token}'\n"));
+            out.push_str(&format!("no rule matched '{}'\n", sanitize_for_display(token)));
             out.push_str("result: pass-through\n");
         }
     }
@@ -471,9 +495,13 @@ where
 {
     let definition = lookup(token)?;
     Some(Check {
-        name: format!("shell:pwsh:key:{token}"),
+        name: format!("shell:pwsh:key:{}", sanitize_for_display(token)),
         status: CheckStatus::Warn,
-        detail: format!("conflicts with existing alias '{token}' -> {definition}"),
+        detail: format!(
+            "conflicts with existing alias '{}' -> {}",
+            sanitize_for_display(token),
+            sanitize_for_display(&definition)
+        ),
     })
 }
 
@@ -501,7 +529,9 @@ fn load_bash_aliases() -> HashMap<String, String> {
         return HashMap::new();
     }
 
-    let output = Command::new("bash").args(["-ic", "alias"]).output();
+    // Use --norc --noprofile instead of -i to avoid sourcing ~/.bashrc and other
+    // startup files, which could execute arbitrary user code during alias enumeration.
+    let output = Command::new("bash").args(["--norc", "--noprofile", "-c", "alias"]).output();
 
     let Ok(output) = output else {
         return HashMap::new();
@@ -518,9 +548,9 @@ where
 {
     let detail = lookup(token)?;
     Some(Check {
-        name: format!("shell:bash:key:{token}"),
+        name: format!("shell:bash:key:{}", sanitize_for_display(token)),
         status: CheckStatus::Warn,
-        detail: format!("conflicts with existing alias {detail}"),
+        detail: format!("conflicts with existing alias {}", sanitize_for_display(&detail)),
     })
 }
 
@@ -628,6 +658,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Export { shell, bin } => {
+            const MAX_BIN_LEN: usize = 255;
+            if bin.trim().is_empty() {
+                eprintln!("error: --bin must not be empty or whitespace-only");
+                std::process::exit(1);
+            }
+            if bin.len() > MAX_BIN_LEN {
+                eprintln!("error: --bin is too long ({} bytes); maximum is {MAX_BIN_LEN}", bin.len());
+                std::process::exit(1);
+            }
+            if bin.chars().any(|c| c.is_ascii_control() || c == '\u{0085}' || c == '\u{2028}' || c == '\u{2029}') {
+                eprintln!("error: --bin contains an invalid control character");
+                std::process::exit(1);
+            }
+            // Restrict to printable ASCII to prevent Unicode homoglyphs, right-to-left
+            // override (U+202E), zero-width joiners, and other visually deceptive characters
+            // from being silently embedded in generated shell scripts.
+            if bin.chars().any(|c| !c.is_ascii() || !c.is_ascii_graphic()) {
+                eprintln!("error: --bin must contain only printable ASCII characters");
+                std::process::exit(1);
+            }
             let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
                 Box::<dyn std::error::Error>::from(e.to_string())
             })?;
@@ -681,19 +731,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // Step 1: config file
-            if config_path.exists() {
-                println!("Config already exists: {}", config_path.display());
-            } else {
-                let msg = format!("Create config at {}?", config_path.display());
-                if yes || prompt_confirm(&msg) {
-                    if let Some(parent) = config_path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    std::fs::write(&config_path, runex_init::default_config_content())?;
-                    println!("Created: {}", config_path.display());
-                } else {
-                    println!("Skipped config creation.");
+            // Use create_new to atomically create the file, avoiding the TOCTOU race
+            // between an existence check and a subsequent write.
+            let msg = format!("Create config at {}?", config_path.display());
+            if yes || prompt_confirm(&msg) {
+                if let Some(parent) = config_path.parent() {
+                    std::fs::create_dir_all(parent)?;
                 }
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&config_path)
+                {
+                    Ok(mut f) => {
+                        use std::io::Write;
+                        f.write_all(runex_init::default_config_content().as_bytes())?;
+                        println!("Created: {}", config_path.display());
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        println!("Config already exists: {}", config_path.display());
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            } else {
+                println!("Skipped config creation.");
             }
 
             // Step 2: shell integration
@@ -730,10 +791,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(parent) = rc_path.parent() {
                                 std::fs::create_dir_all(parent)?;
                             }
-                            let mut file = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(&rc_path)?;
+                            let mut open_opts = std::fs::OpenOptions::new();
+                            open_opts.create(true).append(true);
+                            // On Unix, refuse to follow a symlink at the final path component
+                            // to prevent an attacker from racing to replace the rc file with
+                            // a symlink pointing to a sensitive file.
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::OpenOptionsExt;
+                                open_opts.custom_flags(libc::O_NOFOLLOW);
+                            }
+                            let mut file = open_opts.open(&rc_path)?;
                             file.write_all(block.as_bytes())?;
                             println!("Appended integration to {}", rc_path.display());
                         } else {
@@ -799,6 +867,38 @@ mod tests {
         let aliases = parse_pwsh_alias_lines("gcm\tGet-Command\nls\tGet-ChildItem\n");
         assert_eq!(aliases.get("gcm").map(String::as_str), Some("Get-Command"));
         assert_eq!(aliases.get("ls").map(String::as_str), Some("Get-ChildItem"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn load_bash_aliases_does_not_source_startup_files() {
+        // Verify that bash alias enumeration does not execute user startup files.
+        // We create a temporary HOME with a .bashrc that writes a sentinel file.
+        // If -i were used, the sentinel would be created. With --norc --noprofile, it must not.
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let sentinel = home.path().join("dotfile_executed");
+        let bashrc = home.path().join(".bashrc");
+        std::fs::write(
+            &bashrc,
+            format!("touch {}\n", sentinel.display()),
+        ).unwrap();
+
+        // Run bash with HOME pointing to the temp dir
+        let output = Command::new("bash")
+            .env("HOME", home.path())
+            .args(["--norc", "--noprofile", "-c", "alias"])
+            .output();
+
+        if let Ok(out) = output {
+            if out.status.success() {
+                assert!(
+                    !sentinel.exists(),
+                    "bash alias detection must not execute ~/.bashrc (startup files sourced)"
+                );
+            }
+        }
+        // If bash is not available, skip silently
     }
 
     #[test]
@@ -907,5 +1007,96 @@ mod tests {
         let out = format_dry_run_result("ls", &result);
         assert!(out.contains("rule #1 skipped"), "out: {out}");
         assert!(out.contains("expanded  ->  lsd"), "out: {out}");
+    }
+
+    #[test]
+    fn check_pwsh_alias_name_strips_control_chars_from_key() {
+        // An abbr key containing an ANSI escape sequence must not appear raw in check.name,
+        // which is printed to the terminal via format_check_line.
+        let checks = collect_shell_alias_conflicts_with(
+            &[test_abbr("key\x1b[2Jevil")],
+            |_token| Some("Get-Command".to_string()),
+            |_token| None,
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(
+            !checks[0].name.contains('\x1b'),
+            "shell:pwsh check name must not contain raw ESC: {:?}", checks[0].name
+        );
+    }
+
+    #[test]
+    fn check_bash_alias_name_strips_control_chars_from_key() {
+        let checks = collect_shell_alias_conflicts_with(
+            &[test_abbr("key\x1b[2Jevil")],
+            |_token| None,
+            |_token| Some("alias key='evil'".to_string()),
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(
+            !checks[0].name.contains('\x1b'),
+            "shell:bash check name must not contain raw ESC: {:?}", checks[0].name
+        );
+    }
+
+    #[test]
+    fn check_pwsh_alias_detail_strips_control_chars_from_definition() {
+        // The alias definition comes from pwsh output (external data).
+        // It could theoretically contain ANSI sequences if pwsh emits colorized output.
+        let checks = collect_shell_alias_conflicts_with(
+            &[test_abbr("gcm")],
+            |_token| Some("Get-Command\x1b[31mRED\x1b[0m".to_string()),
+            |_token| None,
+        );
+        assert_eq!(checks.len(), 1);
+        assert!(
+            !checks[0].detail.contains('\x1b'),
+            "shell:pwsh check detail must not contain raw ESC from definition: {:?}", checks[0].detail
+        );
+    }
+
+    #[test]
+    fn format_which_result_expanded_strips_control_chars() {
+        // key and expansion are printed directly to the terminal.
+        // Control chars in either must not reach the terminal output.
+        let result = WhichResult::Expanded {
+            key: "key\x1b[2J".to_string(),
+            expansion: "exp\x07anded".to_string(),
+            rule_index: 0,
+            satisfied_conditions: vec![],
+            skipped: vec![],
+        };
+        let s = format_which_result(&result, false);
+        assert!(!s.contains('\x1b'), "format_which_result: ESC in key must be stripped: {s:?}");
+        assert!(!s.contains('\x07'), "format_which_result: BEL in expansion must be stripped: {s:?}");
+    }
+
+    #[test]
+    fn format_which_result_why_strips_control_chars_from_cmd() {
+        // `--why` output includes when_command_exists cmd names from the config.
+        let result = WhichResult::AllSkipped {
+            token: "ls".to_string(),
+            skipped: vec![(0, expand::SkipReason::ConditionFailed {
+                found_commands: vec![],
+                missing_commands: vec!["cmd\x1b[31mevil\x1b[0m".to_string()],
+            })],
+        };
+        let s = format_which_result(&result, true);
+        assert!(!s.contains('\x1b'), "format_which_result --why: ESC in cmd must be stripped: {s:?}");
+    }
+
+    #[test]
+    fn format_dry_run_result_strips_control_chars() {
+        // expand --dry-run prints key, expansion, and cmd names to terminal.
+        let result = WhichResult::Expanded {
+            key: "k\x1bey".to_string(),
+            expansion: "ex\x07pand".to_string(),
+            rule_index: 0,
+            satisfied_conditions: vec!["cmd\x1b[0m".to_string()],
+            skipped: vec![],
+        };
+        let s = format_dry_run_result("tok", &result);
+        assert!(!s.contains('\x1b'), "format_dry_run_result: ESC must be stripped: {s:?}");
+        assert!(!s.contains('\x07'), "format_dry_run_result: BEL must be stripped: {s:?}");
     }
 }

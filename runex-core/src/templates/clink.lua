@@ -31,7 +31,17 @@ local function runex_is_command_position(prefix)
 end
 
 local function runex_is_safe_token(token)
+    -- Whitelist: only alphanumeric, dot, underscore, hyphen.
+    -- This is a prerequisite for runex_shell_quote safety: tokens that pass this
+    -- check contain no shell metacharacters, so shell quoting is a defence-in-depth
+    -- measure rather than the sole guard. Do not relax this whitelist without
+    -- also auditing the io.popen command construction below.
     return token:match("^[%w%._%-]+$") ~= nil
+end
+
+local function runex_shell_quote(s)
+    -- Wrap s in single quotes for POSIX shell, escaping any embedded single quotes.
+    return "'" .. s:gsub("'", "'\\''") .. "'"
 end
 
 local function runex_expand_token(token)
@@ -39,7 +49,7 @@ local function runex_expand_token(token)
         return token
     end
 
-    local command = '"' .. RUNEX_BIN .. '" expand --token=' .. token .. ' 2>&1'
+    local command = runex_shell_quote(RUNEX_BIN) .. ' expand --token=' .. runex_shell_quote(token) .. ' 2>&1'
     local handle = io.popen(command)
     if not handle then
         return token
