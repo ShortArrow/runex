@@ -875,7 +875,6 @@ mod tests {
         // Verify that bash alias enumeration does not execute user startup files.
         // We create a temporary HOME with a .bashrc that writes a sentinel file.
         // If -i were used, the sentinel would be created. With --norc --noprofile, it must not.
-        use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
         let sentinel = home.path().join("dotfile_executed");
         let bashrc = home.path().join(".bashrc");

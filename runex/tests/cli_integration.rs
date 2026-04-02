@@ -824,9 +824,9 @@ fn doctor_when_command_exists_absolute_path_is_treated_as_not_found() {
         // The abbr check must report the condition as not satisfied (command not found),
         // not as found — /etc/passwd exists but is not a command in PATH.
         let checks: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
-        let abbr_checks: Vec<_> = checks
-            .as_array()
-            .unwrap_or(&vec![])
+        let empty = vec![];
+        let check_arr = checks.as_array().unwrap_or(&empty);
+        let abbr_checks: Vec<_> = check_arr
             .iter()
             .filter(|c| c["name"].as_str().unwrap_or("").starts_with("abbr:"))
             .collect();
