@@ -65,9 +65,9 @@ where
             CheckStatus::Error
         },
         detail: if config_exists {
-            format!("found: {}", config_path.display())
+            format!("found: {}", sanitize_for_display(&config_path.display().to_string()))
         } else {
-            format!("not found: {}", config_path.display())
+            format!("not found: {}", sanitize_for_display(&config_path.display().to_string()))
         },
     });
 
@@ -270,6 +270,21 @@ mod tests {
         assert!(
             !check.detail.contains('\x07'),
             "detail must not contain raw control char from cmd: {:?}", check.detail
+        );
+    }
+
+    #[test]
+    fn doctor_config_file_detail_strips_control_chars_from_path() {
+        // --config path containing ANSI escape sequences must not appear raw in
+        // the config_file check detail, which is printed to the terminal.
+        // Attack: --config $'\x1b[2J/evil.toml' would clear the screen.
+        let path = std::path::PathBuf::from("/home/user/\x1b[2Jevil.toml");
+        let result = diagnose(&path, None, |_| true);
+        let config_check = result.checks.iter().find(|c| c.name == "config_file");
+        let check = config_check.expect("must produce a config_file check");
+        assert!(
+            !check.detail.contains('\x1b'),
+            "config_file detail must not contain raw ESC from path: {:?}", check.detail
         );
     }
 

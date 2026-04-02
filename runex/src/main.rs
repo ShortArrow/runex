@@ -137,13 +137,13 @@ fn resolve_config(
 ) -> Result<(PathBuf, Config), Box<dyn std::error::Error>> {
     if let Some(path) = config_override {
         let config = load_config(path).map_err(|e| {
-            format!("failed to load config {}: {e}", path.display())
+            format!("failed to load config {}: {e}", sanitize_for_display(&path.display().to_string()))
         })?;
         return Ok((path.to_path_buf(), config));
     }
     let path = default_config_path()?;
     let config = load_config(&path).map_err(|e| {
-        format!("failed to load config {}: {e}", path.display())
+        format!("failed to load config {}: {e}", sanitize_for_display(&path.display().to_string()))
     })?;
     Ok((path, config))
 }
@@ -636,7 +636,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&config.abbr)?);
             } else {
                 for (key, exp) in expand::list(&config) {
-                    println!("{key}\t{exp}");
+                    println!("{}\t{}", sanitize_for_display(key), sanitize_for_display(exp));
                 }
             }
         }
@@ -733,7 +733,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Step 1: config file
             // Use create_new to atomically create the file, avoiding the TOCTOU race
             // between an existence check and a subsequent write.
-            let msg = format!("Create config at {}?", config_path.display());
+            let msg = format!("Create config at {}?", sanitize_for_display(&config_path.display().to_string()));
             if yes || prompt_confirm(&msg) {
                 if let Some(parent) = config_path.parent() {
                     std::fs::create_dir_all(parent)?;
@@ -746,10 +746,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(mut f) => {
                         use std::io::Write;
                         f.write_all(runex_init::default_config_content().as_bytes())?;
-                        println!("Created: {}", config_path.display());
+                        println!("Created: {}", sanitize_for_display(&config_path.display().to_string()));
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                        println!("Config already exists: {}", config_path.display());
+                        println!("Config already exists: {}", sanitize_for_display(&config_path.display().to_string()));
                     }
                     Err(e) => return Err(e.into()),
                 }
@@ -779,11 +779,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if existing.contains(runex_init::RUNEX_INIT_MARKER) {
                         println!(
                             "Shell integration already present in {}",
-                            rc_path.display()
+                            sanitize_for_display(&rc_path.display().to_string())
                         );
                     } else {
                         let msg =
-                            format!("Append shell integration to {}?", rc_path.display());
+                            format!("Append shell integration to {}?", sanitize_for_display(&rc_path.display().to_string()));
                         if yes || prompt_confirm(&msg) {
                             let line = runex_init::integration_line(shell, "runex");
                             let block =
@@ -803,7 +803,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             let mut file = open_opts.open(&rc_path)?;
                             file.write_all(block.as_bytes())?;
-                            println!("Appended integration to {}", rc_path.display());
+                            println!("Appended integration to {}", sanitize_for_display(&rc_path.display().to_string()));
                         } else {
                             println!("Skipped shell integration.");
                         }

@@ -32,6 +32,12 @@ pub enum ConfigError {
     CmdTooLong(usize),
     #[error("abbr rule #{0}: when_command_exists entry contains a NUL byte")]
     CmdContainsNul(usize),
+    #[error("abbr rule #{0}: when_command_exists entry contains an ASCII control character (use printable characters only)")]
+    CmdContainsControlChar(usize),
+    #[error("abbr rule #{0}: key contains an ASCII control character (use printable characters only)")]
+    KeyContainsControlChar(usize),
+    #[error("abbr rule #{0}: expand contains an ASCII control character (use printable characters only)")]
+    ExpandContainsControlChar(usize),
 }
 
 /// Parse a TOML string into Config.
@@ -54,6 +60,17 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
         if abbr.expand.contains('\0') {
             return Err(ConfigError::ExpandContainsNul(n));
         }
+        // Reject ASCII control characters (U+0001–U+001F, U+007F) in key and expand.
+        // TOML \uXXXX escapes allow embedding these, but they cause silent misbehavior:
+        //   - key: quoting functions drop them, making the key unmatchable
+        //   - expand: the value is silently mangled in terminal output
+        // Reject early to give users a clear error instead.
+        if abbr.key.chars().any(|c| c.is_ascii_control()) {
+            return Err(ConfigError::KeyContainsControlChar(n));
+        }
+        if abbr.expand.chars().any(|c| c.is_ascii_control()) {
+            return Err(ConfigError::ExpandContainsControlChar(n));
+        }
         if let Some(cmds) = &abbr.when_command_exists {
             for cmd in cmds {
                 if cmd.len() > MAX_CMD_BYTES {
@@ -61,6 +78,9 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
                 }
                 if cmd.contains('\0') {
                     return Err(ConfigError::CmdContainsNul(n));
+                }
+                if cmd.chars().any(|c| c.is_ascii_control()) {
+                    return Err(ConfigError::CmdContainsControlChar(n));
                 }
             }
         }
@@ -438,5 +458,83 @@ expand = "git commit -m"
     fn parse_config_rejects_nul_byte_in_expand() {
         let toml = "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\\u0000evil\"\n";
         assert!(parse_config(toml).is_err(), "must reject expand containing NUL byte");
+    }
+
+    // ─── control char rejection via TOML Unicode escapes ─────────────────────
+    //
+    // TOML allows \uXXXX escapes for any Unicode code point, including ASCII
+    // control characters (U+0001–U+001F, U+007F). These pass through toml::from_str
+    // but must be rejected by parse_config because:
+    //   - key: quoting functions silently drop them, making the key unmatchable
+    //   - expand: the expansion is silently mangled when printed
+    //   - both: users get silent wrong behavior instead of a clear error
+
+    #[test]
+    fn parse_config_rejects_control_char_in_key() {
+        // ESC (\u001B) is a common ANSI terminal injection vector.
+        // TOML allows \u001B in strings; parse_config must reject it.
+        let toml = "version = 1\n[[abbr]]\nkey = \"k\\u001Bevil\"\nexpand = \"v\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject key containing ASCII control char (\\u001B)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_control_char_in_expand() {
+        // ESC in expand value would be silently dropped by sanitize_for_display.
+        // Reject early so users get a clear error.
+        let toml = "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\\u001Bevil\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject expand containing ASCII control char (\\u001B)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_del_in_key() {
+        // DEL (U+007F) is also an ASCII control char.
+        let toml = "version = 1\n[[abbr]]\nkey = \"k\\u007Fevil\"\nexpand = \"v\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject key containing DEL (\\u007F)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_del_in_expand() {
+        let toml = "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\\u007Fevil\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject expand containing DEL (\\u007F)"
+        );
+    }
+
+    #[test]
+    fn parse_config_accepts_key_without_control_chars() {
+        // Sanity: normal keys must still be accepted.
+        let toml = "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n";
+        assert!(parse_config(toml).is_ok(), "must accept key without control chars");
+    }
+
+    #[test]
+    fn parse_config_rejects_control_char_in_when_command_exists() {
+        // ESC (\u001B) in a when_command_exists entry must be rejected.
+        // It passes the NUL check and the /\: path-separator check, but would be
+        // passed to which::which() and OS-level syscalls with a control char embedded.
+        let toml = "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\"\nwhen_command_exists = [\"cmd\\u001Bevil\"]\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject when_command_exists entry containing ASCII control char (\\u001B)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_del_in_when_command_exists() {
+        let toml = "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\"\nwhen_command_exists = [\"cmd\\u007Fevil\"]\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject when_command_exists entry containing DEL (\\u007F)"
+        );
     }
 }

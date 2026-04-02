@@ -953,6 +953,36 @@ fn export_with_del_in_bin_exits_nonzero() {
     );
 }
 
+// --- list: terminal injection via Unicode-escaped control chars in config -----
+
+/// `runex list` must not emit raw ANSI escape sequences in human output.
+/// parse_config now rejects ASCII control characters (including those injected
+/// via TOML \uXXXX escapes), so configs containing them must fail to load.
+/// This is the primary defense; sanitize_for_display is defense-in-depth.
+#[test]
+fn list_rejects_config_with_control_char_in_expansion() {
+    // \u001B[2J = ESC clear-screen — injected via TOML Unicode escape
+    let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"\\u001B[2Jmalicious\"\n";
+    let cfg = write_config(toml);
+    let (_, _, ok) = run(&["list"], Some(cfg.path()), None);
+    assert!(
+        !ok,
+        "list must reject a config with ESC in expansion (parse_config control char check)"
+    );
+}
+
+#[test]
+fn list_rejects_config_with_control_char_in_key() {
+    // Key containing BEL (\u0007) via TOML Unicode escape must be rejected.
+    let toml = "version = 1\n[[abbr]]\nkey = \"k\\u0007ey\"\nexpand = \"git commit -m\"\n";
+    let cfg = write_config(toml);
+    let (_, _, ok) = run(&["list"], Some(cfg.path()), None);
+    assert!(
+        !ok,
+        "list must reject a config with BEL in key (parse_config control char check)"
+    );
+}
+
 /// export with an extremely long --bin must exit non-zero to prevent DoS via huge rc-file writes.
 #[test]
 fn export_with_oversized_bin_exits_nonzero() {
