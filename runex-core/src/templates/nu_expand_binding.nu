@@ -52,7 +52,7 @@
                     if not $command_pos {
                         commandline edit --insert ' '
                     } else {
-                        let expanded = ({BIN} expand $"--token=($token)" | complete | get stdout | str trim --right)
+                        let expanded = ({NU_BIN} expand --token=($token) | complete | get stdout | str trim --right)
                         if $expanded != $token {
                             commandline edit --replace ($prefix + $expanded + $right)
                             commandline set-cursor (($prefix | str length) + ($expanded | str length))

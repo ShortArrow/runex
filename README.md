@@ -31,6 +31,12 @@ ls␣  → lsd
 cargo install runex
 ```
 
+Or with `mise`:
+
+```bash
+mise use -g cargo:runex
+```
+
 If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
 
 - Linux/macOS: `~/.cargo/bin`
@@ -80,9 +86,7 @@ eval "$(runex export zsh)"
 Invoke-Expression (& runex export pwsh | Out-String)
 ```
 
-### Nushell (Experimental)
-
-Nushell integration is experimental and not considered stable yet.
+### Nushell
 
 Add to `env.nu` (typically `~/.config/nushell/env.nu`):
 
@@ -147,7 +151,7 @@ Global flags (available on every subcommand):
 ```
 --config <path>      override config file path
 --path-prepend <dir> prepend a directory to PATH for command existence checks
---json               JSON output (supported by: list, doctor, version)
+--json               JSON output (supported by: list, doctor, version, expand, which)
 ```
 
 ## Avoiding Expansion
@@ -172,11 +176,18 @@ If you use `trigger = "space"`, there are a few practical ways to avoid expansio
 - Minimal typing, maximal power
 - Runes over repetition
 
-## Future
+## Roadmap
+
+Near-term:
+
+- Harden `doctor` and `init` around edge cases and clearer diagnostics
+
+Later:
 
 - Fuzzy suggestions
 - Interactive picker
 - Editor integrations
+- Broader distribution channels (GitHub Releases, `cargo-binstall`, `winget`, `mise github:`)
 
 ## Name
 

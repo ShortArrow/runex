@@ -17,10 +17,95 @@ cargo build
 ### Test
 
 ```bash
-cargo test
+# Run all tests
+cargo test --workspace
+
+# Run tests for a specific crate
+cargo test -p runex-core
+cargo test -p runex
 ```
 
+Some tests are skipped at runtime when their prerequisites are missing (e.g. `pwsh` for PowerShell tests, bash 4+ for bash tests).
+
+#### Linux-specific tests (WSL)
+
+A small number of tests exercise UNIX-only behaviour (named pipes, `/dev/zero`, `mkfifo`). These are compiled only on Unix and require a Linux environment. On Windows, run them via WSL:
+
+```bash
+wsl -e bash -c 'cd /mnt/path/to/runex && cargo test --workspace'
+```
+
+Replace `/mnt/path/to/runex` with the WSL path to your checkout. The tests are gated with `#[cfg(unix)]` and are automatically skipped on Windows.
+
+## Coding guidelines
+
+### Language and style
+
+- Source code, comments, doc comments (`///`), and commit messages are written in **English**.
+- Use `///` doc comments for public items and for `mod` / `fn` declarations inside `#[cfg(test)]` blocks. Use `//` only for inline notes within a function body where the logic is non-obvious.
+- No trailing summaries in comments ("this function does X") — state the *why*, not the *what*.
+- Keep functions small and single-purpose. Prefer flat code over deep nesting.
+- Do not add error handling, fallbacks, or validation for scenarios that cannot occur. Trust internal invariants; validate only at system boundaries (user input, external processes, file I/O).
+
+### Test discipline (TDD)
+
+- Write a failing test first, confirm it is red, then write the minimal code to make it green.
+- Tests are organised into nested `mod` blocks inside `#[cfg(test)]`, grouped by theme:
+
+  ```rust
+  mod parsing { use super::*; /* ... */ }
+  mod sanitization { use super::*; /* ... */ }
+  ```
+
+- Helper functions (`test_config`, `abbr`, …) live at the `mod tests` level so all sub-mods can access them via `use super::*`.
+- Each test function tests exactly one behaviour. Name it after what it asserts, not how it does it (`read_rc_content_returns_empty_for_oversized_file`, not `test_size_limit`).
+- Do not mock subsystems that can be exercised cheaply (filesystem via `tempfile`, subprocess via a fake binary). Integration-level tests that touch real syscalls are preferred over unit tests with mocks.
+
+### Functional programming
+
+Keep business logic pure — no I/O, no global state, no side effects.
+
+- **Pure functions first.** New logic should be pure by default: given the same inputs, always return the same output. If a function needs to query the environment (filesystem, PATH, processes), that dependency should be injected, not called directly.
+- **Push I/O to the boundary.** Parsing, validation, expansion, and formatting are pure. I/O (file reads, subprocess calls, terminal output) belongs in the outermost layer. When adding a feature, write the logic as a pure function first, then wire up I/O in the caller.
+- **Inject dependencies as closures.** Use `Fn` trait bounds (e.g. `command_exists: impl Fn(&str) -> bool`) to pass in environment-querying behaviour. This keeps the function pure and makes it testable with a trivial closure.
+- **Prefer iterators over mutation.** `.map()`, `.filter()`, `.partition()`, `.flat_map()`, `.collect()` are idiomatic. Avoid mutating values in-place.
+- **Use `Result` and `Option` idiomatically.** Propagate errors with `?`. Convert between them with `.ok()`, `.map_err()`, `and_then`. Do not panic on recoverable conditions.
+
+### Architecture
+
+The workspace is split into two crates with a deliberate boundary:
+
+- **Core crate** — pure business logic: config parsing, expansion, diagnostics, shell script generation, sanitisation. No subprocess calls, no terminal output, no global state.
+- **CLI crate** — side effects: argument parsing, file I/O, subprocess execution, terminal output. Calls into the core crate for all logic.
+
+The rule: if new code does not need to spawn a process or write to stdout, it belongs in the core crate. Formatting helpers are an exception — they live in the CLI crate but remain pure (data in, string out, no printing).
+
+**Dependency injection at the boundary.** Environment-querying closures (command existence checks, PATH resolution) are constructed once in the CLI layer from user-supplied flags, then passed down into core functions. Core functions never reach into the environment themselves.
+
+**Testability follows from the architecture.** A function that accepts an injected closure can be tested without touching the filesystem or PATH. Design for this — it is not an afterthought.
+
+### Security
+
+Any value that originates from user-controlled data (config fields, command names, file paths) and is later rendered to the terminal or embedded in a shell string must be sanitised before use.
+
+**Terminal output** — strip unsafe characters (ASCII control characters, Unicode visual-deception characters such as RLO, BOM, and zero-width spaces) before including user-controlled values in any human-readable output. Use the sanitisation utilities in the core crate.
+
+**Shell string embedding** — use the quoting helpers provided in the core crate. Never interpolate raw user data into a shell string literal.
+
+**Config validation** — new config fields must follow the same rules as existing ones: reject control characters, deceptive Unicode, and enforce a byte-length limit. Field limits are documented in `docs/config-reference.md`.
+
+**Subprocess output** — any new subprocess call must cap both the total output size and the wall-clock execution time. Use the existing helpers; do not call `Command::output()` directly.
+
 ## Releasing
+
+### Merge develop → main
+
+Version bumps and publishing happen on `main`. Before bumping, merge `develop`:
+
+```bash
+git checkout main
+git merge develop
+```
 
 ### Version bump
 

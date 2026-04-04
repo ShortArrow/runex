@@ -1,4 +1,7 @@
 /target
-.claude/settings.local.json
 *.tmp.toml
 .tmp-*.toml
+
+# AI agents
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

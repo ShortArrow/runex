@@ -1,7 +1,10 @@
+use serde::Serialize;
+
 use crate::model::{Config, ExpandResult};
 
 /// A single skipped rule — part of the `which_abbr` trace.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
 pub enum SkipReason {
     /// key == expand (self-loop guard).
     SelfLoop,
@@ -17,7 +20,8 @@ pub enum SkipReason {
 /// `skipped` contains every rule that matched the key but was bypassed,
 /// in the same order `expand()` would skip them. This ensures `which_abbr`
 /// and `expand` agree on the final outcome even with duplicate-key rules.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
 pub enum WhichResult {
     /// Token matched a rule and all conditions passed.
     Expanded {
@@ -49,11 +53,9 @@ where
         if abbr.key != token {
             continue;
         }
-        // Infinite-loop guard: key == expand means no-op.
         if abbr.key == abbr.expand {
             continue;
         }
-        // Check when_command_exists condition.
         if let Some(cmds) = &abbr.when_command_exists {
             if !cmds.iter().all(|c| command_exists(c)) {
                 continue;

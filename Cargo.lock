@@ -448,6 +448,7 @@ version = "0.1.6"
 dependencies = [
  "base64",
  "clap",
+ "libc",
  "runex-core",
  "serde",
  "serde_json",
@@ -460,6 +461,7 @@ name = "runex-core"
 version = "0.1.6"
 dependencies = [
  "dirs",
+ "libc",
  "serde",
  "serial_test",
  "tempfile",

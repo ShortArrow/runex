@@ -50,7 +50,7 @@ The core concept is **"rune-to-cast expansion"**.
 - zsh
 - PowerShell (pwsh)
 - cmd (via Clink)
-- Nushell (nu, experimental)
+- Nushell (nu)
 
 ---
 
@@ -155,12 +155,19 @@ See `docs/config-reference.md` for the full field reference.
 
 ---
 
-## 9. Future Extensions
+## 9. Roadmap
+
+### Near-term
+
+- Harden `doctor` and `init` around edge cases and clearer diagnostics
+
+### Later
 
 - Fuzzy suggestions / fallback matching
 - Interactive picker
 - History-based learning
 - IDE integration (Neovim, VS Code)
+- Broader distribution channels (GitHub Releases, `cargo-binstall`, `winget`, `mise github:`)
 
 ---
 

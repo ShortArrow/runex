@@ -29,6 +29,12 @@ ls␣  → lsd
 cargo install runex
 ```
 
+`mise` を使う場合:
+
+```bash
+mise use -g cargo:runex
+```
+
 インストール後に `runex` が見つからない場合は、Cargo の bin ディレクトリが `PATH` に入っているか確認してください。
 
 - Linux/macOS: `~/.cargo/bin`
@@ -78,9 +84,7 @@ eval "$(runex export zsh)"
 Invoke-Expression (& runex export pwsh | Out-String)
 ```
 
-### Nushell（Experimental）
-
-Nushell 連携は experimental です。安定していない場合があります。
+### Nushell
 
 `env.nu`（多くの環境では `~/.config/nushell/env.nu`）に追加：
 
@@ -172,9 +176,16 @@ runex version                            バージョンとビルドコミット
 
 ## ロードマップ
 
+直近:
+
+- `doctor` / `init` のエッジケース対応と診断改善
+
+後回し:
+
 - ファジーマッチングフォールバック
 - インタラクティブピッカー
 - エディタ連携
+- 配布チャネル拡充（GitHub Releases、`cargo-binstall`、`winget`、`mise github:`）
 
 ## 名の由来
 

@@ -8,6 +8,7 @@ license = "MIT"
 repository = "https://github.com/ShortArrow/runex"
 keywords = ["shell", "abbreviation", "alias", "expansion", "cli"]
 categories = ["command-line-utilities"]
+# crates.io README is intentionally minimal; canonical docs live in ../README.md
 readme = "README.md"
 
 [[bin]]
@@ -20,6 +21,9 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 which = "7"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

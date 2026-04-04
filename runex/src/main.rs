@@ -1,14 +1,21 @@
+mod format;
+mod shell_alias;
+
 use clap::{Parser, Subcommand};
+use format::{
+    format_check_line, format_dry_run_result, format_which_result, version_line,
+    which_result_to_json,
+};
 use runex_core::config::{default_config_path, load_config};
-use runex_core::doctor::{self, Check, CheckStatus, DiagResult};
-use runex_core::expand::{self, WhichResult};
+use runex_core::doctor;
+use runex_core::expand;
 use runex_core::init as runex_init;
-use runex_core::model::{Abbr, Config, ExpandResult};
+use runex_core::model::{Config, ExpandResult};
+use runex_core::sanitize::sanitize_for_display;
 use runex_core::shell::Shell;
-use std::collections::HashMap;
+use shell_alias::add_shell_alias_conflicts;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -16,11 +23,17 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-const ANSI_RESET: &str = "\x1b[0m";
-const ANSI_GREEN: &str = "\x1b[32m";
-const ANSI_YELLOW: &str = "\x1b[33m";
-const ANSI_RED: &str = "\x1b[31m";
-const GIT_COMMIT: Option<&str> = option_env!("RUNEX_GIT_COMMIT");
+pub(crate) const ANSI_RESET: &str = "\x1b[0m";
+pub(crate) const ANSI_GREEN: &str = "\x1b[32m";
+pub(crate) const ANSI_YELLOW: &str = "\x1b[33m";
+pub(crate) const ANSI_RED: &str = "\x1b[31m";
+pub(crate) const GIT_COMMIT: Option<&str> = option_env!("RUNEX_GIT_COMMIT");
+
+/// Column width for the check status tag in `doctor` output.
+pub(crate) const CHECK_TAG_WIDTH: usize = 8;
+
+/// Maximum byte length of the `--bin` argument passed to `export`.
+const MAX_BIN_LEN: usize = 255;
 
 struct Spinner {
     done: Arc<AtomicBool>,
@@ -45,7 +58,7 @@ impl Spinner {
                 eprint!("\r{} {}", frames[i % frames.len()], message);
                 let _ = io::stderr().flush();
                 i += 1;
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(shell_alias::POLL_INTERVAL_MILLIS));
             }
             eprint!("\r\x1b[2K");
             let _ = io::stderr().flush();
@@ -128,7 +141,6 @@ enum Commands {
     },
 }
 
-// ─── Config helpers ──────────────────────────────────────────────────────────
 
 /// Load config, erroring if the path or parse fails. Used by commands that
 /// require a valid config (Expand, List, Which).
@@ -136,11 +148,15 @@ fn resolve_config(
     config_override: Option<&Path>,
 ) -> Result<(PathBuf, Config), Box<dyn std::error::Error>> {
     if let Some(path) = config_override {
-        let config = load_config(path)?;
+        let config = load_config(path).map_err(|e| {
+            format!("failed to load config {}: {e}", sanitize_for_display(&path.display().to_string()))
+        })?;
         return Ok((path.to_path_buf(), config));
     }
     let path = default_config_path()?;
-    let config = load_config(&path)?;
+    let config = load_config(&path).map_err(|e| {
+        format!("failed to load config {}: {e}", sanitize_for_display(&path.display().to_string()))
+    })?;
     Ok((path, config))
 }
 
@@ -155,14 +171,20 @@ fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config
     (path, config)
 }
 
-// ─── Command existence resolver ───────────────────────────────────────────────
 
 /// Build a `command_exists` closure.
 ///
 /// When `path_prepend` is `Some(dir)`, files inside `dir` are checked first
 /// (bare name, and `.exe` on Windows). Falls through to `which::which`.
+///
+/// Rejects any `cmd` containing `/`, `\`, or `:` because `when_command_exists`
+/// values must be bare command names, not filesystem paths. Accepting paths would
+/// allow directory traversal and absolute-path probing via `dir.join(cmd)`.
 fn make_command_exists(path_prepend: Option<&Path>) -> impl Fn(&str) -> bool + '_ {
     move |cmd: &str| -> bool {
+        if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
+            return false;
+        }
         if let Some(dir) = path_prepend {
             if dir.join(cmd).is_file() {
                 return true;
@@ -176,192 +198,64 @@ fn make_command_exists(path_prepend: Option<&Path>) -> impl Fn(&str) -> bool + '
     }
 }
 
-// ─── Formatting helpers ───────────────────────────────────────────────────────
+/// Maximum byte size of an rc file that `init` will read for marker detection.
+/// Files larger than this are treated as if the marker is absent so that init
+/// fails safe (appends the integration line) rather than consuming unbounded memory.
+const MAX_RC_FILE_BYTES: usize = 1024 * 1024; // 1 MB
 
-fn format_check_tag(status: &CheckStatus) -> String {
-    match status {
-        CheckStatus::Ok => format!("[{ANSI_GREEN}OK{ANSI_RESET}]"),
-        CheckStatus::Warn => format!("[{ANSI_YELLOW}WARN{ANSI_RESET}]"),
-        CheckStatus::Error => format!("[{ANSI_RED}ERROR{ANSI_RESET}]"),
-    }
-}
-
-fn format_check_line(check: &Check) -> String {
-    format!(
-        "{:>8}  {}: {}",
-        format_check_tag(&check.status),
-        check.name,
-        check.detail
-    )
-}
-
-fn version_line() -> String {
-    let version = env!("CARGO_PKG_VERSION");
-    match GIT_COMMIT {
-        Some(commit) if !commit.is_empty() => format!("runex {version} ({commit})"),
-        _ => format!("runex {version}"),
-    }
-}
-
-fn format_skip_reason(i: usize, reason: &expand::SkipReason, why: bool) -> String {
-    if !why {
+/// Read a shell rc file for RUNEX_INIT_MARKER detection.
+///
+/// Returns the file contents as a string, or an empty string if:
+/// - the file does not exist (init should append)
+/// - the file exceeds MAX_RC_FILE_BYTES (safety: never read enormous files)
+/// - the file cannot be read for any other I/O reason
+///
+/// Uses a single file descriptor for both the metadata check and the read to
+/// eliminate the TOCTOU race that exists when `metadata()` and `read_to_string()`
+/// open the file separately.  On Unix, `O_NONBLOCK` prevents `open()` from
+/// blocking if the path points to a named pipe (FIFO) with no writer.
+fn read_rc_content(path: &Path) -> String {
+    use std::io::Read;
+    // Open the file once.  On Unix, O_NONBLOCK prevents open() from blocking on
+    // a FIFO that has no writer yet, closing the TOCTOU window between a separate
+    // metadata() call and a subsequent read_to_string().
+    // We intentionally do NOT use O_NOFOLLOW so that symlinked dotfiles (common
+    // in dotfile-manager setups) continue to work.
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+        {
+            Ok(f) => f,
+            Err(_) => return String::new(),
+        }
+    };
+    #[cfg(not(unix))]
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return String::new(),
+    };
+    // Metadata from the same fd — no second open, no TOCTOU window.
+    let meta = match file.metadata() {
+        Ok(m) => m,
+        Err(_) => return String::new(),
+    };
+    // Reject non-regular files (named pipes, device files).
+    // On Unix these report len=0 but read_to_string() would consume unbounded
+    // data (/dev/zero) or block until a writer appears (FIFO).
+    if !meta.is_file() {
         return String::new();
     }
-    match reason {
-        expand::SkipReason::SelfLoop => {
-            format!("\n  rule #{} skipped: key == expand (self-loop)", i + 1)
-        }
-        expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
-            let mut parts = Vec::new();
-            for cmd in found_commands {
-                parts.push(format!("{cmd}: found"));
-            }
-            for cmd in missing_commands {
-                parts.push(format!("{cmd}: NOT FOUND"));
-            }
-            format!(
-                "\n  rule #{} skipped: when_command_exists [{}]",
-                i + 1,
-                parts.join(", ")
-            )
-        }
+    if meta.len() > MAX_RC_FILE_BYTES as u64 {
+        return String::new();
     }
+    let mut content = String::new();
+    file.read_to_string(&mut content).unwrap_or_default();
+    content
 }
-
-fn format_which_result(result: &WhichResult, why: bool) -> String {
-    match result {
-        WhichResult::Expanded {
-            key,
-            expansion,
-            rule_index,
-            satisfied_conditions,
-            skipped,
-        } => {
-            let mut s = format!("{key}  ->  {expansion}");
-            if why {
-                for (i, reason) in skipped {
-                    s.push_str(&format_skip_reason(*i, reason, true));
-                }
-                s.push_str(&format!("\n  rule #{} matched", rule_index + 1));
-                if satisfied_conditions.is_empty() {
-                    s.push_str(", no conditions");
-                } else {
-                    for cmd in satisfied_conditions {
-                        s.push_str(&format!("\n  condition: when_command_exists '{cmd}' -> found"));
-                    }
-                }
-            }
-            s
-        }
-        WhichResult::AllSkipped { token, skipped } => {
-            // Collect distinct skip reasons across all matching rules for the headline.
-            let has_condition_fail = skipped.iter().any(|(_, r)| {
-                matches!(r, expand::SkipReason::ConditionFailed { .. })
-            });
-            let has_self_loop = skipped
-                .iter()
-                .any(|(_, r)| matches!(r, expand::SkipReason::SelfLoop));
-            let headline = match (has_condition_fail, has_self_loop) {
-                (true, true) => format!(
-                    "{token}  [skipped: condition failed on some rules; others are self-loops]"
-                ),
-                (true, false) => {
-                    // Collect all missing commands across all ConditionFailed rules.
-                    let all_missing: Vec<&str> = skipped
-                        .iter()
-                        .flat_map(|(_, r)| match r {
-                            expand::SkipReason::ConditionFailed { missing_commands, .. } => {
-                                missing_commands.iter().map(String::as_str).collect::<Vec<_>>()
-                            }
-                            _ => vec![],
-                        })
-                        .collect::<std::collections::HashSet<_>>()
-                        .into_iter()
-                        .collect();
-                    format!("{token}  [skipped: {} not found]", all_missing.join(", "))
-                }
-                (false, true) => format!("{token}  [no-op: key and expansion are identical]"),
-                (false, false) => format!("{token}: no rule found"),
-            };
-            let mut s = headline;
-            if why {
-                for (i, reason) in skipped {
-                    s.push_str(&format_skip_reason(*i, reason, true));
-                }
-            }
-            s
-        }
-        WhichResult::NoMatch { token } => format!("{token}: no rule found"),
-    }
-}
-
-fn format_dry_run_result(token: &str, result: &WhichResult) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("token: {token}\n"));
-    match result {
-        WhichResult::Expanded {
-            key,
-            expansion,
-            rule_index,
-            satisfied_conditions,
-            skipped,
-        } => {
-            for (i, reason) in skipped {
-                match reason {
-                    expand::SkipReason::SelfLoop => {
-                        out.push_str(&format!("rule #{} skipped: self-loop\n", i + 1));
-                    }
-                    expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
-                        out.push_str(&format!("rule #{} skipped: when_command_exists\n", i + 1));
-                        for cmd in found_commands {
-                            out.push_str(&format!("  {cmd}: found\n"));
-                        }
-                        for cmd in missing_commands {
-                            out.push_str(&format!("  {cmd}: NOT FOUND\n"));
-                        }
-                    }
-                }
-            }
-            out.push_str(&format!("matched rule #{} (key = '{key}')\n", rule_index + 1));
-            if satisfied_conditions.is_empty() {
-                out.push_str("conditions: none\n");
-            } else {
-                out.push_str("conditions:\n");
-                for cmd in satisfied_conditions {
-                    out.push_str(&format!("  when_command_exists '{cmd}': found\n"));
-                }
-            }
-            out.push_str(&format!("result: expanded  ->  {expansion}\n"));
-        }
-        WhichResult::AllSkipped { token, skipped } => {
-            for (i, reason) in skipped {
-                match reason {
-                    expand::SkipReason::SelfLoop => {
-                        out.push_str(&format!("rule #{} skipped: self-loop\n", i + 1));
-                    }
-                    expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
-                        out.push_str(&format!("rule #{} skipped: when_command_exists\n", i + 1));
-                        for cmd in found_commands {
-                            out.push_str(&format!("  {cmd}: found\n"));
-                        }
-                        for cmd in missing_commands {
-                            out.push_str(&format!("  {cmd}: NOT FOUND\n"));
-                        }
-                    }
-                }
-            }
-            out.push_str(&format!("no rule for '{token}' passed all conditions\n"));
-            out.push_str("result: pass-through\n");
-        }
-        WhichResult::NoMatch { token } => {
-            out.push_str(&format!("no rule matched '{token}'\n"));
-            out.push_str("result: pass-through\n");
-        }
-    }
-    out
-}
-
-// ─── Shell helpers ────────────────────────────────────────────────────────────
 
 fn detect_shell() -> Option<Shell> {
     // Unix: $SHELL environment variable
@@ -381,237 +275,329 @@ fn detect_shell() -> Option<Shell> {
     None
 }
 
-fn prompt_confirm(msg: &str) -> bool {
-    eprint!("{msg} [y/N] ");
-    let _ = io::stderr().flush();
+/// Maximum byte length accepted from a single `prompt_confirm` read.
+/// A real y/N answer is at most a few bytes; anything beyond this limit
+/// is treated as "no" to prevent unbounded memory growth from piped input.
+const MAX_CONFIRM_BYTES: usize = 1_024;
+
+/// Inner implementation of `prompt_confirm` that reads from an arbitrary `BufRead`.
+/// Returns true only for trimmed, case-insensitive "y" or "yes" responses
+/// that fit within MAX_CONFIRM_BYTES. Oversized input is treated as "no".
+fn prompt_confirm_from(reader: &mut impl io::BufRead) -> bool {
+    use io::{BufRead as _, Read as _};
     let mut input = String::new();
-    if io::stdin().read_line(&mut input).is_err() {
+    // Read at most MAX_CONFIRM_BYTES + 1 bytes via a by_ref adapter so we do not
+    // consume the reader itself.  The +1 lets us detect inputs that exceed the limit:
+    // if input.len() > MAX_CONFIRM_BYTES the response is abnormally long → treat as "no".
+    let mut limited = reader.by_ref().take(MAX_CONFIRM_BYTES as u64 + 1);
+    match limited.read_line(&mut input) {
+        Err(_) => return false,
+        Ok(0) => return false, // EOF with no data
+        Ok(_) => {}
+    }
+    // Reject if the limited read filled more than the allowed budget.
+    if input.len() > MAX_CONFIRM_BYTES {
         return false;
     }
     matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-fn parse_pwsh_alias_lines(stdout: &str) -> HashMap<String, String> {
-    let mut aliases = HashMap::new();
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some((name, definition)) = trimmed.split_once('\t') {
-            aliases.insert(name.trim().to_string(), definition.trim().to_string());
-        }
-    }
-    aliases
+fn prompt_confirm(msg: &str) -> bool {
+    eprint!("{msg} [y/N] ");
+    let _ = io::stderr().flush();
+    let stdin = io::stdin();
+    let mut reader = io::BufReader::new(stdin.lock());
+    prompt_confirm_from(&mut reader)
 }
 
-fn load_pwsh_aliases() -> HashMap<String, String> {
-    if which::which("pwsh").is_err() {
-        return HashMap::new();
+
+/// Maximum byte length accepted for `--token` (expand) and `which <token>`.
+/// Tokens longer than any possible abbr key (MAX_KEY_BYTES = 1024 in config.rs)
+/// can never match and would cause needless memory allocation in sanitize_for_display.
+const MAX_TOKEN_BYTES: usize = 1_024;
+
+type CmdResult = Result<(), Box<dyn std::error::Error>>;
+
+fn handle_version(json: bool) -> CmdResult {
+    if json {
+        #[derive(serde::Serialize)]
+        struct VersionJson<'a> {
+            version: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            commit: Option<&'a str>,
+        }
+        let v = VersionJson {
+            version: env!("CARGO_PKG_VERSION"),
+            commit: GIT_COMMIT.filter(|s| !s.is_empty()),
+        };
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    } else {
+        println!("{}", version_line());
     }
+    Ok(())
+}
 
-    let output = Command::new("pwsh")
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-Command",
-            "Get-Alias | ForEach-Object { \"{0}`t{1}\" -f $_.Name, $_.Definition }",
-        ])
-        .output();
+fn handle_list(config: &Config, json: bool) -> CmdResult {
+    if json {
+        println!("{}", serde_json::to_string_pretty(&config.abbr)?);
+    } else {
+        for (key, exp) in expand::list(config) {
+            println!("{}\t{}", sanitize_for_display(key), sanitize_for_display(exp));
+        }
+    }
+    Ok(())
+}
 
-    let Ok(output) = output else {
-        return HashMap::new();
+fn handle_which(
+    token: String,
+    config: &Config,
+    command_exists: &dyn Fn(&str) -> bool,
+    json: bool,
+    why: bool,
+) -> CmdResult {
+    if token.len() > MAX_TOKEN_BYTES {
+        eprintln!(
+            "error: token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
+            token.len()
+        );
+        std::process::exit(1);
+    }
+    let result = expand::which_abbr(config, &token, command_exists);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
+    } else {
+        println!("{}", format_which_result(&result, why));
+    }
+    Ok(())
+}
+
+fn handle_expand(
+    token: String,
+    config: &Config,
+    command_exists: &dyn Fn(&str) -> bool,
+    json: bool,
+    dry_run: bool,
+) -> CmdResult {
+    if token.len() > MAX_TOKEN_BYTES {
+        eprintln!(
+            "error: --token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
+            token.len()
+        );
+        std::process::exit(1);
+    }
+    if dry_run {
+        let result = expand::which_abbr(config, &token, command_exists);
+        if json {
+            println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
+        } else {
+            print!("{}", format_dry_run_result(&token, &result));
+        }
+    } else {
+        let result = expand::expand(config, &token, command_exists);
+        if json {
+            let v = match &result {
+                ExpandResult::Expanded(s) => serde_json::json!({
+                    "result": "expanded",
+                    "token": token,
+                    "expansion": s,
+                }),
+                ExpandResult::PassThrough(s) => serde_json::json!({
+                    "result": "pass_through",
+                    "token": s,
+                }),
+            };
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        } else {
+            match result {
+                ExpandResult::Expanded(s) => print!("{s}"),
+                ExpandResult::PassThrough(s) => print!("{s}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate and parse the `--bin` argument for `export`.
+///
+/// Rejects values that are empty, whitespace-only, too long, contain control
+/// characters, or contain non-printable-ASCII characters.  Only printable ASCII
+/// is allowed to prevent Unicode homoglyphs and bidirectional overrides from
+/// being silently embedded in generated shell scripts.
+fn validate_bin(bin: &str) {
+    if bin.trim().is_empty() {
+        eprintln!("error: --bin must not be empty or whitespace-only");
+        std::process::exit(1);
+    }
+    if bin.len() > MAX_BIN_LEN {
+        eprintln!("error: --bin is too long ({} bytes); maximum is {MAX_BIN_LEN}", bin.len());
+        std::process::exit(1);
+    }
+    if bin.chars().any(|c| c.is_ascii_control() || c == '\u{0085}' || c == '\u{2028}' || c == '\u{2029}') {
+        eprintln!("error: --bin contains an invalid control character");
+        std::process::exit(1);
+    }
+    if bin.chars().any(|c| !c.is_ascii() || !c.is_ascii_graphic()) {
+        eprintln!("error: --bin must contain only printable ASCII characters");
+        std::process::exit(1);
+    }
+}
+
+fn handle_export(
+    shell: String,
+    bin: String,
+    config_flag: Option<&Path>,
+) -> CmdResult {
+    validate_bin(&bin);
+    let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
+        Box::<dyn std::error::Error>::from(e.to_string())
+    })?;
+    let config = if config_flag.is_some() {
+        let (_path, cfg) = resolve_config(config_flag)?;
+        Some(cfg)
+    } else {
+        let (_path, cfg) = resolve_config_opt(None);
+        cfg
     };
-    if !output.status.success() {
-        return HashMap::new();
+    print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
+    Ok(())
+}
+
+fn handle_doctor(
+    config_flag: Option<&Path>,
+    path_prepend: Option<&Path>,
+    no_shell_aliases: bool,
+    json: bool,
+) -> CmdResult {
+    let (config_path, config) = resolve_config_opt(config_flag);
+    let command_exists = make_command_exists(path_prepend);
+    let spinner = Spinner::start("Checking environment...");
+    let mut result = doctor::diagnose(&config_path, config.as_ref(), &command_exists);
+    if !no_shell_aliases {
+        add_shell_alias_conflicts(&mut result, config.as_ref());
     }
-    parse_pwsh_alias_lines(&String::from_utf8_lossy(&output.stdout))
-}
+    spinner.stop();
 
-fn check_pwsh_alias_with<F>(token: &str, lookup: F) -> Option<Check>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let definition = lookup(token)?;
-    Some(Check {
-        name: format!("shell:pwsh:key:{token}"),
-        status: CheckStatus::Warn,
-        detail: format!("conflicts with existing alias '{token}' -> {definition}"),
-    })
-}
-
-fn parse_bash_alias_lines(stdout: &str) -> HashMap<String, String> {
-    let mut aliases = HashMap::new();
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("alias ") {
-            continue;
-        }
-        let rest = &trimmed["alias ".len()..];
-        if let Some((name, value)) = rest.split_once('=') {
-            aliases.insert(name.trim().to_string(), value.trim().to_string());
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result.checks)?);
+    } else {
+        for check in &result.checks {
+            println!("{}", format_check_line(check));
         }
     }
-    aliases
+
+    if !result.is_healthy() {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
-fn load_bash_aliases() -> HashMap<String, String> {
-    if cfg!(windows) {
-        return HashMap::new();
-    }
-
-    if which::which("bash").is_err() {
-        return HashMap::new();
-    }
-
-    let output = Command::new("bash").args(["-ic", "alias"]).output();
-
-    let Ok(output) = output else {
-        return HashMap::new();
-    };
-    if !output.status.success() {
-        return HashMap::new();
-    }
-    parse_bash_alias_lines(&String::from_utf8_lossy(&output.stdout))
-}
-
-fn check_bash_alias_with<F>(token: &str, lookup: F) -> Option<Check>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let detail = lookup(token)?;
-    Some(Check {
-        name: format!("shell:bash:key:{token}"),
-        status: CheckStatus::Warn,
-        detail: format!("conflicts with existing alias {detail}"),
-    })
-}
-
-fn collect_shell_alias_conflicts_with<FPwsh, FBash>(
-    abbrs: &[Abbr],
-    pwsh_lookup: FPwsh,
-    bash_lookup: FBash,
-) -> Vec<Check>
-where
-    FPwsh: Fn(&str) -> Option<String> + Copy,
-    FBash: Fn(&str) -> Option<String> + Copy,
-{
-    let mut checks = Vec::new();
-    for abbr in abbrs {
-        if let Some(check) = check_pwsh_alias_with(&abbr.key, pwsh_lookup) {
-            checks.push(check);
+fn handle_init(config_path: PathBuf, yes: bool) -> CmdResult {
+    let msg = format!("Create config at {}?", sanitize_for_display(&config_path.display().to_string()));
+    if yes || prompt_confirm(&msg) {
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
-        if let Some(check) = check_bash_alias_with(&abbr.key, bash_lookup) {
-            checks.push(check);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&config_path)
+        {
+            Ok(mut f) => {
+                f.write_all(runex_init::default_config_content().as_bytes())?;
+                println!("Created: {}", sanitize_for_display(&config_path.display().to_string()));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                println!("Config already exists: {}", sanitize_for_display(&config_path.display().to_string()));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    } else {
+        println!("Skipped config creation.");
+    }
+
+    let shell = detect_shell().unwrap_or_else(|| {
+        eprintln!(
+            "Could not detect shell. Defaulting to bash. \
+             Use `runex export <shell>` to generate integration manually."
+        );
+        Shell::Bash
+    });
+
+    match runex_init::rc_file_for(shell) {
+        None => {
+            println!(
+                "Shell integration for {:?} must be added manually. \
+                 Run `runex export {:?}` for the script.",
+                shell, shell
+            );
+        }
+        Some(rc_path) => {
+            let existing = read_rc_content(&rc_path);
+            if existing.contains(runex_init::RUNEX_INIT_MARKER) {
+                println!(
+                    "Shell integration already present in {}",
+                    sanitize_for_display(&rc_path.display().to_string())
+                );
+            } else {
+                let msg = format!(
+                    "Append shell integration to {}?",
+                    sanitize_for_display(&rc_path.display().to_string())
+                );
+                if yes || prompt_confirm(&msg) {
+                    let line = runex_init::integration_line(shell, "runex");
+                    let block = format!("\n{}\n{}\n", runex_init::RUNEX_INIT_MARKER, line);
+                    if let Some(parent) = rc_path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    let mut open_opts = std::fs::OpenOptions::new();
+                    open_opts.create(true).append(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        open_opts.custom_flags(libc::O_NOFOLLOW);
+                    }
+                    let mut file = open_opts.open(&rc_path)?;
+                    file.write_all(block.as_bytes())?;
+                    println!("Appended integration to {}", sanitize_for_display(&rc_path.display().to_string()));
+                } else {
+                    println!("Skipped shell integration.");
+                }
+            }
         }
     }
-    checks
+    Ok(())
 }
 
-fn add_shell_alias_conflicts(result: &mut DiagResult, config: Option<&Config>) {
-    let Some(config) = config else {
-        return;
-    };
-    let pwsh_aliases = load_pwsh_aliases();
-    let bash_aliases = load_bash_aliases();
-
-    result
-        .checks
-        .extend(collect_shell_alias_conflicts_with(
-            &config.abbr,
-            |token| pwsh_aliases.get(token).cloned(),
-            |token| bash_aliases.get(token).cloned(),
-        ));
-}
-
-// ─── Main ─────────────────────────────────────────────────────────────────────
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Expand { token, dry_run } => {
-            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
-            let command_exists = make_command_exists(cli.path_prepend.as_deref());
-            if dry_run {
-                let result = expand::which_abbr(&config, &token, &command_exists);
-                print!("{}", format_dry_run_result(&token, &result));
-            } else {
-                let result = expand::expand(&config, &token, &command_exists);
-                match result {
-                    ExpandResult::Expanded(s) => print!("{s}"),
-                    ExpandResult::PassThrough(s) => print!("{s}"),
-                }
-            }
-        }
+        Commands::Version => handle_version(cli.json)?,
         Commands::List => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&config.abbr)?);
-            } else {
-                for (key, exp) in expand::list(&config) {
-                    println!("{key}\t{exp}");
-                }
-            }
-        }
-        Commands::Version => {
-            if cli.json {
-                #[derive(serde::Serialize)]
-                struct VersionJson<'a> {
-                    version: &'a str,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    commit: Option<&'a str>,
-                }
-                let v = VersionJson {
-                    version: env!("CARGO_PKG_VERSION"),
-                    commit: GIT_COMMIT.filter(|s| !s.is_empty()),
-                };
-                println!("{}", serde_json::to_string_pretty(&v)?);
-            } else {
-                println!("{}", version_line());
-            }
-        }
-        Commands::Export { shell, bin } => {
-            let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
-                Box::<dyn std::error::Error>::from(e.to_string())
-            })?;
-            // Explicit --config must be valid; implicit default degrades gracefully.
-            let config = if cli.config.is_some() {
-                let (_path, cfg) = resolve_config(cli.config.as_deref())?;
-                Some(cfg)
-            } else {
-                let (_path, cfg) = resolve_config_opt(None);
-                cfg
-            };
-            print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
-        }
-        Commands::Doctor { no_shell_aliases } => {
-            let (config_path, config) = resolve_config_opt(cli.config.as_deref());
-            let command_exists = make_command_exists(cli.path_prepend.as_deref());
-            let spinner = Spinner::start("Checking environment...");
-            let mut result = doctor::diagnose(&config_path, config.as_ref(), &command_exists);
-            if !no_shell_aliases {
-                add_shell_alias_conflicts(&mut result, config.as_ref());
-            }
-            spinner.stop();
-
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&result.checks)?);
-            } else {
-                for check in &result.checks {
-                    println!("{}", format_check_line(check));
-                }
-            }
-
-            if !result.is_healthy() {
-                std::process::exit(1);
-            }
+            handle_list(&config, cli.json)?;
         }
         Commands::Which { token, why } => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
-            let result = expand::which_abbr(&config, &token, &command_exists);
-            println!("{}", format_which_result(&result, why));
+            handle_which(token, &config, &command_exists, cli.json, why)?;
+        }
+        Commands::Expand { token, dry_run } => {
+            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
+            let command_exists = make_command_exists(cli.path_prepend.as_deref());
+            handle_expand(token, &config, &command_exists, cli.json, dry_run)?;
+        }
+        Commands::Export { shell, bin } => {
+            handle_export(shell, bin, cli.config.as_deref())?;
+        }
+        Commands::Doctor { no_shell_aliases } => {
+            handle_doctor(
+                cli.config.as_deref(),
+                cli.path_prepend.as_deref(),
+                no_shell_aliases,
+                cli.json,
+            )?;
         }
         Commands::Init { yes } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
@@ -619,66 +605,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 default_config_path()?
             };
-
-            // Step 1: config file
-            if config_path.exists() {
-                println!("Config already exists: {}", config_path.display());
-            } else {
-                let msg = format!("Create config at {}?", config_path.display());
-                if yes || prompt_confirm(&msg) {
-                    if let Some(parent) = config_path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    std::fs::write(&config_path, runex_init::default_config_content())?;
-                    println!("Created: {}", config_path.display());
-                } else {
-                    println!("Skipped config creation.");
-                }
-            }
-
-            // Step 2: shell integration
-            let shell = detect_shell().unwrap_or_else(|| {
-                eprintln!(
-                    "Could not detect shell. Defaulting to bash. \
-                     Use `runex export <shell>` to generate integration manually."
-                );
-                Shell::Bash
-            });
-
-            match runex_init::rc_file_for(shell) {
-                None => {
-                    println!(
-                        "Shell integration for {:?} must be added manually. \
-                         Run `runex export {:?}` for the script.",
-                        shell, shell
-                    );
-                }
-                Some(rc_path) => {
-                    let existing = std::fs::read_to_string(&rc_path).unwrap_or_default();
-                    if existing.contains(runex_init::RUNEX_INIT_MARKER) {
-                        println!(
-                            "Shell integration already present in {}",
-                            rc_path.display()
-                        );
-                    } else {
-                        let msg =
-                            format!("Append shell integration to {}?", rc_path.display());
-                        if yes || prompt_confirm(&msg) {
-                            let line = runex_init::integration_line(shell, "runex");
-                            let block =
-                                format!("\n{}\n{}\n", runex_init::RUNEX_INIT_MARKER, line);
-                            let mut file = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(&rc_path)?;
-                            file.write_all(block.as_bytes())?;
-                            println!("Appended integration to {}", rc_path.display());
-                        } else {
-                            println!("Skipped shell integration.");
-                        }
-                    }
-                }
-            }
+            handle_init(config_path, yes)?;
         }
     }
 
@@ -689,70 +616,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
 
-    fn test_abbr(key: &str) -> Abbr {
-        Abbr {
-            key: key.into(),
-            expand: format!("expand-{key}"),
-            when_command_exists: None,
-        }
-    }
-
-    #[test]
-    fn format_check_line_colors_only_tag_text() {
-        let check = Check {
-            name: "config_file".into(),
-            status: CheckStatus::Warn,
-            detail: "detail".into(),
-        };
-
-        let line = format_check_line(&check);
-        assert!(line.starts_with(&format!("[{ANSI_YELLOW}WARN{ANSI_RESET}]")));
-        assert!(line.contains("config_file: detail"));
-    }
-
-    #[test]
-    fn collect_shell_alias_conflicts_reports_pwsh_and_bash() {
-        let checks = collect_shell_alias_conflicts_with(
-            &[test_abbr("gcm"), test_abbr("nv")],
-            |token| (token == "gcm").then_some("Get-Command".to_string()),
-            |token| (token == "nv").then_some("alias nv='nvim'".to_string()),
-        );
-
-        assert_eq!(checks.len(), 2);
-        assert_eq!(checks[0].name, "shell:pwsh:key:gcm");
-        assert!(checks[0].detail.contains("Get-Command"));
-        assert_eq!(checks[1].name, "shell:bash:key:nv");
-        assert!(checks[1].detail.contains("alias nv='nvim'"));
-    }
-
-    #[test]
-    fn collect_shell_alias_conflicts_skips_missing_aliases() {
-        let checks = collect_shell_alias_conflicts_with(&[test_abbr("gcm")], |_| None, |_| None);
-        assert!(checks.is_empty());
-    }
-
-    #[test]
-    fn parse_pwsh_alias_lines_extracts_aliases() {
-        let aliases = parse_pwsh_alias_lines("gcm\tGet-Command\nls\tGet-ChildItem\n");
-        assert_eq!(aliases.get("gcm").map(String::as_str), Some("Get-Command"));
-        assert_eq!(aliases.get("ls").map(String::as_str), Some("Get-ChildItem"));
-    }
-
-    #[test]
-    fn parse_bash_alias_lines_extracts_aliases() {
-        let aliases = parse_bash_alias_lines("alias ls='ls --color=auto'\nalias nv='nvim'\n");
-        assert_eq!(
-            aliases.get("ls").map(String::as_str),
-            Some("'ls --color=auto'")
-        );
-        assert_eq!(aliases.get("nv").map(String::as_str), Some("'nvim'"));
-    }
-
-    #[test]
-    fn version_line_contains_pkg_version() {
-        let line = version_line();
-        assert!(line.starts_with(&format!("runex {}", env!("CARGO_PKG_VERSION"))));
-    }
+    mod command_exists {
+        use super::*;
 
     #[test]
     fn make_command_exists_no_prepend_uses_which() {
@@ -772,77 +637,166 @@ mod tests {
         assert!(!exists("__runex_other_fake__"));
     }
 
+    } // mod command_exists
+
+    /// `init` reads the rc file to check for RUNEX_INIT_MARKER before appending.
+    /// If the rc file is extremely large (e.g. corrupted or adversarially crafted),
+    /// `read_to_string` would consume unbounded memory. `read_rc_content` must
+    /// refuse files larger than MAX_RC_FILE_BYTES and return an empty string so
+    /// that the marker check fails safe (appends as if unseen — idempotent).
+    mod rc_file_size_limit {
+        use super::*;
+
     #[test]
-    fn format_dry_run_no_match() {
-        let config = runex_core::model::Config {
-            version: 1,
-            keybind: runex_core::model::KeybindConfig::default(),
-            abbr: vec![],
-        };
-        let result = expand::which_abbr(&config, "xyz", |_| true);
-        let out = format_dry_run_result("xyz", &result);
-        assert!(out.contains("token: xyz"));
-        assert!(out.contains("no rule matched"));
-        assert!(out.contains("pass-through"));
+    fn read_rc_content_returns_content_for_normal_file() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        f.write_all(b"# runex-init\n").unwrap();
+        let content = read_rc_content(f.path());
+        assert!(content.contains("# runex-init"), "normal rc file must be readable");
     }
 
     #[test]
-    fn format_dry_run_expanded() {
-        let config = runex_core::model::Config {
-            version: 1,
-            keybind: runex_core::model::KeybindConfig::default(),
-            abbr: vec![runex_core::model::Abbr {
-                key: "gcm".into(),
-                expand: "git commit -m".into(),
-                when_command_exists: None,
-            }],
-        };
-        let result = expand::which_abbr(&config, "gcm", |_| true);
-        let out = format_dry_run_result("gcm", &result);
-        assert!(out.contains("token: gcm"));
-        assert!(out.contains("expanded  ->  git commit -m"));
-        assert!(out.contains("conditions: none"));
+    fn read_rc_content_returns_empty_for_oversized_file() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        f.write_all(&vec![b'x'; MAX_RC_FILE_BYTES + 1]).unwrap();
+        let content = read_rc_content(f.path());
+        assert!(
+            content.is_empty(),
+            "read_rc_content must return empty string for oversized rc file"
+        );
     }
 
     #[test]
-    fn format_dry_run_condition_failed() {
-        let config = runex_core::model::Config {
-            version: 1,
-            keybind: runex_core::model::KeybindConfig::default(),
-            abbr: vec![runex_core::model::Abbr {
-                key: "ls".into(),
-                expand: "lsd".into(),
-                when_command_exists: Some(vec!["lsd".into()]),
-            }],
-        };
-        let result = expand::which_abbr(&config, "ls", |_| false);
-        let out = format_dry_run_result("ls", &result);
-        assert!(out.contains("lsd: NOT FOUND"), "out: {out}");
-        assert!(out.contains("pass-through"), "out: {out}");
+    fn read_rc_content_returns_empty_for_missing_file() {
+        let content = read_rc_content(std::path::Path::new("/nonexistent/runex_test.rc"));
+        assert!(content.is_empty(), "missing rc file must return empty string");
+    }
+
+    /// A file exactly at MAX_RC_FILE_BYTES must be read (boundary: <=, not <).
+    /// This test exercises the single-fd size check introduced to close the TOCTOU
+    /// race: the same fd used for metadata() is also used for the read, so there
+    /// is no window for the file to be swapped between the size check and the read.
+    #[test]
+    fn read_rc_content_accepts_file_at_exact_size_limit() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        f.write_all(&vec![b'x'; MAX_RC_FILE_BYTES]).unwrap();
+        let content = read_rc_content(f.path());
+        assert_eq!(
+            content.len(),
+            MAX_RC_FILE_BYTES,
+            "read_rc_content must accept a file exactly at MAX_RC_FILE_BYTES"
+        );
+    }
+
+    } // mod rc_file_size_limit
+
+    /// `prompt_confirm` reads one line from stdin to get a y/N answer.
+    /// Without a size limit, a caller piping 10 MB of data would cause
+    /// `read_line()` to allocate a 10 MB String before returning, wasting memory.
+    /// The internal `prompt_confirm_from` helper must cap reading at
+    /// MAX_CONFIRM_BYTES so that oversized input is treated as "no" without
+    /// accumulating it all.
+    mod prompt_confirm_limit {
+        use super::*;
+
+    #[test]
+    fn prompt_confirm_from_accepts_yes() {
+        use std::io::BufReader;
+        let input = b"y\n";
+        let mut reader = BufReader::new(&input[..]);
+        assert!(
+            prompt_confirm_from(&mut reader),
+            "prompt_confirm_from must return true for 'y\\n'"
+        );
     }
 
     #[test]
-    fn format_dry_run_duplicate_key_fallthrough() {
-        // rule 1: self-loop (skipped), rule 2: actual expansion
-        let config = runex_core::model::Config {
-            version: 1,
-            keybind: runex_core::model::KeybindConfig::default(),
-            abbr: vec![
-                runex_core::model::Abbr {
-                    key: "ls".into(),
-                    expand: "ls".into(), // self-loop
-                    when_command_exists: None,
-                },
-                runex_core::model::Abbr {
-                    key: "ls".into(),
-                    expand: "lsd".into(),
-                    when_command_exists: None,
-                },
-            ],
-        };
-        let result = expand::which_abbr(&config, "ls", |_| true);
-        let out = format_dry_run_result("ls", &result);
-        assert!(out.contains("rule #1 skipped"), "out: {out}");
-        assert!(out.contains("expanded  ->  lsd"), "out: {out}");
+    fn prompt_confirm_from_accepts_yes_long_form() {
+        use std::io::BufReader;
+        let input = b"yes\n";
+        let mut reader = BufReader::new(&input[..]);
+        assert!(
+            prompt_confirm_from(&mut reader),
+            "prompt_confirm_from must return true for 'yes\\n'"
+        );
     }
+
+    #[test]
+    fn prompt_confirm_from_rejects_no() {
+        use std::io::BufReader;
+        let input = b"n\n";
+        let mut reader = BufReader::new(&input[..]);
+        assert!(
+            !prompt_confirm_from(&mut reader),
+            "prompt_confirm_from must return false for 'n\\n'"
+        );
+    }
+
+    /// A line far exceeding MAX_CONFIRM_BYTES must be treated as "no",
+    /// not buffered in full. The function must return false without OOM.
+    #[test]
+    fn prompt_confirm_from_rejects_oversized_input() {
+        use std::io::BufReader;
+        let huge = vec![b'y'; MAX_CONFIRM_BYTES + 1];
+        let mut reader = BufReader::new(huge.as_slice());
+        assert!(
+            !prompt_confirm_from(&mut reader),
+            "prompt_confirm_from must return false for input exceeding MAX_CONFIRM_BYTES"
+        );
+    }
+
+    #[test]
+    fn prompt_confirm_from_rejects_empty_input() {
+        use std::io::BufReader;
+        let input = b"";
+        let mut reader = BufReader::new(&input[..]);
+        assert!(
+            !prompt_confirm_from(&mut reader),
+            "prompt_confirm_from must return false for empty input (EOF)"
+        );
+    }
+
+    } // mod prompt_confirm_limit
+
+    /// `read_rc_content` reads the shell rc file to detect the RUNEX_INIT_MARKER.
+    /// It must reject non-regular files (named pipes, device files) to prevent:
+    /// - Named pipe (FIFO): `metadata().len() == 0`, `read_to_string()` blocks
+    ///   indefinitely waiting for a writer — process hangs.
+    /// - Device files (`/dev/zero`, `/dev/urandom`): report len=0, `read_to_string()`
+    ///   fills memory unboundedly.
+    /// The function must check `metadata().is_file()` before attempting to read.
+    mod rc_file_non_regular {
+        use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn read_rc_content_rejects_named_pipe() {
+        use std::ffi::CString;
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("fake_rc.sh");
+        let path_c = CString::new(pipe.to_str().unwrap()).unwrap();
+        unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) };
+        let content = read_rc_content(&pipe);
+        assert_eq!(
+            content, "",
+            "read_rc_content must return empty string for a named pipe (FIFO), not block"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_rc_content_rejects_dev_zero() {
+        let path = std::path::Path::new("/dev/zero");
+        let content = read_rc_content(path);
+        assert_eq!(
+            content, "",
+            "read_rc_content must return empty string for /dev/zero (device file)"
+        );
+    }
+
+    } // mod rc_file_non_regular
+
 }
