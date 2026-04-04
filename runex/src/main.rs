@@ -175,11 +175,12 @@ fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config
 ///
 /// When `path_prepend` is `Some(dir)`, files inside `dir` are checked first
 /// (bare name, and `.exe` on Windows). Falls through to `which::which`.
+///
+/// Rejects any `cmd` containing `/`, `\`, or `:` because `when_command_exists`
+/// values must be bare command names, not filesystem paths. Accepting paths would
+/// allow directory traversal and absolute-path probing via `dir.join(cmd)`.
 fn make_command_exists(path_prepend: Option<&Path>) -> impl Fn(&str) -> bool + '_ {
     move |cmd: &str| -> bool {
-        // when_command_exists values must be bare command names, not filesystem paths.
-        // Reject anything containing a path separator or Windows drive letter (':') to
-        // prevent directory traversal and absolute-path probing via dir.join(cmd).
         if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
             return false;
         }
@@ -248,6 +249,45 @@ fn format_skip_reason(i: usize, reason: &expand::SkipReason, why: bool) -> Strin
     }
 }
 
+/// Collect all missing commands from `ConditionFailed` skip reasons, deduplicated.
+fn collect_all_missing_commands(skipped: &[(usize, expand::SkipReason)]) -> Vec<String> {
+    skipped
+        .iter()
+        .flat_map(|(_, r)| match r {
+            expand::SkipReason::ConditionFailed { missing_commands, .. } => {
+                missing_commands.iter().map(|c| sanitize_for_display(c)).collect::<Vec<_>>()
+            }
+            _ => vec![],
+        })
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Build the headline for a `WhichResult::AllSkipped` result.
+///
+/// Summarises why every matching rule was bypassed into a single human-readable
+/// line, choosing the message based on which skip reasons are present.
+fn format_all_skipped_headline(token: &str, skipped: &[(usize, expand::SkipReason)]) -> String {
+    let has_condition_fail = skipped
+        .iter()
+        .any(|(_, r)| matches!(r, expand::SkipReason::ConditionFailed { .. }));
+    let has_self_loop = skipped
+        .iter()
+        .any(|(_, r)| matches!(r, expand::SkipReason::SelfLoop));
+    match (has_condition_fail, has_self_loop) {
+        (true, true) => format!(
+            "{token}  [skipped: condition failed on some rules; others are self-loops]"
+        ),
+        (true, false) => {
+            let all_missing = collect_all_missing_commands(skipped);
+            format!("{token}  [skipped: {} not found]", all_missing.join(", "))
+        }
+        (false, true) => format!("{token}  [no-op: key and expansion are identical]"),
+        (false, false) => format!("{token}: no rule found"),
+    }
+}
+
 fn format_which_result(result: &WhichResult, why: bool) -> String {
     match result {
         WhichResult::Expanded {
@@ -277,36 +317,8 @@ fn format_which_result(result: &WhichResult, why: bool) -> String {
             s
         }
         WhichResult::AllSkipped { token, skipped } => {
-            // Collect distinct skip reasons across all matching rules for the headline.
-            let has_condition_fail = skipped.iter().any(|(_, r)| {
-                matches!(r, expand::SkipReason::ConditionFailed { .. })
-            });
-            let has_self_loop = skipped
-                .iter()
-                .any(|(_, r)| matches!(r, expand::SkipReason::SelfLoop));
             let token = sanitize_for_display(token);
-            let headline = match (has_condition_fail, has_self_loop) {
-                (true, true) => format!(
-                    "{token}  [skipped: condition failed on some rules; others are self-loops]"
-                ),
-                (true, false) => {
-                    // Collect all missing commands across all ConditionFailed rules.
-                    let all_missing: Vec<String> = skipped
-                        .iter()
-                        .flat_map(|(_, r)| match r {
-                            expand::SkipReason::ConditionFailed { missing_commands, .. } => {
-                                missing_commands.iter().map(|c| sanitize_for_display(c)).collect::<Vec<_>>()
-                            }
-                            _ => vec![],
-                        })
-                        .collect::<std::collections::HashSet<_>>()
-                        .into_iter()
-                        .collect();
-                    format!("{token}  [skipped: {} not found]", all_missing.join(", "))
-                }
-                (false, true) => format!("{token}  [no-op: key and expansion are identical]"),
-                (false, false) => format!("{token}: no rule found"),
-            };
+            let headline = format_all_skipped_headline(&token, skipped);
             let mut s = headline;
             if why {
                 for (i, reason) in skipped {
@@ -561,11 +573,14 @@ const ALIAS_SUBPROCESS_TIMEOUT_SECS: u64 = 5;
 /// an empty alias map is returned.
 const MAX_SUBPROCESS_OUTPUT_BYTES: usize = 4 * 1024 * 1024; // 4 MB
 
+/// Truncate `s` to at most `max_bytes`, always on a UTF-8 char boundary.
+///
+/// Walks backwards from `max_bytes` until a valid boundary is found, so the
+/// result is never longer than `max_bytes` and is always valid UTF-8.
 fn truncate_to_limit(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
-    // Find the largest char boundary at or before max_bytes.
     let mut end = max_bytes;
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
@@ -751,6 +766,11 @@ fn load_bash_aliases() -> HashMap<String, String> {
     load_bash_aliases_with_path(&std::env::var("PATH").unwrap_or_default())
 }
 
+/// Load bash aliases by running `bash --norc --noprofile -c alias`.
+///
+/// Uses `--norc --noprofile` instead of `-i` to avoid sourcing `~/.bashrc` and other
+/// startup files, which would execute arbitrary user code during alias enumeration.
+/// Returns an empty map on Windows, when bash is not found, or on timeout.
 fn load_bash_aliases_with_path(path_env: &str) -> HashMap<String, String> {
     if cfg!(windows) {
         return HashMap::new();
@@ -762,8 +782,6 @@ fn load_bash_aliases_with_path(path_env: &str) -> HashMap<String, String> {
         return HashMap::new();
     }
 
-    // Use --norc --noprofile instead of -i to avoid sourcing ~/.bashrc and other
-    // startup files, which could execute arbitrary user code during alias enumeration.
     let stdout = run_with_timeout(
         "bash",
         &["--norc", "--noprofile", "-c", "alias"],
@@ -1185,9 +1203,8 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn load_bash_aliases_does_not_source_startup_files() {
-        // Verify that bash alias enumeration does not execute user startup files.
-        // We create a temporary HOME with a .bashrc that writes a sentinel file.
-        // If -i were used, the sentinel would be created. With --norc --noprofile, it must not.
+        // Strategy: create a temp HOME with a .bashrc that writes a sentinel file.
+        // With --norc --noprofile the sentinel must not be created; -i would create it.
         let home = tempfile::tempdir().unwrap();
         let sentinel = home.path().join("dotfile_executed");
         let bashrc = home.path().join(".bashrc");
@@ -1196,7 +1213,6 @@ mod tests {
             format!("touch {}\n", sentinel.display()),
         ).unwrap();
 
-        // Run bash with HOME pointing to the temp dir
         let output = Command::new("bash")
             .env("HOME", home.path())
             .args(["--norc", "--noprofile", "-c", "alias"])
@@ -1210,7 +1226,6 @@ mod tests {
                 );
             }
         }
-        // If bash is not available, skip silently
     }
 
     #[test]
@@ -1298,14 +1313,13 @@ mod tests {
 
     #[test]
     fn format_dry_run_duplicate_key_fallthrough() {
-        // rule 1: self-loop (skipped), rule 2: actual expansion
         let config = runex_core::model::Config {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
             abbr: vec![
                 runex_core::model::Abbr {
                     key: "ls".into(),
-                    expand: "ls".into(), // self-loop
+                    expand: "ls".into(),
                     when_command_exists: None,
                 },
                 runex_core::model::Abbr {
@@ -1323,8 +1337,6 @@ mod tests {
 
     #[test]
     fn check_pwsh_alias_name_strips_control_chars_from_key() {
-        // An abbr key containing an ANSI escape sequence must not appear raw in check.name,
-        // which is printed to the terminal via format_check_line.
         let checks = collect_shell_alias_conflicts_with(
             &[test_abbr("key\x1b[2Jevil")],
             |_token| Some("Get-Command".to_string()),
@@ -1353,8 +1365,6 @@ mod tests {
 
     #[test]
     fn check_pwsh_alias_detail_strips_control_chars_from_definition() {
-        // The alias definition comes from pwsh output (external data).
-        // It could theoretically contain ANSI sequences if pwsh emits colorized output.
         let checks = collect_shell_alias_conflicts_with(
             &[test_abbr("gcm")],
             |_token| Some("Get-Command\x1b[31mRED\x1b[0m".to_string()),
@@ -1369,8 +1379,6 @@ mod tests {
 
     #[test]
     fn format_which_result_expanded_strips_control_chars() {
-        // key and expansion are printed directly to the terminal.
-        // Control chars in either must not reach the terminal output.
         let result = WhichResult::Expanded {
             key: "key\x1b[2J".to_string(),
             expansion: "exp\x07anded".to_string(),
@@ -1385,7 +1393,6 @@ mod tests {
 
     #[test]
     fn format_which_result_why_strips_control_chars_from_cmd() {
-        // `--why` output includes when_command_exists cmd names from the config.
         let result = WhichResult::AllSkipped {
             token: "ls".to_string(),
             skipped: vec![(0, expand::SkipReason::ConditionFailed {
@@ -1399,7 +1406,6 @@ mod tests {
 
     #[test]
     fn format_dry_run_result_strips_control_chars() {
-        // expand --dry-run prints key, expansion, and cmd names to terminal.
         let result = WhichResult::Expanded {
             key: "k\x1bey".to_string(),
             expansion: "ex\x07pand".to_string(),
@@ -1421,8 +1427,6 @@ mod tests {
 
     #[test]
     fn parse_bash_alias_lines_truncates_at_max_lines() {
-        // Generate more than MAX_ALIAS_LINES alias lines.
-        // The parser must stop after the limit and not accumulate all entries.
         let mut input = String::new();
         for i in 0..10_100 {
             input.push_str(&format!("alias k{i}='v{i}'\n"));
@@ -1437,7 +1441,6 @@ mod tests {
 
     #[test]
     fn parse_pwsh_alias_lines_truncates_at_max_lines() {
-        // Generate more than MAX_ALIAS_LINES pwsh alias lines.
         let mut input = String::new();
         for i in 0..10_100 {
             input.push_str(&format!("k{i}\tv{i}\n"));
@@ -1452,7 +1455,6 @@ mod tests {
 
     #[test]
     fn parse_bash_alias_lines_accepts_normal_count() {
-        // Fewer than limit: all entries must be returned.
         let mut input = String::new();
         for i in 0..50 {
             input.push_str(&format!("alias k{i}='v{i}'\n"));
@@ -1482,7 +1484,6 @@ mod tests {
     fn read_rc_content_returns_empty_for_oversized_file() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         use std::io::Write;
-        // Write MAX_RC_FILE_BYTES + 1 bytes
         f.write_all(&vec![b'x'; MAX_RC_FILE_BYTES + 1]).unwrap();
         let content = read_rc_content(f.path());
         assert!(
@@ -1532,13 +1533,9 @@ mod tests {
 
     #[test]
     fn parse_bash_alias_lines_truncates_oversized_value() {
-        // A single alias with a value exceeding MAX_ALIAS_VALUE_BYTES must be
-        // accepted (the key is valid) but the stored value must be truncated.
         let huge_value = "x".repeat(65_536 + 1);
         let input = format!("alias k='{huge_value}'\n");
         let aliases = parse_bash_alias_lines(&input);
-        // The alias must be present (not silently dropped), but its value must not
-        // exceed the per-entry limit.
         if let Some(val) = aliases.get("k") {
             assert!(
                 val.len() <= 65_536,
@@ -1546,9 +1543,6 @@ mod tests {
                 val.len()
             );
         }
-        // If the entry was dropped entirely that is also acceptable (key is preserved
-        // without oversized value), so we accept both outcomes — only the stored
-        // value length matters.
     }
 
     #[test]
@@ -1576,7 +1570,6 @@ mod tests {
 
     #[test]
     fn parse_bash_alias_lines_discards_oversized_key() {
-        // An alias whose NAME exceeds MAX_ALIAS_KEY_BYTES must not be stored.
         let huge_key = "k".repeat(1_025);
         let input = format!("alias {huge_key}='value'\n");
         let aliases = parse_bash_alias_lines(&input);
@@ -1601,7 +1594,6 @@ mod tests {
 
     #[test]
     fn parse_bash_alias_lines_accepts_max_length_key() {
-        // Keys exactly at the limit must be stored.
         let max_key = "k".repeat(1_024);
         let input = format!("alias {max_key}='value'\n");
         let aliases = parse_bash_alias_lines(&input);
@@ -1700,8 +1692,6 @@ mod tests {
         let pipe = dir.path().join("fake_rc.sh");
         let path_c = CString::new(pipe.to_str().unwrap()).unwrap();
         unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) };
-        // If read_rc_content opens the pipe, read_to_string blocks indefinitely.
-        // The function must return an empty string without blocking.
         let content = read_rc_content(&pipe);
         assert_eq!(
             content, "",
@@ -1712,8 +1702,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn read_rc_content_rejects_dev_zero() {
-        // /dev/zero reports metadata.len() == 0 and reads unlimited zero bytes.
-        // read_rc_content must not attempt to read it.
         let path = std::path::Path::new("/dev/zero");
         let content = read_rc_content(path);
         assert_eq!(
@@ -1734,23 +1722,15 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         use std::time::Instant;
 
-        // Create a fake "bash" that sleeps forever.
         let dir = tempfile::tempdir().unwrap();
         let fake_bash = dir.path().join("bash");
         fs::write(&fake_bash, "#!/bin/sh\nsleep 999\n").unwrap();
         fs::set_permissions(&fake_bash, fs::Permissions::from_mode(0o755)).unwrap();
 
-        // Inject the fake bash at the front of PATH.
         let original_path = std::env::var("PATH").unwrap_or_default();
         let new_path = format!("{}:{}", dir.path().display(), original_path);
 
         let start = Instant::now();
-        // We can't easily set PATH for load_bash_aliases without refactoring.
-        // Instead call Command directly with the env to simulate what load_bash_aliases does.
-        // This test documents the expected behavior: the function must time out.
-        //
-        // We call a helper (not yet existing) that mirrors load_bash_aliases but
-        // accepts a PATH override for testability.
         let result = load_bash_aliases_with_path(&new_path);
         let elapsed = start.elapsed();
 
@@ -1759,7 +1739,6 @@ mod tests {
             "load_bash_aliases must return within timeout; took {:?}",
             elapsed
         );
-        // A hanging bash produces no usable output — empty map is fine.
         let _ = result;
     }
 
@@ -1795,24 +1774,19 @@ mod tests {
     // ── Vector 24: subprocess stdout size limit ───────────────────────────────
 
     /// A shell that emits gigabytes of output must not cause OOM.
-    /// run_with_timeout must cap stdout at MAX_SUBPROCESS_OUTPUT_BYTES and
-    /// discard the rest without allocating unboundedly.
+    ///
+    /// Strategy: create a script that writes `MAX_SUBPROCESS_OUTPUT_BYTES * 2` bytes in a
+    /// single `dd` call then exits 0.  Using `exit 0` (not timeout) ensures we test the
+    /// size cap rather than the timeout path.  `dd` with a large block size is fast enough
+    /// that the process exits well within the timeout window.
     #[test]
     #[cfg(unix)]
     fn run_with_timeout_caps_output_size() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
-        // Create a script that outputs MAX_SUBPROCESS_OUTPUT_BYTES * 2 bytes fast
-        // using `yes` (outputs "y\n" in a tight loop) then exits 0.
-        // `yes | head -c N` is capped at N bytes by the shell, ensuring the
-        // process exits quickly and we can test the size cap independently of
-        // the timeout.
         let dir = tempfile::tempdir().unwrap();
         let fake_sh = dir.path().join("flood");
-        // Write a large block (MAX*2 bytes) using dd from /dev/zero with a large
-        // block size (fast) then exit 0.  Exits with status 0 so we can verify
-        // the size check — not the exit-code check — triggers the None return.
         let bs = MAX_SUBPROCESS_OUTPUT_BYTES * 2;
         let script = format!("#!/bin/sh\ndd if=/dev/zero bs={bs} count=1 2>/dev/null; exit 0\n");
         fs::write(&fake_sh, &script).unwrap();
@@ -1825,7 +1799,6 @@ mod tests {
             ALIAS_SUBPROCESS_TIMEOUT_SECS,
         );
 
-        // Output is 2×limit → exceeds MAX_SUBPROCESS_OUTPUT_BYTES → must be None.
         assert!(
             result.is_none(),
             "run_with_timeout must return None when output exceeds MAX_SUBPROCESS_OUTPUT_BYTES"
