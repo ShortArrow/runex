@@ -2,7 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::model::{Config, TriggerKey};
-use crate::sanitize::is_unsafe_for_display;
+use crate::sanitize::{double_quote_escape, is_nu_drop_char, is_unicode_line_separator, is_unsafe_for_display};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shell {
@@ -84,15 +84,17 @@ fn zsh_chord(trigger: TriggerKey) -> &'static str {
     }
 }
 
+/// Quote `token` for use as a Bash `case` pattern.
+///
+/// Uses the same escaping as [`bash_quote_string`]: single-quoted with `'\''`
+/// for embedded single quotes.  ASCII control characters and Unicode
+/// line/paragraph separators are dropped.
 fn bash_quote_pattern(token: &str) -> String {
-    // Same escaping as bash_quote_string: single-quoted with '\'' for embedded quotes.
-    // Control characters and Unicode line/paragraph separators are dropped.
     let mut out = String::from("'");
     for ch in token.chars() {
         match ch {
             '\'' => out.push_str(r"'\''"),
-            c if c.is_ascii_control() => {}
-            '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
+            c if c.is_ascii_control() || is_unicode_line_separator(c) => {}
             _ => out.push(ch),
         }
     }
@@ -111,8 +113,7 @@ pub(crate) fn bash_quote_string(value: &str) -> String {
     for ch in value.chars() {
         match ch {
             '\'' => out.push_str(r"'\''"),
-            c if c.is_ascii_control() => {}
-            '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
+            c if c.is_ascii_control() || is_unicode_line_separator(c) => {}
             _ => out.push(ch),
         }
     }
@@ -166,8 +167,7 @@ pub(crate) fn pwsh_quote_string(token: &str) -> String {
     for ch in token.chars() {
         match ch {
             '\'' => out.push_str("''"),
-            c if c.is_ascii_control() => {}
-            '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
+            c if c.is_ascii_control() || is_unicode_line_separator(c) => {}
             _ => out.push(ch),
         }
     }
@@ -186,17 +186,13 @@ pub(crate) fn pwsh_quote_string(token: &str) -> String {
 pub(crate) fn nu_quote_string(value: &str) -> String {
     let mut out = String::from("^\"");
     for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '$' => out.push_str("\\$"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\0' | '\x7f' => {}
-            c if c.is_ascii_control() => {}
-            '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
-            _ => out.push(ch),
+        if let Some(esc) = double_quote_escape(ch) {
+            out.push_str(esc);
+        } else if ch == '$' {
+            out.push_str("\\$");
+        } else if is_nu_drop_char(ch) {
+        } else {
+            out.push(ch);
         }
     }
     out.push('"');
@@ -249,18 +245,13 @@ fn nu_quote_string_embedded(value: &str) -> String {
 pub(crate) fn lua_quote_string(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\0' => {}
-            '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
-            c if c.is_ascii_control() => {
-                out.push_str(&format!("\\{:03}", c as u8));
-            }
-            _ => out.push(ch),
+        if let Some(esc) = double_quote_escape(ch) {
+            out.push_str(esc);
+        } else if ch == '\0' || is_unicode_line_separator(ch) {
+        } else if ch.is_ascii_control() {
+            out.push_str(&format!("\\{:03}", ch as u8));
+        } else {
+            out.push(ch);
         }
     }
     out.push('"');

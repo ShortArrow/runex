@@ -1,32 +1,25 @@
 use std::path::PathBuf;
 
 use crate::config::xdg_config_home;
-use crate::sanitize::is_deceptive_unicode;
+use crate::sanitize::{double_quote_escape, is_nu_drop_char};
 use crate::shell::{bash_quote_string, lua_quote_string, nu_quote_string, pwsh_quote_string, Shell};
 
 /// Quote a filesystem path for embedding in a Nu shell string literal.
-/// Uses Nu double-quoted string syntax: escapes `\` and `"`.
-/// Unlike `nu_quote_string`, this does NOT add the `^` external-command prefix.
 ///
-/// Unicode visual-deception characters (RLO, BOM, ZWSP, etc.) are dropped so the
-/// displayed `source` path in env.nu matches its actual byte content.
+/// Uses Nu double-quoted string syntax (no `^` prefix — this is a string value,
+/// not a command invocation).  Escapes `\`, `"`, and `$` (to suppress variable
+/// interpolation of `$env.FOO` etc.).  NUL, DEL, ASCII control characters, Unicode
+/// line/paragraph separators, and visual-deception characters are all dropped.
 fn nu_quote_path(path: &str) -> String {
     let mut out = String::from("\"");
     for ch in path.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            // '$' starts Nu variable/environment interpolation inside double-quoted strings.
-            // Escape it so $env.FOO and similar are not evaluated when the source line runs.
-            '$' => out.push_str("\\$"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\0' | '\x7f' => {} // NUL and DEL — drop
-            c if c.is_ascii_control() => {} // remaining C0 control chars — drop
-            '\u{0085}' | '\u{2028}' | '\u{2029}' => {} // Unicode line/paragraph separators — drop
-            c if is_deceptive_unicode(c) => {} // Unicode visual-deception chars — drop
-            _ => out.push(ch),
+        if let Some(esc) = double_quote_escape(ch) {
+            out.push_str(esc);
+        } else if ch == '$' {
+            out.push_str("\\$");
+        } else if is_nu_drop_char(ch) {
+        } else {
+            out.push(ch);
         }
     }
     out.push('"');
@@ -60,9 +53,7 @@ pub fn integration_line(shell: Shell, bin: &str) -> String {
             let cfg_dir = xdg_config_home()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "~/.config".to_string());
-            // Nu requires ^"..." syntax to invoke an external command by quoted name.
             let nu_bin = nu_quote_string(bin);
-            // Paths must be quoted so spaces and backslashes don't break tokenization.
             let nu_path = nu_quote_path(&format!("{cfg_dir}/runex/runex.nu"));
             format!(
                 "{nu_bin} export nu | save --force {nu_path}\nsource {nu_path}"

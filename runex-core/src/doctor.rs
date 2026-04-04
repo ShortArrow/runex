@@ -32,6 +32,80 @@ impl DiagResult {
     }
 }
 
+fn check_config_file(config_path: &Path) -> Check {
+    let exists = config_path.exists();
+    Check {
+        name: "config_file".into(),
+        status: if exists { CheckStatus::Ok } else { CheckStatus::Error },
+        detail: if exists {
+            format!("found: {}", sanitize_for_display(&config_path.display().to_string()))
+        } else {
+            format!("not found: {}", sanitize_for_display(&config_path.display().to_string()))
+        },
+    }
+}
+
+fn check_config_parse(config: Option<&Config>) -> Check {
+    Check {
+        name: "config_parse".into(),
+        status: if config.is_some() { CheckStatus::Ok } else { CheckStatus::Error },
+        detail: if config.is_some() {
+            "config loaded successfully".into()
+        } else {
+            "failed to load config".into()
+        },
+    }
+}
+
+fn check_abbr_quality(config: &Config) -> Vec<Check> {
+    let mut checks = Vec::new();
+    for (i, abbr) in config.abbr.iter().enumerate() {
+        if abbr.key.is_empty() {
+            checks.push(Check {
+                name: format!("abbr[{i}].empty_key"),
+                status: CheckStatus::Warn,
+                detail: format!("rule #{n} has an empty key — it will never match", n = i + 1),
+            });
+        }
+        if abbr.key == abbr.expand {
+            checks.push(Check {
+                name: format!("abbr[{i}].self_loop"),
+                status: CheckStatus::Warn,
+                detail: format!(
+                    "rule #{n} key == expand ('{key}') — this rule is always skipped",
+                    n = i + 1,
+                    key = sanitize_for_display(&abbr.key)
+                ),
+            });
+        }
+    }
+    checks
+}
+
+fn check_when_command_exists<F>(config: &Config, command_exists: &F) -> Vec<Check>
+where
+    F: Fn(&str) -> bool,
+{
+    let mut checks = Vec::new();
+    for abbr in &config.abbr {
+        if let Some(cmds) = &abbr.when_command_exists {
+            for cmd in cmds {
+                let exists = command_exists(cmd);
+                checks.push(Check {
+                    name: format!("command:{}", sanitize_for_display(cmd)),
+                    status: if exists { CheckStatus::Ok } else { CheckStatus::Warn },
+                    detail: if exists {
+                        format!("'{}' found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
+                    } else {
+                        format!("'{}' not found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
+                    },
+                });
+            }
+        }
+    }
+    checks
+}
+
 /// Run environment diagnostics.
 ///
 /// `config` is `None` when config loading failed (parse error, etc.).
@@ -41,86 +115,12 @@ where
     F: Fn(&str) -> bool,
 {
     let mut checks = Vec::new();
-
-    // 1. Config file exists
-    let config_exists = config_path.exists();
-    checks.push(Check {
-        name: "config_file".into(),
-        status: if config_exists {
-            CheckStatus::Ok
-        } else {
-            CheckStatus::Error
-        },
-        detail: if config_exists {
-            format!("found: {}", sanitize_for_display(&config_path.display().to_string()))
-        } else {
-            format!("not found: {}", sanitize_for_display(&config_path.display().to_string()))
-        },
-    });
-
-    // 2. Config parse
-    checks.push(Check {
-        name: "config_parse".into(),
-        status: if config.is_some() {
-            CheckStatus::Ok
-        } else {
-            CheckStatus::Error
-        },
-        detail: if config.is_some() {
-            "config loaded successfully".into()
-        } else {
-            "failed to load config".into()
-        },
-    });
-
-    // 3. Check abbr rule quality: empty key, self-loop
+    checks.push(check_config_file(config_path));
+    checks.push(check_config_parse(config));
     if let Some(cfg) = config {
-        for (i, abbr) in cfg.abbr.iter().enumerate() {
-            if abbr.key.is_empty() {
-                checks.push(Check {
-                    name: format!("abbr[{i}].empty_key"),
-                    status: CheckStatus::Warn,
-                    detail: format!("rule #{n} has an empty key — it will never match", n = i + 1),
-                });
-            }
-            if abbr.key == abbr.expand {
-                checks.push(Check {
-                    name: format!("abbr[{i}].self_loop"),
-                    status: CheckStatus::Warn,
-                    detail: format!(
-                        "rule #{n} key == expand ('{key}') — this rule is always skipped",
-                        n = i + 1,
-                        key = sanitize_for_display(&abbr.key)
-                    ),
-                });
-            }
-        }
+        checks.extend(check_abbr_quality(cfg));
+        checks.extend(check_when_command_exists(cfg, &command_exists));
     }
-
-    // 4. Check when_command_exists commands
-    if let Some(cfg) = config {
-        for abbr in &cfg.abbr {
-            if let Some(cmds) = &abbr.when_command_exists {
-                for cmd in cmds {
-                    let exists = command_exists(cmd);
-                    checks.push(Check {
-                        name: format!("command:{}", sanitize_for_display(cmd)),
-                        status: if exists {
-                            CheckStatus::Ok
-                        } else {
-                            CheckStatus::Warn
-                        },
-                        detail: if exists {
-                            format!("'{}' found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
-                        } else {
-                            format!("'{}' not found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
-                        },
-                    });
-                }
-            }
-        }
-    }
-
     DiagResult { checks }
 }
 

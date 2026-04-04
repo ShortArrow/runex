@@ -53,11 +53,9 @@ where
         if abbr.key != token {
             continue;
         }
-        // Infinite-loop guard: key == expand means no-op.
         if abbr.key == abbr.expand {
             continue;
         }
-        // Check when_command_exists condition.
         if let Some(cmds) = &abbr.when_command_exists {
             if !cmds.iter().all(|c| command_exists(c)) {
                 continue;
