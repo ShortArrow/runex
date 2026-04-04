@@ -504,7 +504,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_oversized_key() {
-        // A single key exceeding 1024 bytes must be rejected.
         let huge_key = "k".repeat(1025);
         let toml = format!("version = 1\n[[abbr]]\nkey = \"{huge_key}\"\nexpand = \"v\"\n");
         assert!(parse_config(&toml).is_err(), "must reject key longer than 1024 bytes");
@@ -519,7 +518,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_oversized_expand() {
-        // A single expand value exceeding 4096 bytes must be rejected.
         let huge_expand = "x".repeat(4097);
         let toml = format!("version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"{huge_expand}\"\n");
         assert!(parse_config(&toml).is_err(), "must reject expand longer than 4096 bytes");
@@ -558,7 +556,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_nul_byte_in_key() {
-        // TOML \u0000 in a string key must be rejected as an invalid field value.
         let toml = "version = 1\n[[abbr]]\nkey = \"k\\u0000evil\"\nexpand = \"v\"\n";
         assert!(parse_config(toml).is_err(), "must reject key containing NUL byte");
     }
@@ -580,8 +577,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_control_char_in_key() {
-        // ESC (\u001B) is a common ANSI terminal injection vector.
-        // TOML allows \u001B in strings; parse_config must reject it.
         let toml = "version = 1\n[[abbr]]\nkey = \"k\\u001Bevil\"\nexpand = \"v\"\n";
         assert!(
             parse_config(toml).is_err(),
@@ -591,8 +586,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_control_char_in_expand() {
-        // ESC in expand value would be silently dropped by sanitize_for_display.
-        // Reject early so users get a clear error.
         let toml = "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\\u001Bevil\"\n";
         assert!(
             parse_config(toml).is_err(),
@@ -602,7 +595,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_del_in_key() {
-        // DEL (U+007F) is also an ASCII control char.
         let toml = "version = 1\n[[abbr]]\nkey = \"k\\u007Fevil\"\nexpand = \"v\"\n";
         assert!(
             parse_config(toml).is_err(),
@@ -621,7 +613,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_accepts_key_without_control_chars() {
-        // Sanity: normal keys must still be accepted.
         let toml = "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n";
         assert!(parse_config(toml).is_ok(), "must accept key without control chars");
     }
@@ -673,9 +664,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_control_char_in_when_command_exists() {
-        // ESC (\u001B) in a when_command_exists entry must be rejected.
-        // It passes the NUL check and the /\: path-separator check, but would be
-        // passed to which::which() and OS-level syscalls with a control char embedded.
         let toml = "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\"\nwhen_command_exists = [\"cmd\\u001Bevil\"]\n";
         assert!(
             parse_config(toml).is_err(),
@@ -707,9 +695,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_bom_in_key() {
-        // U+FEFF is the BOM / zero-width no-break space. It is invisible in terminal
-        // output, so a key containing it looks identical to the key without it —
-        // the rule can never be triggered by a user who cannot see the hidden character.
         let toml = "version = 1\n[[abbr]]\nkey = \"\\uFEFFls\"\nexpand = \"lsd\"\n";
         assert!(
             parse_config(toml).is_err(),
@@ -719,9 +704,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_rlo_in_key() {
-        // U+202E (Right-to-Left Override) reverses the display order of following
-        // characters in a terminal. In a `list` output it can make "evil" look like
-        // "live", deceiving the user about what a rule does.
         let toml = "version = 1\n[[abbr]]\nkey = \"ab\\u202Ecd\"\nexpand = \"v\"\n";
         assert!(
             parse_config(toml).is_err(),
@@ -731,8 +713,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_rlo_in_expand() {
-        // RLO in the expansion value can reverse the display order of the command
-        // that appears in `list` and `which` output, deceiving the user.
         let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"rm -rf \\u202E/ echo safe\"\n";
         assert!(
             parse_config(toml).is_err(),
@@ -760,7 +740,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_zwsp_in_key() {
-        // U+200B (Zero-Width Space) is invisible and makes the key unmatchable.
         let toml = "version = 1\n[[abbr]]\nkey = \"ls\\u200Bcd\"\nexpand = \"v\"\n";
         assert!(
             parse_config(toml).is_err(),
@@ -810,7 +789,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_accepts_bare_command_name_in_when_command_exists() {
-        // Simple bare names (no path separators) must be accepted.
         let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"lsd\"]\n";
         assert!(
             parse_config(toml).is_ok(),
@@ -828,7 +806,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_too_many_when_command_exists_entries() {
-        // Build a rule with MAX_CMD_LIST_LEN + 1 entries — must be rejected.
         let cmds: Vec<String> = (0..=64).map(|i| format!("\"cmd{i}\"")).collect();
         let toml = format!(
             "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\"\nwhen_command_exists = [{}]\n",
@@ -842,7 +819,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_accepts_max_when_command_exists_entries() {
-        // Exactly MAX_CMD_LIST_LEN entries must be accepted.
         let cmds: Vec<String> = (0..64).map(|i| format!("\"cmd{i}\"")).collect();
         let toml = format!(
             "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\"\nwhen_command_exists = [{}]\n",
@@ -863,7 +839,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_version_0() {
-        // version=0 predates the current schema; must be rejected.
         let toml = "version = 0\n";
         assert!(
             parse_config(toml).is_err(),
@@ -873,7 +848,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_version_2() {
-        // version=2 is an unknown future schema; must be rejected.
         let toml = "version = 2\n";
         assert!(
             parse_config(toml).is_err(),
@@ -883,7 +857,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_version_99() {
-        // Replaces the old canary test: version=99 must now be rejected.
         let toml = "version = 99\n";
         assert!(
             parse_config(toml).is_err(),
@@ -893,7 +866,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_accepts_version_1() {
-        // version=1 is the only supported schema; must be accepted.
         let toml = "version = 1\n";
         assert!(
             parse_config(toml).is_ok(),
@@ -913,7 +885,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_empty_expand() {
-        // expand = "" would silently delete the typed token on trigger. Reject early.
         let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"\"\n";
         assert!(
             parse_config(toml).is_err(),
@@ -923,7 +894,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_rejects_whitespace_only_expand() {
-        // expand = "   " would replace the token with whitespace — silent confusion.
         let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"   \"\n";
         assert!(
             parse_config(toml).is_err(),

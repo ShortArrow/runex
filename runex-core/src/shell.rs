@@ -444,7 +444,6 @@ mod tests {
 
     #[test]
     fn shell_parse_error_display_strips_esc_sequences() {
-        // ESC + "[2J" would clear the screen if emitted raw to a terminal.
         let err = Shell::from_str("bash\x1b[2Jevil").unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -475,8 +474,6 @@ mod tests {
 
     #[test]
     fn shell_parse_error_display_strips_rlo() {
-        // U+202E (RIGHT-TO-LEFT OVERRIDE) reverses the visual display order of text.
-        // If embedded raw in an error message, the terminal renders text in reverse.
         let err = Shell::from_str("bash\u{202E}lve").unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -487,8 +484,6 @@ mod tests {
 
     #[test]
     fn shell_parse_error_display_strips_bom() {
-        // U+FEFF (BOM / zero-width no-break space) is invisible but can confuse parsers
-        // or be used to make a shell name look valid while differing from a real one.
         let err = Shell::from_str("bash\u{FEFF}evil").unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -499,8 +494,6 @@ mod tests {
 
     #[test]
     fn shell_parse_error_display_strips_zwsp() {
-        // U+200B (ZERO-WIDTH SPACE) is invisible but makes "bash" look like "bash"
-        // while differing at the byte level.
         let err = Shell::from_str("ba\u{200B}sh").unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -865,9 +858,7 @@ mod tests {
     /// and allows arbitrary code to follow on the same line.
     #[test]
     fn bin_single_quote_is_escaped_in_bash() {
-        // A single quote in bin must not close the surrounding bash single-quote literal.
         let s = export_script(Shell::Bash, "run'ex", None);
-        // bash_quote_string produces 'run'\''ex' — the raw ' must not appear unescaped
         assert!(s.contains(r"'run'\''ex'"), "bash: single quote must be escaped as '\\''");
     }
 
@@ -879,22 +870,18 @@ mod tests {
 
     #[test]
     fn bin_single_quote_is_escaped_in_pwsh() {
-        // pwsh_quote_string doubles single quotes: run'ex → 'run''ex'
         let s = export_script(Shell::Pwsh, "run'ex", None);
         assert!(s.contains("'run''ex'"), "pwsh: single quote must be doubled");
     }
 
     #[test]
     fn bin_double_quote_is_escaped_in_clink() {
-        // lua_quote_string escapes " as \" inside a double-quoted Lua string
         let s = export_script(Shell::Clink, r#"run"ex"#, None);
         assert!(s.contains(r#""run\"ex""#), "clink: double quote must be escaped");
     }
 
     #[test]
     fn bin_with_special_chars_is_safe_in_nu() {
-        // Nu template embeds {BIN} directly as a command name; must be quoted.
-        // A bin containing a space or semicolon must not become two tokens.
         let s = export_script(Shell::Nu, "runex; echo INJECTED", None);
         assert!(!s.contains("echo INJECTED"), "nu: bin value must be quoted");
     }
@@ -912,7 +899,6 @@ mod tests {
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
-        // Inside cmd: "...", the bin appears as ^\"runex\" (backslash-escaped inner quotes).
         assert!(
             s.contains("^\\\"runex\\\""),
             "nu: bin inside cmd string must use ^\\\"...\\\" syntax, got snippet: {:?}",
@@ -922,8 +908,6 @@ mod tests {
 
     #[test]
     fn nu_bin_with_special_chars_uses_caret_syntax() {
-        // Special chars in bin must be escaped but still use ^ prefix.
-        // Inside cmd: "...", an additional level of escaping is applied.
         use crate::model::{Config, KeybindConfig, TriggerKey};
         let config = Config {
             version: 1,
@@ -931,7 +915,6 @@ mod tests {
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "my\"app", Some(&config));
-        // standalone: ^"my\"app"  →  embedded: ^\"my\\\"app\"
         assert!(s.contains("^\\\"my\\\\\\\"app\\\""), "nu: special chars must be escaped in embedded context: {s}");
     }
 
@@ -947,12 +930,8 @@ mod tests {
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
-        // The cmd: "..." block starts at `cmd: "` and ends at the closing `"`.
-        // Inside it, the bin must appear as ^\"runex\" (escaped), not ^"runex" (unescaped).
-        // Find the cmd block and verify no bare (unescaped) double-quote surrounds runex.
         let cmd_start = s.find("cmd: \"").expect("cmd: block not found");
         let cmd_block = &s[cmd_start..];
-        // ^\"runex\" inside cmd string — backslash before the inner quote
         assert!(
             cmd_block.contains("^\\\"runex\\\""),
             "nu: bin inside cmd string must use ^\\\"...\\\" syntax (escaped quotes), got:\n{}",
