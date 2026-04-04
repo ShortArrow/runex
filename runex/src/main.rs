@@ -510,6 +510,11 @@ const MAX_ALIAS_LINES: usize = 10_000;
 /// are silently truncated at a UTF-8 character boundary.
 const MAX_ALIAS_VALUE_BYTES: usize = 65_536;
 
+/// Maximum byte length of an alias key (name) stored in the alias map.
+/// Alias names longer than any possible abbr key (MAX_KEY_BYTES = 1024) can
+/// never match and only waste memory.  Entries with oversized keys are discarded.
+const MAX_ALIAS_KEY_BYTES: usize = 1_024;
+
 fn truncate_to_limit(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
@@ -530,8 +535,12 @@ fn parse_pwsh_alias_lines(stdout: &str) -> HashMap<String, String> {
             continue;
         }
         if let Some((name, definition)) = trimmed.split_once('\t') {
+            let key = name.trim();
+            if key.len() > MAX_ALIAS_KEY_BYTES {
+                continue;
+            }
             let value = truncate_to_limit(definition.trim(), MAX_ALIAS_VALUE_BYTES);
-            aliases.insert(name.trim().to_string(), value.to_string());
+            aliases.insert(key.to_string(), value.to_string());
         }
     }
     aliases
@@ -585,8 +594,12 @@ fn parse_bash_alias_lines(stdout: &str) -> HashMap<String, String> {
         }
         let rest = &trimmed["alias ".len()..];
         if let Some((name, value)) = rest.split_once('=') {
+            let key = name.trim();
+            if key.len() > MAX_ALIAS_KEY_BYTES {
+                continue;
+            }
             let value = truncate_to_limit(value.trim(), MAX_ALIAS_VALUE_BYTES);
-            aliases.insert(name.trim().to_string(), value.to_string());
+            aliases.insert(key.to_string(), value.to_string());
         }
     }
     aliases
@@ -1351,5 +1364,56 @@ mod tests {
                 val.len()
             );
         }
+    }
+
+    // ─── alias parser DoS: key (name) length limit ───────────────────────────
+    //
+    // `parse_bash_alias_lines` and `parse_pwsh_alias_lines` truncate the VALUE
+    // at MAX_ALIAS_VALUE_BYTES, but not the KEY (alias name).  A misbehaving
+    // shell that emits alias names with huge lengths (e.g. "alias AAAAAA…=v")
+    // fills the HashMap with oversized keys.  With MAX_ALIAS_LINES=10,000 entries
+    // and each key up to 1 MB, total memory could be 10 GB.
+    // Keys must be silently discarded when they exceed MAX_ALIAS_KEY_BYTES.
+
+    #[test]
+    fn parse_bash_alias_lines_discards_oversized_key() {
+        // An alias whose NAME exceeds MAX_ALIAS_KEY_BYTES must not be stored.
+        let huge_key = "k".repeat(1_025);
+        let input = format!("alias {huge_key}='value'\n");
+        let aliases = parse_bash_alias_lines(&input);
+        assert!(
+            aliases.is_empty(),
+            "parse_bash_alias_lines must discard alias with key longer than MAX_ALIAS_KEY_BYTES, got {} entries",
+            aliases.len()
+        );
+    }
+
+    #[test]
+    fn parse_pwsh_alias_lines_discards_oversized_key() {
+        let huge_key = "k".repeat(1_025);
+        let input = format!("{huge_key}\tvalue\n");
+        let aliases = parse_pwsh_alias_lines(&input);
+        assert!(
+            aliases.is_empty(),
+            "parse_pwsh_alias_lines must discard alias with key longer than MAX_ALIAS_KEY_BYTES, got {} entries",
+            aliases.len()
+        );
+    }
+
+    #[test]
+    fn parse_bash_alias_lines_accepts_max_length_key() {
+        // Keys exactly at the limit must be stored.
+        let max_key = "k".repeat(1_024);
+        let input = format!("alias {max_key}='value'\n");
+        let aliases = parse_bash_alias_lines(&input);
+        assert_eq!(aliases.len(), 1, "key at exactly MAX_ALIAS_KEY_BYTES must be stored");
+    }
+
+    #[test]
+    fn parse_pwsh_alias_lines_accepts_max_length_key() {
+        let max_key = "k".repeat(1_024);
+        let input = format!("{max_key}\tvalue\n");
+        let aliases = parse_pwsh_alias_lines(&input);
+        assert_eq!(aliases.len(), 1, "key at exactly MAX_ALIAS_KEY_BYTES must be stored");
     }
 }

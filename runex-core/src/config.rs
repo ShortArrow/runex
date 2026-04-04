@@ -7,6 +7,7 @@ const MAX_ABBR_RULES: usize = 10_000;
 const MAX_KEY_BYTES: usize = 1_024;
 const MAX_EXPAND_BYTES: usize = 4_096;
 const MAX_CMD_BYTES: usize = 255;
+const MAX_CMD_LIST_LEN: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -54,6 +55,8 @@ pub enum ConfigError {
     CmdContainsDeceptiveUnicode(usize),
     #[error("abbr rule #{0}: when_command_exists entry contains a path separator ('/', '\\\\', or ':'); only bare command names are allowed")]
     CmdContainsPathSeparator(usize),
+    #[error("abbr rule #{0}: when_command_exists has too many entries (max {MAX_CMD_LIST_LEN})")]
+    TooManyCmds(usize),
 }
 
 /// Returns true if the character is a Unicode visual-deception character:
@@ -138,6 +141,9 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
             return Err(ConfigError::ExpandContainsDeceptiveUnicode(n));
         }
         if let Some(cmds) = &abbr.when_command_exists {
+            if cmds.len() > MAX_CMD_LIST_LEN {
+                return Err(ConfigError::TooManyCmds(n));
+            }
             for cmd in cmds {
                 if cmd.is_empty() {
                     return Err(ConfigError::CmdEmpty(n));
@@ -815,6 +821,42 @@ expand = "git commit -m"
         assert!(
             parse_config(toml).is_ok(),
             "must accept bare command name in when_command_exists"
+        );
+    }
+
+    // ─── when_command_exists list length limit ────────────────────────────────
+    //
+    // Each abbr rule's when_command_exists list is iterated on every expand call.
+    // Without a cap, a config with 100,000 entries would cause:
+    //   (a) ~25 MB memory per rule (100,000 × 255 bytes)
+    //   (b) 100,000 which::which() calls per keystroke — CPU/I/O DoS
+    // Cap the list at MAX_CMD_LIST_LEN entries per rule.
+
+    #[test]
+    fn parse_config_rejects_too_many_when_command_exists_entries() {
+        // Build a rule with MAX_CMD_LIST_LEN + 1 entries — must be rejected.
+        let cmds: Vec<String> = (0..=64).map(|i| format!("\"cmd{i}\"")).collect();
+        let toml = format!(
+            "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\"\nwhen_command_exists = [{}]\n",
+            cmds.join(", ")
+        );
+        assert!(
+            parse_config(&toml).is_err(),
+            "must reject when_command_exists with more than 64 entries"
+        );
+    }
+
+    #[test]
+    fn parse_config_accepts_max_when_command_exists_entries() {
+        // Exactly MAX_CMD_LIST_LEN entries must be accepted.
+        let cmds: Vec<String> = (0..64).map(|i| format!("\"cmd{i}\"")).collect();
+        let toml = format!(
+            "version = 1\n[[abbr]]\nkey = \"k\"\nexpand = \"v\"\nwhen_command_exists = [{}]\n",
+            cmds.join(", ")
+        );
+        assert!(
+            parse_config(&toml).is_ok(),
+            "must accept when_command_exists with exactly 64 entries"
         );
     }
 }
