@@ -3,9 +3,38 @@ use std::path::PathBuf;
 use crate::config::xdg_config_home;
 use crate::shell::{bash_quote_string, lua_quote_string, nu_quote_string, pwsh_quote_string, Shell};
 
+/// Returns true if `c` is a Unicode visual-deception character that should be
+/// dropped from a path before embedding it in a shell script.
+///
+/// These characters are invisible or reverse display order in most terminals and
+/// editors, making a `source` path look different from its actual byte content.
+/// Matching the same set used by `doctor.rs` and `main.rs`.
+fn is_deceptive_unicode_path(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}'                    // Soft Hyphen
+        | '\u{034F}'                  // Combining Grapheme Joiner
+        | '\u{061C}'                  // Arabic Letter Mark
+        | '\u{115F}'..='\u{1160}'     // Hangul fillers
+        | '\u{17B4}'..='\u{17B5}'     // Khmer invisible vowels
+        | '\u{180B}'..='\u{180F}'     // Mongolian free variation selectors
+        | '\u{200B}'..='\u{200F}'     // Zero-width space/non-joiner/joiner/marks
+        | '\u{202A}'..='\u{202E}'     // Bidirectional formatting (includes RLO U+202E)
+        | '\u{2060}'..='\u{206F}'     // Word joiner, invisible operators, bidi isolates
+        | '\u{3164}'                  // Hangul filler
+        | '\u{FE00}'..='\u{FE0F}'     // Variation selectors
+        | '\u{FEFF}'                  // BOM / zero-width no-break space
+        | '\u{FFA0}'                  // Halfwidth Hangul filler
+        | '\u{FFF9}'..='\u{FFFB}'     // Interlinear annotation characters
+        | '\u{E0000}'..='\u{E007F}'   // Tags block
+    )
+}
+
 /// Quote a filesystem path for embedding in a Nu shell string literal.
 /// Uses Nu double-quoted string syntax: escapes `\` and `"`.
 /// Unlike `nu_quote_string`, this does NOT add the `^` external-command prefix.
+///
+/// Unicode visual-deception characters (RLO, BOM, ZWSP, etc.) are dropped so the
+/// displayed `source` path in env.nu matches its actual byte content.
 fn nu_quote_path(path: &str) -> String {
     let mut out = String::from("\"");
     for ch in path.chars() {
@@ -21,6 +50,7 @@ fn nu_quote_path(path: &str) -> String {
             '\0' | '\x7f' => {} // NUL and DEL — drop
             c if c.is_ascii_control() => {} // remaining C0 control chars — drop
             '\u{0085}' | '\u{2028}' | '\u{2029}' => {} // Unicode line/paragraph separators — drop
+            c if is_deceptive_unicode_path(c) => {} // Unicode visual-deception chars — drop
             _ => out.push(ch),
         }
     }
@@ -313,6 +343,54 @@ mod tests {
                 ch as u32
             );
         }
+    }
+
+    // ─── nu_quote_path: Unicode visual-deception characters ──────────────────
+    //
+    // nu_quote_path embeds the XDG_CONFIG_HOME path into the `source "..."` line
+    // written to env.nu.  If XDG_CONFIG_HOME contains Unicode visual-deception
+    // characters (RLO, BOM, ZWSP, etc.), the displayed `source` path would appear
+    // different from its actual content, potentially deceiving the user into
+    // thinking a safe path is being sourced.  These characters must be dropped.
+
+    #[test]
+    fn nu_quote_path_drops_rlo() {
+        // U+202E (Right-to-Left Override) reverses display order in the terminal.
+        let quoted = nu_quote_path("/home/user\u{202E}/.config");
+        assert!(
+            !quoted.contains('\u{202E}'),
+            "nu_quote_path must drop U+202E (RLO): {quoted:?}"
+        );
+    }
+
+    #[test]
+    fn nu_quote_path_drops_bom() {
+        // U+FEFF (BOM / zero-width no-break space) is invisible.
+        let quoted = nu_quote_path("/home/user\u{FEFF}/.config");
+        assert!(
+            !quoted.contains('\u{FEFF}'),
+            "nu_quote_path must drop U+FEFF (BOM): {quoted:?}"
+        );
+    }
+
+    #[test]
+    fn nu_quote_path_drops_zwsp() {
+        // U+200B (Zero-Width Space) is invisible.
+        let quoted = nu_quote_path("/home/user\u{200B}/.config");
+        assert!(
+            !quoted.contains('\u{200B}'),
+            "nu_quote_path must drop U+200B (ZWSP): {quoted:?}"
+        );
+    }
+
+    #[test]
+    fn nu_quote_path_preserves_non_deceptive_unicode() {
+        // Non-deceptive Unicode (e.g. Japanese path components) must pass through.
+        let quoted = nu_quote_path("/home/ユーザー/.config");
+        assert!(
+            quoted.contains("ユーザー"),
+            "nu_quote_path must preserve non-deceptive Unicode: {quoted:?}"
+        );
     }
 
     #[test]

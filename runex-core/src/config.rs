@@ -291,6 +291,32 @@ pwsh = "tab"
     }
 
     #[test]
+    fn parse_config_rejects_invalid_trigger_key() {
+        // TOML allows any string value for `trigger`, but only "space", "tab", and
+        // "alt-space" are valid TriggerKey variants. An unknown value must cause a parse
+        // error so the user gets an explicit message instead of silently falling back to
+        // a default binding they didn't request.
+        let toml = "version = 1\n[keybind]\ntrigger = \"invalid-key\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject unknown trigger key value 'invalid-key'"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_invalid_per_shell_keybind() {
+        // Per-shell keybind overrides must also be validated. An invalid value in
+        // `bash`, `zsh`, `pwsh`, or `nu` must be rejected.
+        for field in ["bash", "zsh", "pwsh", "nu"] {
+            let toml = format!("version = 1\n[keybind]\n{field} = \"unknown-keybind\"\n");
+            assert!(
+                parse_config(&toml).is_err(),
+                "must reject unknown keybind value for field '{field}'"
+            );
+        }
+    }
+
+    #[test]
     fn parse_missing_version_is_err() {
         let toml = r#"
 [[abbr]]

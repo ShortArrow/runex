@@ -265,29 +265,30 @@ fn nu_quote_string_embedded(value: &str) -> String {
     //   - keep \$ as \$ (do NOT turn the \ into \\, which would give \\$ = unsafe)
     //     Implemented by treating the two-char sequence \$ atomically.
     //
-    // Strategy: iterate the standalone string, and when we see '\' followed by '$',
+    // Strategy: iterate the standalone string as chars. When we see '\' followed by '$',
     // emit '\$' unchanged (the outer Nu parser interprets \$ as literal $).
     // All other '\' are doubled to \\.
+    //
+    // We use char iteration (not byte iteration) so that multi-byte UTF-8 sequences
+    // are preserved intact. Only ASCII characters ('\\', '"', '$') need special handling.
     let standalone = nu_quote_string(value);
-    let bytes = standalone.as_bytes();
-    let mut out = String::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'$' {
-            // \$ from nu_quote_string: keep as \$ so the outer Nu string sees \$
-            // (literal $, no interpolation).
-            out.push('\\');
-            out.push('$');
-            i += 2;
-        } else if bytes[i] == b'\\' {
-            out.push_str("\\\\");
-            i += 1;
-        } else if bytes[i] == b'"' {
-            out.push_str("\\\"");
-            i += 1;
-        } else {
-            out.push(bytes[i] as char);
-            i += 1;
+    let mut out = String::with_capacity(standalone.len() + 8);
+    let mut chars = standalone.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                if chars.peek() == Some(&'$') {
+                    // \$ from nu_quote_string: keep as \$ so the outer Nu string sees \$
+                    // (literal $, no interpolation).
+                    out.push('\\');
+                    out.push('$');
+                    chars.next(); // consume the '$'
+                } else {
+                    out.push_str("\\\\");
+                }
+            }
+            '"' => out.push_str("\\\""),
+            c => out.push(c),
         }
     }
     out
@@ -1196,6 +1197,27 @@ mod tests {
         assert!(!s.contains("\\u{0000}"), "NUL must be dropped, not embedded as \\u{{0000}}: {s:?}");
         assert!(!s.contains('\0'), "literal NUL must not appear: {s:?}");
         assert!(s.contains("runex"), "remaining chars must be preserved: {s:?}");
+    }
+
+    #[test]
+    fn nu_quote_string_embedded_preserves_non_ascii_unicode() {
+        // nu_quote_string_embedded processes the output of nu_quote_string byte-by-byte.
+        // If nu_quote_string passes through a non-ASCII character (e.g. U+00E9 = 'e' with accent),
+        // the embedded form must contain the same valid UTF-8 character, not corrupted bytes.
+        // This guards against the `bytes[i] as char` antipattern that produces garbage from
+        // multi-byte UTF-8 continuation bytes (e.g. 0xC3 → 'A\u0303' instead of 'a\u0301').
+        let input = "caf\u{00E9}"; // U+00E9 encodes as the two-byte sequence [0xC3, 0xA9] in UTF-8
+        let embedded = nu_quote_string_embedded(input);
+        // The embedded form must be valid UTF-8 (no split continuation bytes)
+        assert!(
+            std::str::from_utf8(embedded.as_bytes()).is_ok(),
+            "nu_quote_string_embedded must produce valid UTF-8: {embedded:?}"
+        );
+        // The non-ASCII character must survive intact
+        assert!(
+            embedded.contains('\u{00E9}'),
+            "nu_quote_string_embedded must preserve non-ASCII char U+00E9: {embedded:?}"
+        );
     }
 
     // --- pwsh_quote_string: backtick-concat safety ---

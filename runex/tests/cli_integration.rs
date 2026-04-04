@@ -1032,3 +1032,59 @@ fn export_unknown_shell_with_bel_in_name_does_not_inject_into_stderr() {
         "stderr must not contain raw BEL from shell name (terminal injection risk): {stderr:?}"
     );
 }
+
+/// export with an unknown shell containing U+202E (RIGHT-TO-LEFT OVERRIDE) must not
+/// echo the raw RLO into stderr. RLO reverses the visual display order of text, so
+/// "bash\u{202E}lve" would appear as "bash evil" in some terminals even though the
+/// byte content is different.
+#[test]
+fn export_unknown_shell_with_rlo_in_name_does_not_inject_into_stderr() {
+    let cfg = write_config("version = 1\n");
+    let evil_shell = "bash\u{202E}lve";
+    let (_, stderr, ok) = run(
+        &["export", evil_shell, "--bin=runex"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(!ok, "export with unknown shell must exit non-zero");
+    assert!(
+        !stderr.contains('\u{202E}'),
+        "stderr must not contain raw RLO U+202E from shell name: {stderr:?}"
+    );
+}
+
+/// export with an unknown shell containing U+FEFF (BOM / zero-width no-break space)
+/// must not echo the raw BOM into stderr.
+#[test]
+fn export_unknown_shell_with_bom_in_name_does_not_inject_into_stderr() {
+    let cfg = write_config("version = 1\n");
+    let evil_shell = "bash\u{FEFF}evil";
+    let (_, stderr, ok) = run(
+        &["export", evil_shell, "--bin=runex"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(!ok, "export with unknown shell must exit non-zero");
+    assert!(
+        !stderr.contains('\u{FEFF}'),
+        "stderr must not contain raw BOM U+FEFF from shell name: {stderr:?}"
+    );
+}
+
+/// export with an unknown shell containing U+200B (ZERO-WIDTH SPACE) must not
+/// echo the raw ZWSP into stderr.
+#[test]
+fn export_unknown_shell_with_zwsp_in_name_does_not_inject_into_stderr() {
+    let cfg = write_config("version = 1\n");
+    let evil_shell = "ba\u{200B}sh";
+    let (_, stderr, ok) = run(
+        &["export", evil_shell, "--bin=runex"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(!ok, "export with unknown shell must exit non-zero");
+    assert!(
+        !stderr.contains('\u{200B}'),
+        "stderr must not contain raw ZWSP U+200B from shell name: {stderr:?}"
+    );
+}

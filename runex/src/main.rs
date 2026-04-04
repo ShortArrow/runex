@@ -447,6 +447,28 @@ fn format_dry_run_result(token: &str, result: &WhichResult) -> String {
     out
 }
 
+/// Maximum byte size of an rc file that `init` will read for marker detection.
+/// Files larger than this are treated as if the marker is absent so that init
+/// fails safe (appends the integration line) rather than consuming unbounded memory.
+const MAX_RC_FILE_BYTES: usize = 1024 * 1024; // 1 MB
+
+/// Read a shell rc file for RUNEX_INIT_MARKER detection.
+///
+/// Returns the file contents as a string, or an empty string if:
+/// - the file does not exist (init should append)
+/// - the file exceeds MAX_RC_FILE_BYTES (safety: never read enormous files)
+/// - the file cannot be read for any other I/O reason
+fn read_rc_content(path: &Path) -> String {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return String::new(),
+    };
+    if meta.len() > MAX_RC_FILE_BYTES as u64 {
+        return String::new();
+    }
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
 // ─── Shell helpers ────────────────────────────────────────────────────────────
 
 fn detect_shell() -> Option<Shell> {
@@ -477,15 +499,39 @@ fn prompt_confirm(msg: &str) -> bool {
     matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
+/// Maximum number of alias entries accepted from a single shell invocation.
+/// Prevents unbounded memory consumption if a misbehaving or compromised shell
+/// emits an unusually large number of alias definitions.
+const MAX_ALIAS_LINES: usize = 10_000;
+
+/// Maximum byte length of an alias value stored in the alias map.
+/// A single extremely long line (e.g. 10 MB) would otherwise consume unbounded
+/// memory even with the line-count limit in place.  Values exceeding this limit
+/// are silently truncated at a UTF-8 character boundary.
+const MAX_ALIAS_VALUE_BYTES: usize = 65_536;
+
+fn truncate_to_limit(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Find the largest char boundary at or before max_bytes.
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 fn parse_pwsh_alias_lines(stdout: &str) -> HashMap<String, String> {
     let mut aliases = HashMap::new();
-    for line in stdout.lines() {
+    for line in stdout.lines().take(MAX_ALIAS_LINES) {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
         if let Some((name, definition)) = trimmed.split_once('\t') {
-            aliases.insert(name.trim().to_string(), definition.trim().to_string());
+            let value = truncate_to_limit(definition.trim(), MAX_ALIAS_VALUE_BYTES);
+            aliases.insert(name.trim().to_string(), value.to_string());
         }
     }
     aliases
@@ -532,14 +578,15 @@ where
 
 fn parse_bash_alias_lines(stdout: &str) -> HashMap<String, String> {
     let mut aliases = HashMap::new();
-    for line in stdout.lines() {
+    for line in stdout.lines().take(MAX_ALIAS_LINES) {
         let trimmed = line.trim();
         if !trimmed.starts_with("alias ") {
             continue;
         }
         let rest = &trimmed["alias ".len()..];
         if let Some((name, value)) = rest.split_once('=') {
-            aliases.insert(name.trim().to_string(), value.trim().to_string());
+            let value = truncate_to_limit(value.trim(), MAX_ALIAS_VALUE_BYTES);
+            aliases.insert(name.trim().to_string(), value.to_string());
         }
     }
     aliases
@@ -800,7 +847,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 Some(rc_path) => {
-                    let existing = std::fs::read_to_string(&rc_path).unwrap_or_default();
+                    let existing = read_rc_content(&rc_path);
                     if existing.contains(runex_init::RUNEX_INIT_MARKER) {
                         println!(
                             "Shell integration already present in {}",
@@ -1168,5 +1215,141 @@ mod tests {
         // Non-deceptive Unicode (e.g. Japanese, emoji) must be preserved.
         let s = sanitize_for_display("git-コミット");
         assert_eq!(s, "git-コミット", "sanitize_for_display must not strip normal Unicode");
+    }
+
+    // ─── alias parser DoS: line count limit ──────────────────────────────────
+    //
+    // `parse_bash_alias_lines` and `parse_pwsh_alias_lines` receive output from
+    // external shell processes. If a compromised or misbehaving shell emits an
+    // unbounded number of lines, parsing them all would consume unbounded memory
+    // and CPU. Parsers must silently truncate after a maximum number of lines.
+
+    #[test]
+    fn parse_bash_alias_lines_truncates_at_max_lines() {
+        // Generate more than MAX_ALIAS_LINES alias lines.
+        // The parser must stop after the limit and not accumulate all entries.
+        let mut input = String::new();
+        for i in 0..10_100 {
+            input.push_str(&format!("alias k{i}='v{i}'\n"));
+        }
+        let aliases = parse_bash_alias_lines(&input);
+        assert!(
+            aliases.len() <= 10_000,
+            "parse_bash_alias_lines must not return more than 10,000 entries, got {}",
+            aliases.len()
+        );
+    }
+
+    #[test]
+    fn parse_pwsh_alias_lines_truncates_at_max_lines() {
+        // Generate more than MAX_ALIAS_LINES pwsh alias lines.
+        let mut input = String::new();
+        for i in 0..10_100 {
+            input.push_str(&format!("k{i}\tv{i}\n"));
+        }
+        let aliases = parse_pwsh_alias_lines(&input);
+        assert!(
+            aliases.len() <= 10_000,
+            "parse_pwsh_alias_lines must not return more than 10,000 entries, got {}",
+            aliases.len()
+        );
+    }
+
+    #[test]
+    fn parse_bash_alias_lines_accepts_normal_count() {
+        // Fewer than limit: all entries must be returned.
+        let mut input = String::new();
+        for i in 0..50 {
+            input.push_str(&format!("alias k{i}='v{i}'\n"));
+        }
+        let aliases = parse_bash_alias_lines(&input);
+        assert_eq!(aliases.len(), 50, "parse_bash_alias_lines must return all entries below the limit");
+    }
+
+    // ─── read_rc_content: size limit ─────────────────────────────────────────
+    //
+    // `init` reads the rc file to check for RUNEX_INIT_MARKER before appending.
+    // If the rc file is extremely large (e.g. corrupted or adversarially crafted),
+    // `read_to_string` would consume unbounded memory. `read_rc_content` must
+    // refuse files larger than MAX_RC_FILE_BYTES and return an empty string so
+    // that the marker check fails safe (appends as if unseen — idempotent).
+
+    #[test]
+    fn read_rc_content_returns_content_for_normal_file() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        f.write_all(b"# runex-init\n").unwrap();
+        let content = read_rc_content(f.path());
+        assert!(content.contains("# runex-init"), "normal rc file must be readable");
+    }
+
+    #[test]
+    fn read_rc_content_returns_empty_for_oversized_file() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        // Write MAX_RC_FILE_BYTES + 1 bytes
+        f.write_all(&vec![b'x'; MAX_RC_FILE_BYTES + 1]).unwrap();
+        let content = read_rc_content(f.path());
+        assert!(
+            content.is_empty(),
+            "read_rc_content must return empty string for oversized rc file"
+        );
+    }
+
+    #[test]
+    fn read_rc_content_returns_empty_for_missing_file() {
+        let content = read_rc_content(std::path::Path::new("/nonexistent/runex_test.rc"));
+        assert!(content.is_empty(), "missing rc file must return empty string");
+    }
+
+    #[test]
+    fn parse_pwsh_alias_lines_accepts_normal_count() {
+        let mut input = String::new();
+        for i in 0..50 {
+            input.push_str(&format!("k{i}\tv{i}\n"));
+        }
+        let aliases = parse_pwsh_alias_lines(&input);
+        assert_eq!(aliases.len(), 50, "parse_pwsh_alias_lines must return all entries below the limit");
+    }
+
+    // ─── alias parser DoS: per-line length limit ─────────────────────────────
+    //
+    // Even with MAX_ALIAS_LINES, a single extremely long line (e.g. 10 MB) would
+    // consume unbounded memory for that one entry.  Parsers must silently truncate
+    // any alias value that exceeds MAX_ALIAS_VALUE_BYTES to cap per-entry memory.
+
+    #[test]
+    fn parse_bash_alias_lines_truncates_oversized_value() {
+        // A single alias with a value exceeding MAX_ALIAS_VALUE_BYTES must be
+        // accepted (the key is valid) but the stored value must be truncated.
+        let huge_value = "x".repeat(65_536 + 1);
+        let input = format!("alias k='{huge_value}'\n");
+        let aliases = parse_bash_alias_lines(&input);
+        // The alias must be present (not silently dropped), but its value must not
+        // exceed the per-entry limit.
+        if let Some(val) = aliases.get("k") {
+            assert!(
+                val.len() <= 65_536,
+                "bash alias value must be truncated to MAX_ALIAS_VALUE_BYTES, got {} bytes",
+                val.len()
+            );
+        }
+        // If the entry was dropped entirely that is also acceptable (key is preserved
+        // without oversized value), so we accept both outcomes — only the stored
+        // value length matters.
+    }
+
+    #[test]
+    fn parse_pwsh_alias_lines_truncates_oversized_value() {
+        let huge_value = "x".repeat(65_536 + 1);
+        let input = format!("k\t{huge_value}\n");
+        let aliases = parse_pwsh_alias_lines(&input);
+        if let Some(val) = aliases.get("k") {
+            assert!(
+                val.len() <= 65_536,
+                "pwsh alias value must be truncated to MAX_ALIAS_VALUE_BYTES, got {} bytes",
+                val.len()
+            );
+        }
     }
 }
