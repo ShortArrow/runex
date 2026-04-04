@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::model::{Config, TriggerKey};
+use crate::sanitize::is_unsafe_for_display;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shell {
@@ -48,34 +49,6 @@ impl fmt::Display for ShellParseError {
             safe
         )
     }
-}
-
-/// Returns true if `c` should be removed before printing to a terminal.
-///
-/// Removes ASCII control characters (U+0000-U+001F, U+007F), Unicode line/paragraph
-/// separators, and Unicode visual-deception characters (invisible chars, bidirectional
-/// overrides, BOM, zero-width chars) that can make displayed text misleading.
-fn is_unsafe_for_display(c: char) -> bool {
-    c.is_ascii_control()
-        || matches!(c,
-            '\u{0085}'                  // NEL (Next Line)
-            | '\u{00AD}'               // Soft Hyphen
-            | '\u{034F}'               // Combining Grapheme Joiner
-            | '\u{061C}'               // Arabic Letter Mark
-            | '\u{115F}'..='\u{1160}' // Hangul fillers
-            | '\u{17B4}'..='\u{17B5}' // Khmer invisible vowels
-            | '\u{180B}'..='\u{180F}' // Mongolian free variation selectors
-            | '\u{200B}'..='\u{200F}' // Zero-width space/non-joiner/joiner/marks
-            | '\u{202A}'..='\u{202E}' // Bidirectional formatting (includes RLO U+202E)
-            | '\u{2028}'..='\u{2029}' // Line/Paragraph separator
-            | '\u{2060}'..='\u{206F}' // Word joiner, invisible operators, bidi isolates
-            | '\u{3164}'               // Hangul filler
-            | '\u{FE00}'..='\u{FE0F}' // Variation selectors
-            | '\u{FEFF}'               // BOM / zero-width no-break space
-            | '\u{FFA0}'               // Halfwidth Hangul filler
-            | '\u{FFF9}'..='\u{FFFB}' // Interlinear annotation characters
-            | '\u{E0000}'..='\u{E007F}' // Tags block
-        )
 }
 
 impl std::error::Error for ShellParseError {}

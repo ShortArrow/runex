@@ -4,6 +4,7 @@ use runex_core::doctor::{self, Check, CheckStatus, DiagResult};
 use runex_core::expand::{self, WhichResult};
 use runex_core::init as runex_init;
 use runex_core::model::{Abbr, Config, ExpandResult};
+use runex_core::sanitize::sanitize_for_display;
 use runex_core::shell::Shell;
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
@@ -157,45 +158,6 @@ fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config
     let path = default_config_path().unwrap_or_default();
     let config = load_config(&path).ok();
     (path, config)
-}
-
-/// Returns true if `c` should be removed before printing to a terminal.
-///
-/// Removes:
-/// - ASCII control characters (U+0000–U+001F, U+007F): terminal escape sequences,
-///   cursor movement, screen clearing, etc.
-/// - Unicode line/paragraph separators (U+0085, U+2028, U+2029): treated as newlines
-///   by some runtimes, can cause unexpected line breaks.
-/// - Unicode visual-deception characters: invisible characters, zero-width spaces,
-///   bidirectional overrides (e.g. U+202E reverses display order), BOM (U+FEFF), etc.
-///   These can make displayed text look different from its actual content.
-fn is_unsafe_for_display(c: char) -> bool {
-    c.is_ascii_control()
-        || matches!(c,
-            '\u{0085}'                  // NEL (Next Line)
-            | '\u{00AD}'               // Soft Hyphen (invisible in many renderers)
-            | '\u{034F}'               // Combining Grapheme Joiner
-            | '\u{061C}'               // Arabic Letter Mark
-            | '\u{115F}'..='\u{1160}' // Hangul fillers
-            | '\u{17B4}'..='\u{17B5}' // Khmer invisible vowels
-            | '\u{180B}'..='\u{180F}' // Mongolian free variation selectors
-            | '\u{200B}'..='\u{200F}' // Zero-width space/non-joiner/joiner/marks
-            | '\u{202A}'..='\u{202E}' // Bidirectional formatting (LRE, RLE, PDF, LRO, RLO)
-            | '\u{2028}'..='\u{2029}' // Line/Paragraph separator
-            | '\u{2060}'..='\u{206F}' // Word joiner, invisible operators, bidi isolates
-            | '\u{3164}'               // Hangul filler
-            | '\u{FE00}'..='\u{FE0F}' // Variation selectors
-            | '\u{FEFF}'               // BOM / zero-width no-break space
-            | '\u{FFA0}'               // Halfwidth Hangul filler
-            | '\u{FFF9}'..='\u{FFFB}' // Interlinear annotation characters
-            | '\u{E0000}'..='\u{E007F}' // Tags block (invisible ASCII lookalikes)
-        )
-}
-
-/// Strip characters that are unsafe for terminal display before embedding
-/// user-controlled data in strings printed to a terminal.
-fn sanitize_for_display(s: &str) -> String {
-    s.chars().filter(|&c| !is_unsafe_for_display(c)).collect()
 }
 
 // ─── Command existence resolver ───────────────────────────────────────────────
@@ -1373,52 +1335,6 @@ mod tests {
         let s = format_dry_run_result("tok", &result);
         assert!(!s.contains('\x1b'), "format_dry_run_result: ESC must be stripped: {s:?}");
         assert!(!s.contains('\x07'), "format_dry_run_result: BEL must be stripped: {s:?}");
-    }
-
-    // ─── sanitize_for_display: Unicode visual-deception chars ────────────────
-    //
-    // sanitize_for_display is applied to external data before printing to the terminal
-    // (alias definitions from bash/pwsh output, config paths from the OS, token values).
-    // U+202E (Right-to-Left Override) and similar directional characters can reverse the
-    // visual order of text in the terminal, making an alias like "evil" look like "live".
-    // U+FEFF (BOM) is invisible. These must be stripped by sanitize_for_display.
-
-    #[test]
-    fn sanitize_for_display_strips_rlo() {
-        // U+202E reverses character display order in a terminal.
-        // An alias definition containing it could make "evil" look like "live".
-        let s = sanitize_for_display("run\u{202e}ex");
-        assert!(
-            !s.contains('\u{202e}'),
-            "sanitize_for_display must strip U+202E (Right-to-Left Override): {s:?}"
-        );
-    }
-
-    #[test]
-    fn sanitize_for_display_strips_bom() {
-        // U+FEFF (BOM) is invisible in most terminals.
-        let s = sanitize_for_display("run\u{FEFF}ex");
-        assert!(
-            !s.contains('\u{FEFF}'),
-            "sanitize_for_display must strip U+FEFF (BOM): {s:?}"
-        );
-    }
-
-    #[test]
-    fn sanitize_for_display_strips_zwsp() {
-        // U+200B (Zero-Width Space) is invisible, could hide content in displayed strings.
-        let s = sanitize_for_display("run\u{200B}ex");
-        assert!(
-            !s.contains('\u{200B}'),
-            "sanitize_for_display must strip U+200B (Zero-Width Space): {s:?}"
-        );
-    }
-
-    #[test]
-    fn sanitize_for_display_preserves_normal_unicode() {
-        // Non-deceptive Unicode (e.g. Japanese, emoji) must be preserved.
-        let s = sanitize_for_display("git-コミット");
-        assert_eq!(s, "git-コミット", "sanitize_for_display must not strip normal Unicode");
     }
 
     // ─── alias parser DoS: line count limit ──────────────────────────────────

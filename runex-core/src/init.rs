@@ -1,33 +1,8 @@
 use std::path::PathBuf;
 
 use crate::config::xdg_config_home;
+use crate::sanitize::is_deceptive_unicode;
 use crate::shell::{bash_quote_string, lua_quote_string, nu_quote_string, pwsh_quote_string, Shell};
-
-/// Returns true if `c` is a Unicode visual-deception character that should be
-/// dropped from a path before embedding it in a shell script.
-///
-/// These characters are invisible or reverse display order in most terminals and
-/// editors, making a `source` path look different from its actual byte content.
-/// Matching the same set used by `doctor.rs` and `main.rs`.
-fn is_deceptive_unicode_path(c: char) -> bool {
-    matches!(c,
-        '\u{00AD}'                    // Soft Hyphen
-        | '\u{034F}'                  // Combining Grapheme Joiner
-        | '\u{061C}'                  // Arabic Letter Mark
-        | '\u{115F}'..='\u{1160}'     // Hangul fillers
-        | '\u{17B4}'..='\u{17B5}'     // Khmer invisible vowels
-        | '\u{180B}'..='\u{180F}'     // Mongolian free variation selectors
-        | '\u{200B}'..='\u{200F}'     // Zero-width space/non-joiner/joiner/marks
-        | '\u{202A}'..='\u{202E}'     // Bidirectional formatting (includes RLO U+202E)
-        | '\u{2060}'..='\u{206F}'     // Word joiner, invisible operators, bidi isolates
-        | '\u{3164}'                  // Hangul filler
-        | '\u{FE00}'..='\u{FE0F}'     // Variation selectors
-        | '\u{FEFF}'                  // BOM / zero-width no-break space
-        | '\u{FFA0}'                  // Halfwidth Hangul filler
-        | '\u{FFF9}'..='\u{FFFB}'     // Interlinear annotation characters
-        | '\u{E0000}'..='\u{E007F}'   // Tags block
-    )
-}
 
 /// Quote a filesystem path for embedding in a Nu shell string literal.
 /// Uses Nu double-quoted string syntax: escapes `\` and `"`.
@@ -50,7 +25,7 @@ fn nu_quote_path(path: &str) -> String {
             '\0' | '\x7f' => {} // NUL and DEL — drop
             c if c.is_ascii_control() => {} // remaining C0 control chars — drop
             '\u{0085}' | '\u{2028}' | '\u{2029}' => {} // Unicode line/paragraph separators — drop
-            c if is_deceptive_unicode_path(c) => {} // Unicode visual-deception chars — drop
+            c if is_deceptive_unicode(c) => {} // Unicode visual-deception chars — drop
             _ => out.push(ch),
         }
     }

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::model::Config;
+use crate::sanitize::is_deceptive_unicode;
 
 const MAX_CONFIG_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 const MAX_ABBR_RULES: usize = 10_000;
@@ -63,35 +64,6 @@ pub enum ConfigError {
     ExpandEmpty(usize),
     #[error("abbr rule #{0}: expand contains only whitespace (a whitespace-only expansion is almost certainly a config mistake)")]
     ExpandWhitespaceOnly(usize),
-}
-
-/// Returns true if the character is a Unicode visual-deception character:
-/// invisible characters, zero-width characters, directional overrides, BOM,
-/// or other code points that cause a visible string to differ from its byte
-/// representation in ways invisible to users.
-///
-/// These characters are dangerous in config fields because they can make a key
-/// look like a well-known command (e.g. "ls") while actually being a different
-/// string (e.g. "\u{FEFF}ls"), causing rules that never match or expansions that
-/// display differently than their actual content.
-fn is_deceptive_unicode(c: char) -> bool {
-    matches!(c,
-        '\u{00AD}'                    // Soft Hyphen — invisible in many renderers
-        | '\u{034F}'                  // Combining Grapheme Joiner
-        | '\u{061C}'                  // Arabic Letter Mark
-        | '\u{115F}'..='\u{1160}'     // Hangul fillers (look like spaces)
-        | '\u{17B4}'..='\u{17B5}'     // Khmer invisible vowels
-        | '\u{180B}'..='\u{180F}'     // Mongolian free variation selectors
-        | '\u{200B}'..='\u{200F}'     // Zero-width space/non-joiner/joiner/marks
-        | '\u{202A}'..='\u{202E}'     // Bidirectional formatting (LRE, RLE, PDF, LRO, RLO)
-        | '\u{2060}'..='\u{206F}'     // Word joiner, invisible operators, bidi isolates
-        | '\u{3164}'                  // Hangul filler (looks like a space)
-        | '\u{FE00}'..='\u{FE0F}'     // Variation selectors (change glyph appearance)
-        | '\u{FEFF}'                  // BOM / zero-width no-break space
-        | '\u{FFA0}'                  // Halfwidth Hangul filler
-        | '\u{FFF9}'..='\u{FFFB}'     // Interlinear annotation characters
-        | '\u{E0000}'..='\u{E007F}'   // Tags block (invisible ASCII lookalikes)
-    )
 }
 
 /// Parse a TOML string into Config.

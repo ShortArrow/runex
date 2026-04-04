@@ -1,41 +1,8 @@
 use std::path::Path;
 
 use crate::model::Config;
+use crate::sanitize::sanitize_for_display;
 use serde::Serialize;
-
-/// Returns true if `c` should be removed before printing to a terminal.
-///
-/// Removes ASCII control characters, Unicode line/paragraph separators, and
-/// Unicode visual-deception characters (invisible chars, bidirectional overrides,
-/// BOM, zero-width chars) that can make displayed text misleading.
-fn is_unsafe_for_display(c: char) -> bool {
-    c.is_ascii_control()
-        || matches!(c,
-            '\u{0085}'                  // NEL (Next Line)
-            | '\u{00AD}'               // Soft Hyphen
-            | '\u{034F}'               // Combining Grapheme Joiner
-            | '\u{061C}'               // Arabic Letter Mark
-            | '\u{115F}'..='\u{1160}' // Hangul fillers
-            | '\u{17B4}'..='\u{17B5}' // Khmer invisible vowels
-            | '\u{180B}'..='\u{180F}' // Mongolian free variation selectors
-            | '\u{200B}'..='\u{200F}' // Zero-width space/non-joiner/joiner/marks
-            | '\u{202A}'..='\u{202E}' // Bidirectional formatting (includes RLO U+202E)
-            | '\u{2028}'..='\u{2029}' // Line/Paragraph separator
-            | '\u{2060}'..='\u{206F}' // Word joiner, invisible operators, bidi isolates
-            | '\u{3164}'               // Hangul filler
-            | '\u{FE00}'..='\u{FE0F}' // Variation selectors
-            | '\u{FEFF}'               // BOM / zero-width no-break space
-            | '\u{FFA0}'               // Halfwidth Hangul filler
-            | '\u{FFF9}'..='\u{FFFB}' // Interlinear annotation characters
-            | '\u{E0000}'..='\u{E007F}' // Tags block
-        )
-}
-
-/// Remove characters unsafe for terminal display from a string before embedding
-/// it in human-readable detail messages that may be printed to a terminal.
-fn sanitize_for_display(s: &str) -> String {
-    s.chars().filter(|&c| !is_unsafe_for_display(c)).collect()
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
