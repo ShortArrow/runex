@@ -98,6 +98,15 @@ Any value that originates from user-controlled data (config fields, command name
 
 ## Releasing
 
+### Merge develop → main
+
+Version bumps and publishing happen on `main`. Before bumping, merge `develop`:
+
+```bash
+git checkout main
+git merge develop
+```
+
 ### Version bump
 
 Update the version in 3 places:
