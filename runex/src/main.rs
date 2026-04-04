@@ -23,6 +23,15 @@ const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_RED: &str = "\x1b[31m";
 const GIT_COMMIT: Option<&str> = option_env!("RUNEX_GIT_COMMIT");
 
+/// Interval between spinner frame updates and child-process liveness polls.
+const POLL_INTERVAL_MILLIS: u64 = 100;
+
+/// Column width for the check status tag in `doctor` output.
+const CHECK_TAG_WIDTH: usize = 8;
+
+/// Maximum byte length of the `--bin` argument passed to `export`.
+const MAX_BIN_LEN: usize = 255;
+
 struct Spinner {
     done: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
@@ -46,7 +55,7 @@ impl Spinner {
                 eprint!("\r{} {}", frames[i % frames.len()], message);
                 let _ = io::stderr().flush();
                 i += 1;
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(POLL_INTERVAL_MILLIS));
             }
             eprint!("\r\x1b[2K");
             let _ = io::stderr().flush();
@@ -199,7 +208,7 @@ fn format_check_tag(status: &CheckStatus) -> String {
 
 fn format_check_line(check: &Check) -> String {
     format!(
-        "{:>8}  {}: {}",
+        "{:>CHECK_TAG_WIDTH$}  {}: {}",
         format_check_tag(&check.status),
         check.name,
         check.detail
@@ -583,20 +592,67 @@ fn parse_pwsh_alias_lines(stdout: &str) -> HashMap<String, String> {
     aliases
 }
 
-/// Run a command with a timeout.  If the child does not exit within
-/// `timeout_secs` seconds it is killed and `None` is returned.
-/// Returns `Some(stdout bytes)` on success (exit 0), `None` otherwise.
+/// Spawn a thread that drains `reader` into a buffer capped at `max_bytes + 1`.
 ///
-/// Uses a reader thread to collect stdout while the main thread enforces
-/// the deadline.  The child's stdin is closed immediately so that the child
-/// is not blocked waiting for input.
+/// Reading one byte beyond the limit acts as an overflow sentinel: if the returned
+/// buffer's length exceeds `max_bytes`, the caller should treat the output as
+/// truncated and discard it.
+fn spawn_stdout_reader(
+    reader: impl io::Read + Send + 'static,
+    max_bytes: usize,
+) -> thread::JoinHandle<Vec<u8>> {
+    use std::io::Read;
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = reader.take(max_bytes as u64 + 1).read_to_end(&mut buf);
+        buf
+    })
+}
+
+/// Poll `child` until it exits or `timeout` elapses.
+///
+/// On timeout, sends SIGKILL to the entire process group so that grandchildren
+/// (e.g. a `sleep` spawned by the child) cannot keep the stdout pipe open.
+/// Returns `None` if the child was killed before it exited naturally.
+fn poll_child_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Option<std::process::ExitStatus> {
+    let poll_interval = Duration::from_millis(POLL_INTERVAL_MILLIS);
+    let mut elapsed = Duration::ZERO;
+    loop {
+        match child.try_wait() {
+            Ok(Some(s)) => return Some(s),
+            Ok(None) => {
+                if elapsed >= timeout {
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(-(child.id() as i32), libc::SIGKILL);
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                thread::sleep(poll_interval);
+                elapsed += poll_interval;
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Run a command with a timeout.
+///
+/// Returns `Some(stdout bytes)` when the child exits successfully within
+/// `timeout_secs` seconds and its output fits within [`MAX_SUBPROCESS_OUTPUT_BYTES`].
+/// Returns `None` if the child times out, exits with a non-zero status, or produces
+/// oversized output.
 fn run_with_timeout(
     program: &str,
     args: &[&str],
     env_path: Option<&str>,
     timeout_secs: u64,
 ) -> Option<Vec<u8>> {
-    use std::io::Read;
     #[cfg(unix)]
     use std::os::unix::process::CommandExt;
 
@@ -608,59 +664,18 @@ fn run_with_timeout(
     if let Some(path) = env_path {
         cmd.env("PATH", path);
     }
-    // Place the child in its own process group so that we can send SIGKILL
-    // to the entire group (including grandchildren like `sleep`) without
-    // affecting the current process group.
     #[cfg(unix)]
     cmd.process_group(0);
 
     let mut child = cmd.spawn().ok()?;
-
-    // Move the stdout pipe into a reader thread so that `wait()` below does
-    // not block on pipe drainage.  Cap the read at MAX_SUBPROCESS_OUTPUT_BYTES
-    // to prevent unbounded heap allocation from a misbehaving subprocess.
     let stdout_pipe = child.stdout.take()?;
-    let reader_handle = thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe
-            .take(MAX_SUBPROCESS_OUTPUT_BYTES as u64 + 1)
-            .read_to_end(&mut buf);
-        buf
-    });
-
-    // Poll for child exit up to the deadline.
-    let deadline = Duration::from_secs(timeout_secs);
-    let poll_interval = Duration::from_millis(100);
-    let mut elapsed = Duration::ZERO;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break Some(s),
-            Ok(None) => {
-                if elapsed >= deadline {
-                    // Timed out: kill the child and all its descendants by
-                    // sending SIGKILL to the process group.
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(-(child.id() as i32), libc::SIGKILL);
-                    }
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break None;
-                }
-                thread::sleep(poll_interval);
-                elapsed += poll_interval;
-            }
-            Err(_) => break None,
-        }
-    };
-
+    let reader_handle = spawn_stdout_reader(stdout_pipe, MAX_SUBPROCESS_OUTPUT_BYTES);
+    let status = poll_child_with_timeout(&mut child, Duration::from_secs(timeout_secs));
     let stdout = reader_handle.join().unwrap_or_default();
 
-    // Reject output that hit the cap (read MAX+1 bytes → oversized).
     if stdout.len() > MAX_SUBPROCESS_OUTPUT_BYTES {
         return None;
     }
-
     let status = status?;
     if !status.success() {
         return None;
@@ -810,156 +825,296 @@ fn add_shell_alias_conflicts(result: &mut DiagResult, config: Option<&Config>) {
         ));
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// ─── Command handlers ─────────────────────────────────────────────────────────
 
 /// Maximum byte length accepted for `--token` (expand) and `which <token>`.
 /// Tokens longer than any possible abbr key (MAX_KEY_BYTES = 1024 in config.rs)
 /// can never match and would cause needless memory allocation in sanitize_for_display.
 const MAX_TOKEN_BYTES: usize = 1_024;
 
+type CmdResult = Result<(), Box<dyn std::error::Error>>;
+
+fn handle_version(json: bool) -> CmdResult {
+    if json {
+        #[derive(serde::Serialize)]
+        struct VersionJson<'a> {
+            version: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            commit: Option<&'a str>,
+        }
+        let v = VersionJson {
+            version: env!("CARGO_PKG_VERSION"),
+            commit: GIT_COMMIT.filter(|s| !s.is_empty()),
+        };
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    } else {
+        println!("{}", version_line());
+    }
+    Ok(())
+}
+
+fn handle_list(config: &Config, json: bool) -> CmdResult {
+    if json {
+        println!("{}", serde_json::to_string_pretty(&config.abbr)?);
+    } else {
+        for (key, exp) in expand::list(config) {
+            println!("{}\t{}", sanitize_for_display(key), sanitize_for_display(exp));
+        }
+    }
+    Ok(())
+}
+
+fn handle_which(
+    token: String,
+    config: &Config,
+    command_exists: &dyn Fn(&str) -> bool,
+    json: bool,
+    why: bool,
+) -> CmdResult {
+    if token.len() > MAX_TOKEN_BYTES {
+        eprintln!(
+            "error: token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
+            token.len()
+        );
+        std::process::exit(1);
+    }
+    let result = expand::which_abbr(config, &token, command_exists);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
+    } else {
+        println!("{}", format_which_result(&result, why));
+    }
+    Ok(())
+}
+
+fn handle_expand(
+    token: String,
+    config: &Config,
+    command_exists: &dyn Fn(&str) -> bool,
+    json: bool,
+    dry_run: bool,
+) -> CmdResult {
+    if token.len() > MAX_TOKEN_BYTES {
+        eprintln!(
+            "error: --token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
+            token.len()
+        );
+        std::process::exit(1);
+    }
+    if dry_run {
+        let result = expand::which_abbr(config, &token, command_exists);
+        if json {
+            println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
+        } else {
+            print!("{}", format_dry_run_result(&token, &result));
+        }
+    } else {
+        let result = expand::expand(config, &token, command_exists);
+        if json {
+            let v = match &result {
+                ExpandResult::Expanded(s) => serde_json::json!({
+                    "result": "expanded",
+                    "token": token,
+                    "expansion": s,
+                }),
+                ExpandResult::PassThrough(s) => serde_json::json!({
+                    "result": "pass_through",
+                    "token": s,
+                }),
+            };
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        } else {
+            match result {
+                ExpandResult::Expanded(s) => print!("{s}"),
+                ExpandResult::PassThrough(s) => print!("{s}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate and parse the `--bin` argument for `export`.
+///
+/// Rejects values that are empty, whitespace-only, too long, contain control
+/// characters, or contain non-printable-ASCII characters.  Only printable ASCII
+/// is allowed to prevent Unicode homoglyphs and bidirectional overrides from
+/// being silently embedded in generated shell scripts.
+fn validate_bin(bin: &str) {
+    if bin.trim().is_empty() {
+        eprintln!("error: --bin must not be empty or whitespace-only");
+        std::process::exit(1);
+    }
+    if bin.len() > MAX_BIN_LEN {
+        eprintln!("error: --bin is too long ({} bytes); maximum is {MAX_BIN_LEN}", bin.len());
+        std::process::exit(1);
+    }
+    if bin.chars().any(|c| c.is_ascii_control() || c == '\u{0085}' || c == '\u{2028}' || c == '\u{2029}') {
+        eprintln!("error: --bin contains an invalid control character");
+        std::process::exit(1);
+    }
+    if bin.chars().any(|c| !c.is_ascii() || !c.is_ascii_graphic()) {
+        eprintln!("error: --bin must contain only printable ASCII characters");
+        std::process::exit(1);
+    }
+}
+
+fn handle_export(
+    shell: String,
+    bin: String,
+    config_flag: Option<&Path>,
+) -> CmdResult {
+    validate_bin(&bin);
+    let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
+        Box::<dyn std::error::Error>::from(e.to_string())
+    })?;
+    let config = if config_flag.is_some() {
+        let (_path, cfg) = resolve_config(config_flag)?;
+        Some(cfg)
+    } else {
+        let (_path, cfg) = resolve_config_opt(None);
+        cfg
+    };
+    print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
+    Ok(())
+}
+
+fn handle_doctor(
+    config_flag: Option<&Path>,
+    path_prepend: Option<&Path>,
+    no_shell_aliases: bool,
+    json: bool,
+) -> CmdResult {
+    let (config_path, config) = resolve_config_opt(config_flag);
+    let command_exists = make_command_exists(path_prepend);
+    let spinner = Spinner::start("Checking environment...");
+    let mut result = doctor::diagnose(&config_path, config.as_ref(), &command_exists);
+    if !no_shell_aliases {
+        add_shell_alias_conflicts(&mut result, config.as_ref());
+    }
+    spinner.stop();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result.checks)?);
+    } else {
+        for check in &result.checks {
+            println!("{}", format_check_line(check));
+        }
+    }
+
+    if !result.is_healthy() {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn handle_init(config_path: PathBuf, yes: bool) -> CmdResult {
+    let msg = format!("Create config at {}?", sanitize_for_display(&config_path.display().to_string()));
+    if yes || prompt_confirm(&msg) {
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&config_path)
+        {
+            Ok(mut f) => {
+                f.write_all(runex_init::default_config_content().as_bytes())?;
+                println!("Created: {}", sanitize_for_display(&config_path.display().to_string()));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                println!("Config already exists: {}", sanitize_for_display(&config_path.display().to_string()));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    } else {
+        println!("Skipped config creation.");
+    }
+
+    let shell = detect_shell().unwrap_or_else(|| {
+        eprintln!(
+            "Could not detect shell. Defaulting to bash. \
+             Use `runex export <shell>` to generate integration manually."
+        );
+        Shell::Bash
+    });
+
+    match runex_init::rc_file_for(shell) {
+        None => {
+            println!(
+                "Shell integration for {:?} must be added manually. \
+                 Run `runex export {:?}` for the script.",
+                shell, shell
+            );
+        }
+        Some(rc_path) => {
+            let existing = read_rc_content(&rc_path);
+            if existing.contains(runex_init::RUNEX_INIT_MARKER) {
+                println!(
+                    "Shell integration already present in {}",
+                    sanitize_for_display(&rc_path.display().to_string())
+                );
+            } else {
+                let msg = format!(
+                    "Append shell integration to {}?",
+                    sanitize_for_display(&rc_path.display().to_string())
+                );
+                if yes || prompt_confirm(&msg) {
+                    let line = runex_init::integration_line(shell, "runex");
+                    let block = format!("\n{}\n{}\n", runex_init::RUNEX_INIT_MARKER, line);
+                    if let Some(parent) = rc_path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    let mut open_opts = std::fs::OpenOptions::new();
+                    open_opts.create(true).append(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        open_opts.custom_flags(libc::O_NOFOLLOW);
+                    }
+                    let mut file = open_opts.open(&rc_path)?;
+                    file.write_all(block.as_bytes())?;
+                    println!("Appended integration to {}", sanitize_for_display(&rc_path.display().to_string()));
+                } else {
+                    println!("Skipped shell integration.");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Expand { token, dry_run } => {
-            if token.len() > MAX_TOKEN_BYTES {
-                eprintln!(
-                    "error: --token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
-                    token.len()
-                );
-                std::process::exit(1);
-            }
-            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
-            let command_exists = make_command_exists(cli.path_prepend.as_deref());
-            if dry_run {
-                let result = expand::which_abbr(&config, &token, &command_exists);
-                if cli.json {
-                    println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
-                } else {
-                    print!("{}", format_dry_run_result(&token, &result));
-                }
-            } else {
-                let result = expand::expand(&config, &token, &command_exists);
-                if cli.json {
-                    let v = match &result {
-                        ExpandResult::Expanded(s) => serde_json::json!({
-                            "result": "expanded",
-                            "token": token,
-                            "expansion": s,
-                        }),
-                        ExpandResult::PassThrough(s) => serde_json::json!({
-                            "result": "pass_through",
-                            "token": s,
-                        }),
-                    };
-                    println!("{}", serde_json::to_string_pretty(&v)?);
-                } else {
-                    match result {
-                        ExpandResult::Expanded(s) => print!("{s}"),
-                        ExpandResult::PassThrough(s) => print!("{s}"),
-                    }
-                }
-            }
-        }
+        Commands::Version => handle_version(cli.json)?,
         Commands::List => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&config.abbr)?);
-            } else {
-                for (key, exp) in expand::list(&config) {
-                    println!("{}\t{}", sanitize_for_display(key), sanitize_for_display(exp));
-                }
-            }
-        }
-        Commands::Version => {
-            if cli.json {
-                #[derive(serde::Serialize)]
-                struct VersionJson<'a> {
-                    version: &'a str,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    commit: Option<&'a str>,
-                }
-                let v = VersionJson {
-                    version: env!("CARGO_PKG_VERSION"),
-                    commit: GIT_COMMIT.filter(|s| !s.is_empty()),
-                };
-                println!("{}", serde_json::to_string_pretty(&v)?);
-            } else {
-                println!("{}", version_line());
-            }
-        }
-        Commands::Export { shell, bin } => {
-            const MAX_BIN_LEN: usize = 255;
-            if bin.trim().is_empty() {
-                eprintln!("error: --bin must not be empty or whitespace-only");
-                std::process::exit(1);
-            }
-            if bin.len() > MAX_BIN_LEN {
-                eprintln!("error: --bin is too long ({} bytes); maximum is {MAX_BIN_LEN}", bin.len());
-                std::process::exit(1);
-            }
-            if bin.chars().any(|c| c.is_ascii_control() || c == '\u{0085}' || c == '\u{2028}' || c == '\u{2029}') {
-                eprintln!("error: --bin contains an invalid control character");
-                std::process::exit(1);
-            }
-            // Restrict to printable ASCII to prevent Unicode homoglyphs, right-to-left
-            // override (U+202E), zero-width joiners, and other visually deceptive characters
-            // from being silently embedded in generated shell scripts.
-            if bin.chars().any(|c| !c.is_ascii() || !c.is_ascii_graphic()) {
-                eprintln!("error: --bin must contain only printable ASCII characters");
-                std::process::exit(1);
-            }
-            let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
-                Box::<dyn std::error::Error>::from(e.to_string())
-            })?;
-            // Explicit --config must be valid; implicit default degrades gracefully.
-            let config = if cli.config.is_some() {
-                let (_path, cfg) = resolve_config(cli.config.as_deref())?;
-                Some(cfg)
-            } else {
-                let (_path, cfg) = resolve_config_opt(None);
-                cfg
-            };
-            print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
-        }
-        Commands::Doctor { no_shell_aliases } => {
-            let (config_path, config) = resolve_config_opt(cli.config.as_deref());
-            let command_exists = make_command_exists(cli.path_prepend.as_deref());
-            let spinner = Spinner::start("Checking environment...");
-            let mut result = doctor::diagnose(&config_path, config.as_ref(), &command_exists);
-            if !no_shell_aliases {
-                add_shell_alias_conflicts(&mut result, config.as_ref());
-            }
-            spinner.stop();
-
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&result.checks)?);
-            } else {
-                for check in &result.checks {
-                    println!("{}", format_check_line(check));
-                }
-            }
-
-            if !result.is_healthy() {
-                std::process::exit(1);
-            }
+            handle_list(&config, cli.json)?;
         }
         Commands::Which { token, why } => {
-            if token.len() > MAX_TOKEN_BYTES {
-                eprintln!(
-                    "error: token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
-                    token.len()
-                );
-                std::process::exit(1);
-            }
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
-            let result = expand::which_abbr(&config, &token, &command_exists);
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
-            } else {
-                println!("{}", format_which_result(&result, why));
-            }
+            handle_which(token, &config, &command_exists, cli.json, why)?;
+        }
+        Commands::Expand { token, dry_run } => {
+            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
+            let command_exists = make_command_exists(cli.path_prepend.as_deref());
+            handle_expand(token, &config, &command_exists, cli.json, dry_run)?;
+        }
+        Commands::Export { shell, bin } => {
+            handle_export(shell, bin, cli.config.as_deref())?;
+        }
+        Commands::Doctor { no_shell_aliases } => {
+            handle_doctor(
+                cli.config.as_deref(),
+                cli.path_prepend.as_deref(),
+                no_shell_aliases,
+                cli.json,
+            )?;
         }
         Commands::Init { yes } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
@@ -967,87 +1122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 default_config_path()?
             };
-
-            // Step 1: config file
-            // Use create_new to atomically create the file, avoiding the TOCTOU race
-            // between an existence check and a subsequent write.
-            let msg = format!("Create config at {}?", sanitize_for_display(&config_path.display().to_string()));
-            if yes || prompt_confirm(&msg) {
-                if let Some(parent) = config_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                match std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&config_path)
-                {
-                    Ok(mut f) => {
-                        use std::io::Write;
-                        f.write_all(runex_init::default_config_content().as_bytes())?;
-                        println!("Created: {}", sanitize_for_display(&config_path.display().to_string()));
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                        println!("Config already exists: {}", sanitize_for_display(&config_path.display().to_string()));
-                    }
-                    Err(e) => return Err(e.into()),
-                }
-            } else {
-                println!("Skipped config creation.");
-            }
-
-            // Step 2: shell integration
-            let shell = detect_shell().unwrap_or_else(|| {
-                eprintln!(
-                    "Could not detect shell. Defaulting to bash. \
-                     Use `runex export <shell>` to generate integration manually."
-                );
-                Shell::Bash
-            });
-
-            match runex_init::rc_file_for(shell) {
-                None => {
-                    println!(
-                        "Shell integration for {:?} must be added manually. \
-                         Run `runex export {:?}` for the script.",
-                        shell, shell
-                    );
-                }
-                Some(rc_path) => {
-                    let existing = read_rc_content(&rc_path);
-                    if existing.contains(runex_init::RUNEX_INIT_MARKER) {
-                        println!(
-                            "Shell integration already present in {}",
-                            sanitize_for_display(&rc_path.display().to_string())
-                        );
-                    } else {
-                        let msg =
-                            format!("Append shell integration to {}?", sanitize_for_display(&rc_path.display().to_string()));
-                        if yes || prompt_confirm(&msg) {
-                            let line = runex_init::integration_line(shell, "runex");
-                            let block =
-                                format!("\n{}\n{}\n", runex_init::RUNEX_INIT_MARKER, line);
-                            if let Some(parent) = rc_path.parent() {
-                                std::fs::create_dir_all(parent)?;
-                            }
-                            let mut open_opts = std::fs::OpenOptions::new();
-                            open_opts.create(true).append(true);
-                            // On Unix, refuse to follow a symlink at the final path component
-                            // to prevent an attacker from racing to replace the rc file with
-                            // a symlink pointing to a sensitive file.
-                            #[cfg(unix)]
-                            {
-                                use std::os::unix::fs::OpenOptionsExt;
-                                open_opts.custom_flags(libc::O_NOFOLLOW);
-                            }
-                            let mut file = open_opts.open(&rc_path)?;
-                            file.write_all(block.as_bytes())?;
-                            println!("Appended integration to {}", sanitize_for_display(&rc_path.display().to_string()));
-                        } else {
-                            println!("Skipped shell integration.");
-                        }
-                    }
-                }
-            }
+            handle_init(config_path, yes)?;
         }
     }
 

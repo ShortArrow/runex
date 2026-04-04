@@ -66,12 +66,99 @@ pub enum ConfigError {
     ExpandWhitespaceOnly(usize),
 }
 
-/// Parse a TOML string into Config.
+/// Validate the `key` field of an abbreviation rule.
+///
+/// Rejects keys that are empty, whitespace-only, or exceed [`MAX_KEY_BYTES`].
+/// Also rejects keys containing NUL bytes, ASCII control characters, or Unicode
+/// visual-deception characters — all of which would make the key unmatchable or
+/// cause it to display differently from its actual byte content.
+fn validate_abbr_key(key: &str, n: usize) -> Result<(), ConfigError> {
+    if key.is_empty() {
+        return Err(ConfigError::KeyEmpty(n));
+    }
+    if key.trim().is_empty() {
+        return Err(ConfigError::KeyWhitespaceOnly(n));
+    }
+    if key.len() > MAX_KEY_BYTES {
+        return Err(ConfigError::KeyTooLong(n));
+    }
+    if key.contains('\0') {
+        return Err(ConfigError::KeyContainsNul(n));
+    }
+    if key.chars().any(|c| c.is_ascii_control()) {
+        return Err(ConfigError::KeyContainsControlChar(n));
+    }
+    if key.chars().any(is_deceptive_unicode) {
+        return Err(ConfigError::KeyContainsDeceptiveUnicode(n));
+    }
+    Ok(())
+}
+
+/// Validate the `expand` field of an abbreviation rule.
+///
+/// Rejects values that are empty, whitespace-only, or exceed [`MAX_EXPAND_BYTES`].
+/// Also rejects values containing NUL bytes, ASCII control characters, or Unicode
+/// visual-deception characters — all of which would corrupt the expanded output.
+fn validate_abbr_expand(expand: &str, n: usize) -> Result<(), ConfigError> {
+    if expand.is_empty() {
+        return Err(ConfigError::ExpandEmpty(n));
+    }
+    if expand.trim().is_empty() {
+        return Err(ConfigError::ExpandWhitespaceOnly(n));
+    }
+    if expand.len() > MAX_EXPAND_BYTES {
+        return Err(ConfigError::ExpandTooLong(n));
+    }
+    if expand.contains('\0') {
+        return Err(ConfigError::ExpandContainsNul(n));
+    }
+    if expand.chars().any(|c| c.is_ascii_control()) {
+        return Err(ConfigError::ExpandContainsControlChar(n));
+    }
+    if expand.chars().any(is_deceptive_unicode) {
+        return Err(ConfigError::ExpandContainsDeceptiveUnicode(n));
+    }
+    Ok(())
+}
+
+/// Validate a single `when_command_exists` entry.
+///
+/// Rejects entries that are empty, whitespace-only, or exceed [`MAX_CMD_BYTES`].
+/// Also rejects entries containing NUL bytes, ASCII control characters, Unicode
+/// visual-deception characters, or path separators (`/`, `\`, `:`).
+/// Only bare command names are allowed — filesystem paths would bypass the intent
+/// of checking only within `path_prepend`.
+fn validate_cmd_entry(cmd: &str, n: usize) -> Result<(), ConfigError> {
+    if cmd.is_empty() {
+        return Err(ConfigError::CmdEmpty(n));
+    }
+    if cmd.trim().is_empty() {
+        return Err(ConfigError::CmdWhitespaceOnly(n));
+    }
+    if cmd.len() > MAX_CMD_BYTES {
+        return Err(ConfigError::CmdTooLong(n));
+    }
+    if cmd.contains('\0') {
+        return Err(ConfigError::CmdContainsNul(n));
+    }
+    if cmd.chars().any(|c| c.is_ascii_control()) {
+        return Err(ConfigError::CmdContainsControlChar(n));
+    }
+    if cmd.chars().any(is_deceptive_unicode) {
+        return Err(ConfigError::CmdContainsDeceptiveUnicode(n));
+    }
+    if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
+        return Err(ConfigError::CmdContainsPathSeparator(n));
+    }
+    Ok(())
+}
+
+/// Parse a TOML string into a [`Config`].
+///
+/// Only version 1 is accepted. Validates all abbreviation rules via
+/// [`validate_abbr_key`], [`validate_abbr_expand`], and [`validate_cmd_entry`].
 pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(s)?;
-    // Reject any version other than 1. The config schema is versioned so that future
-    // breaking changes can be introduced. Silently accepting an unknown version would
-    // mean missing new validation rules and potentially misinterpreting the schema.
     if config.version != 1 {
         return Err(ConfigError::UnsupportedVersion(config.version));
     }
@@ -80,90 +167,14 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
     }
     for (i, abbr) in config.abbr.iter().enumerate() {
         let n = i + 1;
-        // Reject empty and whitespace-only keys early: they can never match a token
-        // (shell integrations extract tokens by splitting on spaces), and an empty key
-        // produces `''`) in generated bash/zsh case statements which matches the empty
-        // string — causing silent unexpected expansions.
-        if abbr.key.is_empty() {
-            return Err(ConfigError::KeyEmpty(n));
-        }
-        if abbr.key.trim().is_empty() {
-            return Err(ConfigError::KeyWhitespaceOnly(n));
-        }
-        if abbr.key.len() > MAX_KEY_BYTES {
-            return Err(ConfigError::KeyTooLong(n));
-        }
-        // Reject empty and whitespace-only expand values: they produce silent broken
-        // behavior — an empty expansion deletes the typed token, and a whitespace-only
-        // expansion replaces it with invisible characters. Both are almost certainly
-        // config mistakes; reject early with a clear error.
-        if abbr.expand.is_empty() {
-            return Err(ConfigError::ExpandEmpty(n));
-        }
-        if abbr.expand.trim().is_empty() {
-            return Err(ConfigError::ExpandWhitespaceOnly(n));
-        }
-        if abbr.expand.len() > MAX_EXPAND_BYTES {
-            return Err(ConfigError::ExpandTooLong(n));
-        }
-        if abbr.key.contains('\0') {
-            return Err(ConfigError::KeyContainsNul(n));
-        }
-        if abbr.expand.contains('\0') {
-            return Err(ConfigError::ExpandContainsNul(n));
-        }
-        // Reject ASCII control characters (U+0001–U+001F, U+007F) in key and expand.
-        // TOML \uXXXX escapes allow embedding these, but they cause silent misbehavior:
-        //   - key: quoting functions drop them, making the key unmatchable
-        //   - expand: the value is silently mangled in terminal output
-        // Reject early to give users a clear error instead.
-        if abbr.key.chars().any(|c| c.is_ascii_control()) {
-            return Err(ConfigError::KeyContainsControlChar(n));
-        }
-        if abbr.expand.chars().any(|c| c.is_ascii_control()) {
-            return Err(ConfigError::ExpandContainsControlChar(n));
-        }
-        // Reject Unicode visual-deception characters (invisible chars, directional overrides,
-        // BOM, zero-width chars) in key, expand, and when_command_exists entries.
-        // These characters are not visible in most terminals and text editors, allowing a
-        // config to appear safe while actually containing keys that never match, or expansions
-        // that display differently than their byte content (e.g. RLO reverses display order).
-        if abbr.key.chars().any(is_deceptive_unicode) {
-            return Err(ConfigError::KeyContainsDeceptiveUnicode(n));
-        }
-        if abbr.expand.chars().any(is_deceptive_unicode) {
-            return Err(ConfigError::ExpandContainsDeceptiveUnicode(n));
-        }
+        validate_abbr_key(&abbr.key, n)?;
+        validate_abbr_expand(&abbr.expand, n)?;
         if let Some(cmds) = &abbr.when_command_exists {
             if cmds.len() > MAX_CMD_LIST_LEN {
                 return Err(ConfigError::TooManyCmds(n));
             }
             for cmd in cmds {
-                if cmd.is_empty() {
-                    return Err(ConfigError::CmdEmpty(n));
-                }
-                if cmd.trim().is_empty() {
-                    return Err(ConfigError::CmdWhitespaceOnly(n));
-                }
-                if cmd.len() > MAX_CMD_BYTES {
-                    return Err(ConfigError::CmdTooLong(n));
-                }
-                if cmd.contains('\0') {
-                    return Err(ConfigError::CmdContainsNul(n));
-                }
-                if cmd.chars().any(|c| c.is_ascii_control()) {
-                    return Err(ConfigError::CmdContainsControlChar(n));
-                }
-                if cmd.chars().any(is_deceptive_unicode) {
-                    return Err(ConfigError::CmdContainsDeceptiveUnicode(n));
-                }
-                // Reject path separators and Windows drive letters.
-                // when_command_exists values must be bare command names, not filesystem paths.
-                // A value containing '/' or '\' would make dir.join(cmd) traverse directories,
-                // bypassing the intent of checking only within path_prepend.
-                if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
-                    return Err(ConfigError::CmdContainsPathSeparator(n));
-                }
+                validate_cmd_entry(cmd, n)?;
             }
         }
     }

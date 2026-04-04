@@ -100,14 +100,13 @@ fn bash_quote_pattern(token: &str) -> String {
     out
 }
 
+/// Quote `value` as a Bash single-quoted string.
+///
+/// Single quotes are escaped as `'\''` (close, escaped quote, reopen).
+/// ASCII control characters and Unicode line/paragraph separators are dropped:
+/// valid executable paths never contain them, and embedding `$'\n'` inside
+/// `eval "$(...)"` would cause command-splitting injection.
 pub(crate) fn bash_quote_string(value: &str) -> String {
-    // Bash single-quoted strings.
-    // Strategy:
-    //   - single quote  → '\''  (close quote, escaped quote, reopen quote)
-    //   - ASCII control chars (\x00–\x1f, \x7f) → dropped
-    //   - Unicode line/paragraph separators → dropped
-    //     Rationale: valid executable paths never contain these characters.
-    //     Using $'\n' inside eval "$(...)" would cause command splitting injection.
     let mut out = String::from("'");
     for ch in value.chars() {
         match ch {
@@ -121,44 +120,32 @@ pub(crate) fn bash_quote_string(value: &str) -> String {
     out
 }
 
-fn bash_known_cases(config: Option<&Config>) -> String {
+/// Generate the `case` pattern body for POSIX-compatible shells (bash, zsh).
+///
+/// When the config is absent or has no rules, returns a wildcard arm that always
+/// returns 0 (treat every token as a known abbreviation).  Otherwise generates one
+/// arm per rule plus a wildcard arm that returns 1 (unknown).
+fn posix_known_cases(config: Option<&Config>) -> String {
     let Some(config) = config else {
         return "        *) return 0 ;;".to_string();
     };
-
     if config.abbr.is_empty() {
         return "        *) return 0 ;;".to_string();
     }
-
     let mut lines = Vec::with_capacity(config.abbr.len() + 1);
     for abbr in &config.abbr {
-        lines.push(format!(
-            "        {}) return 0 ;;",
-            bash_quote_pattern(&abbr.key)
-        ));
+        lines.push(format!("        {}) return 0 ;;", bash_quote_pattern(&abbr.key)));
     }
     lines.push("        *) return 1 ;;".to_string());
     lines.join("\n")
 }
 
+fn bash_known_cases(config: Option<&Config>) -> String {
+    posix_known_cases(config)
+}
+
 fn zsh_known_cases(config: Option<&Config>) -> String {
-    let Some(config) = config else {
-        return "        *) return 0 ;;".to_string();
-    };
-
-    if config.abbr.is_empty() {
-        return "        *) return 0 ;;".to_string();
-    }
-
-    let mut lines = Vec::with_capacity(config.abbr.len() + 1);
-    for abbr in &config.abbr {
-        lines.push(format!(
-            "        {}) return 0 ;;",
-            bash_quote_pattern(&abbr.key)
-        ));
-    }
-    lines.push("        *) return 1 ;;".to_string());
-    lines.join("\n")
+    posix_known_cases(config)
 }
 
 fn pwsh_chord(trigger: TriggerKey) -> &'static str {
@@ -169,11 +156,12 @@ fn pwsh_chord(trigger: TriggerKey) -> &'static str {
     }
 }
 
+/// Quote `token` as a PowerShell single-quoted string.
+///
+/// Single quotes are escaped as `''`.  ASCII control characters and Unicode
+/// line/paragraph separators are dropped: valid executable paths never contain them,
+/// and backtick concatenation (`'a'`n'b'`) risks token-splitting in some PS contexts.
 pub(crate) fn pwsh_quote_string(token: &str) -> String {
-    // PowerShell single-quoted strings: single quote → ''
-    // Control characters are dropped — valid executable paths never contain them,
-    // and backtick-concat ('a'`n'b') risks token-splitting in some PS contexts.
-    // Unicode line/paragraph separators are also dropped.
     let mut out = String::from("'");
     for ch in token.chars() {
         match ch {
@@ -187,25 +175,26 @@ pub(crate) fn pwsh_quote_string(token: &str) -> String {
     out
 }
 
+/// Quote `value` for use as an external Nu shell command invocation (`^"..."`).
+///
+/// The `^` prefix forces Nu to execute the string as an external command rather
+/// than treating it as a string literal.  Inside the double-quoted form:
+/// - `\` → `\\`, `"` → `\"`, `$` → `\$` (suppresses variable interpolation)
+/// - `\n`, `\r`, `\t` are escaped as their two-character sequences
+/// - NUL, DEL, remaining ASCII control characters, and Unicode line/paragraph
+///   separators are dropped
 pub(crate) fn nu_quote_string(value: &str) -> String {
-    // Nu external-command syntax: ^"..." forces execution as an external command.
-    // Without the ^ prefix, a quoted string is a string literal, not a command.
-    // Escape backslash, double-quote, and newlines inside the double-quoted string.
     let mut out = String::from("^\"");
     for ch in value.chars() {
         match ch {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
-            // '$' starts Nu variable/environment interpolation inside double-quoted strings.
-            // Escape it so $env.FOO, $(cmd), etc. are not evaluated.
             '$' => out.push_str("\\$"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            '\0' | '\x7f' => {} // NUL and DEL — drop
-            // All remaining ASCII control characters (C0: U+0001–U+001F except \n,\r,\t) — drop
+            '\0' | '\x7f' => {}
             c if c.is_ascii_control() => {}
-            // Unicode line/paragraph separators — drop (line-breaking chars in some runtimes)
             '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
             _ => out.push(ch),
         }
@@ -214,36 +203,17 @@ pub(crate) fn nu_quote_string(value: &str) -> String {
     out
 }
 
-/// Like `nu_quote_string`, but the output is safe for embedding inside a Nu
-/// double-quoted string (e.g., inside `cmd: "..."`).  Each `\` and `"` in the
-/// *already-quoted* form must be escaped one more level so the outer Nu parser
-/// sees them as literal characters, not string delimiters.
+/// Like [`nu_quote_string`], but safe for embedding inside an outer Nu double-quoted
+/// string (e.g. `cmd: "..."`).
 ///
-/// Standalone:  ^"runex"
-/// Embedded:    ^\"runex\"
+/// Each `\` and `"` in the standalone form must be escaped one more level so the outer
+/// Nu parser sees them as literals.  The two-character sequence `\$` (produced by
+/// [`nu_quote_string`] to suppress variable interpolation) is kept atomic — converting
+/// `\` to `\\` here would yield `\\$`, which the outer parser reads as a literal `\`
+/// followed by variable interpolation (unsafe).
+///
+/// Standalone: `^"runex"`  →  Embedded: `^\"runex\"`
 fn nu_quote_string_embedded(value: &str) -> String {
-    // First build the standalone form, then escape for the outer Nu double-quoted
-    // string context (e.g. `cmd: "..."`).
-    //
-    // In the outer Nu double-quoted string:
-    //   \\  → literal \
-    //   \"  → literal "
-    //   \$  → literal $ (suppresses variable interpolation)
-    //   \\$ → literal \ then variable interpolation — UNSAFE
-    //
-    // nu_quote_string already escapes $ as \$ in the standalone form.
-    // When we embed that form, we must:
-    //   - escape \ as \\ (so literal backslashes survive one more level)
-    //   - escape " as \"
-    //   - keep \$ as \$ (do NOT turn the \ into \\, which would give \\$ = unsafe)
-    //     Implemented by treating the two-char sequence \$ atomically.
-    //
-    // Strategy: iterate the standalone string as chars. When we see '\' followed by '$',
-    // emit '\$' unchanged (the outer Nu parser interprets \$ as literal $).
-    // All other '\' are doubled to \\.
-    //
-    // We use char iteration (not byte iteration) so that multi-byte UTF-8 sequences
-    // are preserved intact. Only ASCII characters ('\\', '"', '$') need special handling.
     let standalone = nu_quote_string(value);
     let mut out = String::with_capacity(standalone.len() + 8);
     let mut chars = standalone.chars().peekable();
@@ -267,6 +237,15 @@ fn nu_quote_string_embedded(value: &str) -> String {
     out
 }
 
+/// Quote `value` as a Lua double-quoted string.
+///
+/// - `\`, `"` → `\\`, `\"`
+/// - `\n`, `\r`, `\t` → two-character escape sequences
+/// - NUL is dropped (Lua uses C strings; NUL truncates them)
+/// - Unicode line/paragraph separators are dropped
+/// - Remaining ASCII control characters use three-digit decimal `\DDD` escapes.
+///   Zero-padding is required: without it `\1` followed by `0` would be read as
+///   `\10` (LF) rather than SOH followed by `"0"`.
 pub(crate) fn lua_quote_string(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
@@ -276,12 +255,9 @@ pub(crate) fn lua_quote_string(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            '\0' => {} // NUL — drop; Lua uses C strings, NUL truncates
-            '\u{0085}' | '\u{2028}' | '\u{2029}' => {} // Unicode line/paragraph separators — drop
+            '\0' => {}
+            '\u{0085}' | '\u{2028}' | '\u{2029}' => {}
             c if c.is_ascii_control() => {
-                // Remaining control chars: use 3-digit zero-padded decimal escape \DDD.
-                // Without zero-padding, \1 followed by a digit would be ambiguous
-                // (e.g. "\1" + "0" = "\10" which Lua reads as LF, not SOH + "0").
                 out.push_str(&format!("\\{:03}", c as u8));
             }
             _ => out.push(ch),
