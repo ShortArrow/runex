@@ -249,6 +249,9 @@ mod tests {
     use crate::model::TriggerKey;
     use serial_test::serial;
 
+    mod parsing {
+        use super::*;
+
     #[test]
     fn parse_minimal_toml() {
         let toml = r#"
@@ -459,11 +462,11 @@ expand = "git commit -m"
         assert!(load_config(f.path()).is_err(), "must reject files larger than 10 MB");
     }
 
+    /// On Linux, a symlink to /dev/zero reports metadata().len() == 0, bypassing the
+    /// size guard. load_config must reject non-regular files.
     #[test]
     #[cfg(unix)]
     fn load_config_rejects_symlink_to_dev_zero() {
-        // On Linux, a symlink to /dev/zero reports metadata().len() == 0, bypassing the
-        // size guard. load_config must reject non-regular files.
         let dir = tempfile::tempdir().unwrap();
         let link = dir.path().join("fake_config.toml");
         std::os::unix::fs::symlink("/dev/zero", &link).unwrap();
@@ -471,11 +474,11 @@ expand = "git commit -m"
         assert!(err.is_err(), "load_config must reject a symlink to /dev/zero");
     }
 
+    /// A symlink pointing to a regular file (e.g. /etc/passwd) must be rejected.
+    /// The O_NOFOLLOW protection must prevent following the symlink.
     #[test]
     #[cfg(unix)]
     fn load_config_rejects_symlink_to_regular_file() {
-        // A symlink pointing to a regular file (e.g. /etc/passwd) must be rejected.
-        // The O_NOFOLLOW protection must prevent following the symlink.
         let dir = tempfile::tempdir().unwrap();
         // Create a real regular file to link to (avoid depending on /etc/passwd existing)
         let target = dir.path().join("target.toml");
@@ -486,11 +489,11 @@ expand = "git commit -m"
         assert!(err.is_err(), "load_config must reject a symlink even to a regular file (O_NOFOLLOW)");
     }
 
+    /// A named pipe reports metadata().len() == 0 and read_to_string() blocks.
+    /// load_config must reject non-regular files before attempting to read.
     #[test]
     #[cfg(unix)]
     fn load_config_rejects_named_pipe() {
-        // A named pipe reports metadata().len() == 0 and read_to_string() blocks.
-        // load_config must reject non-regular files before attempting to read.
         use std::ffi::CString;
         let dir = tempfile::tempdir().unwrap();
         let pipe = dir.path().join("fake_config.toml");
@@ -500,7 +503,10 @@ expand = "git commit -m"
         assert!(err.is_err(), "load_config must reject a named pipe");
     }
 
-    // ─── per-field validation ─────────────────────────────────────────────────
+    } // mod parsing
+
+    mod field_validation {
+        use super::*;
 
     #[test]
     fn parse_config_rejects_oversized_key() {
@@ -566,14 +572,16 @@ expand = "git commit -m"
         assert!(parse_config(toml).is_err(), "must reject expand containing NUL byte");
     }
 
-    // ─── control char rejection via TOML Unicode escapes ─────────────────────
-    //
-    // TOML allows \uXXXX escapes for any Unicode code point, including ASCII
-    // control characters (U+0001–U+001F, U+007F). These pass through toml::from_str
-    // but must be rejected by parse_config because:
-    //   - key: quoting functions silently drop them, making the key unmatchable
-    //   - expand: the expansion is silently mangled when printed
-    //   - both: users get silent wrong behavior instead of a clear error
+    } // mod field_validation
+
+    /// TOML allows `\uXXXX` escapes for any Unicode code point, including ASCII
+    /// control characters (U+0001–U+001F, U+007F). These pass through `toml::from_str`
+    /// but must be rejected by `parse_config` because:
+    /// - key: quoting functions silently drop them, making the key unmatchable
+    /// - expand: the expansion is silently mangled when printed
+    /// - both: users get silent wrong behavior instead of a clear error
+    mod control_char_rejection {
+        use super::*;
 
     #[test]
     fn parse_config_rejects_control_char_in_key() {
@@ -617,11 +625,11 @@ expand = "git commit -m"
         assert!(parse_config(toml).is_ok(), "must accept key without control chars");
     }
 
+    /// An empty key produces `''` in bash/zsh case statements, which matches
+    /// the empty string — any empty-token expansion would silently fire.
+    /// Reject early with a clear error rather than producing a broken script.
     #[test]
     fn parse_config_rejects_empty_key() {
-        // An empty key produces `''`) in bash/zsh case statements, which matches
-        // the empty string — any empty-token expansion would silently fire.
-        // Reject early with a clear error rather than producing a broken script.
         let toml = "version = 1\n[[abbr]]\nkey = \"\"\nexpand = \"git commit -m\"\n";
         assert!(
             parse_config(toml).is_err(),
@@ -629,10 +637,10 @@ expand = "git commit -m"
         );
     }
 
+    /// A key consisting only of spaces would be silently dropped by quoting functions,
+    /// making the rule unmatchable while appearing valid.
     #[test]
     fn parse_config_rejects_whitespace_only_key() {
-        // A key consisting only of spaces would also be silently dropped by
-        // quoting functions, making the rule unmatchable while appearing valid.
         let toml = "version = 1\n[[abbr]]\nkey = \"   \"\nexpand = \"git commit -m\"\n";
         assert!(
             parse_config(toml).is_err(),
@@ -640,10 +648,10 @@ expand = "git commit -m"
         );
     }
 
+    /// An empty string in `when_command_exists` is meaningless: `which::which("")` always
+    /// fails, silently causing the rule to never expand.
     #[test]
     fn parse_config_rejects_empty_when_command_exists_entry() {
-        // An empty string in when_command_exists is meaningless: which::which("") always
-        // fails, silently causing the rule to never expand. Reject early with a clear error.
         let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"\"]\n";
         assert!(
             parse_config(toml).is_err(),
@@ -651,10 +659,9 @@ expand = "git commit -m"
         );
     }
 
+    /// A whitespace-only command name silently makes the rule permanently inactive.
     #[test]
     fn parse_config_rejects_whitespace_only_when_command_exists_entry() {
-        // A whitespace-only command name silently makes the rule permanently inactive.
-        // Reject early so the user gets a clear error instead.
         let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"   \"]\n";
         assert!(
             parse_config(toml).is_err(),
@@ -680,18 +687,20 @@ expand = "git commit -m"
         );
     }
 
-    // ─── Unicode visual-deception characters ─────────────────────────────────
-    //
-    // Characters such as U+FEFF (BOM/zero-width no-break space), U+202E (Right-to-Left
-    // Override), and other Unicode formatting/invisible characters cannot be seen in most
-    // terminals and text editors. If embedded in `key`, `expand`, or `when_command_exists`,
-    // they cause:
-    //   - `key`: rule appears valid but never matches (invisible difference from real command)
-    //   - `expand`: expansion contains invisible/deceptive text printed to terminal
-    //   - `when_command_exists`: command lookup silently fails forever
-    //   - `list` output: shows a key that looks like "ls" but is really "\u{FEFF}ls"
-    //
-    // These must be rejected early with a clear error.
+    } // mod control_char_rejection
+
+    /// Characters such as U+FEFF (BOM/zero-width no-break space), U+202E (Right-to-Left
+    /// Override), and other Unicode formatting/invisible characters cannot be seen in most
+    /// terminals and text editors. If embedded in `key`, `expand`, or `when_command_exists`,
+    /// they cause:
+    /// - `key`: rule appears valid but never matches (invisible difference from real command)
+    /// - `expand`: expansion contains invisible/deceptive text printed to terminal
+    /// - `when_command_exists`: command lookup silently fails forever
+    /// - `list` output: shows a key that looks like "ls" but is really `"\u{FEFF}ls"`
+    ///
+    /// These must be rejected early with a clear error.
+    mod deceptive_unicode {
+        use super::*;
 
     #[test]
     fn parse_config_rejects_bom_in_key() {
@@ -747,13 +756,12 @@ expand = "git commit -m"
         );
     }
 
+    /// `when_command_exists` values must be bare command names, not filesystem paths.
+    /// A value like `"/usr/bin/ls"` is a path traversal attempt: `dir.join("/usr/bin/ls")`
+    /// on Unix resolves to an absolute path, bypassing the intended restriction to check
+    /// only within `path_prepend`.
     #[test]
     fn parse_config_rejects_path_separator_in_when_command_exists() {
-        // when_command_exists values must be bare command names, not filesystem paths.
-        // A value like "/usr/bin/ls" looks like a valid command but is a path traversal
-        // attempt: dir.join("/usr/bin/ls") on Unix resolves to an absolute path, bypassing
-        // the intended restriction to check only within path_prepend.
-        // Reject at parse time to give a clear error instead of silently misbehaving.
         for bad in ["/usr/bin/ls", "../../evil", "../bin/sh"] {
             let toml = format!(
                 "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"{bad}\"]\n"
@@ -765,10 +773,10 @@ expand = "git commit -m"
         }
     }
 
+    /// On Windows, backslash is a path separator. Paths like `C:\bin\ls` must be
+    /// caught at parse time before they reach `make_command_exists`.
     #[test]
     fn parse_config_rejects_backslash_in_when_command_exists() {
-        // On Windows, backslash is a path separator. Reject it at parse time so that
-        // Windows paths like "C:\bin\ls" are caught before they reach make_command_exists.
         let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"bin\\\\ls\"]\n";
         assert!(
             parse_config(toml).is_err(),
@@ -776,10 +784,10 @@ expand = "git commit -m"
         );
     }
 
+    /// A colon introduces a Windows drive letter (e.g. `C:ls`) or acts as a
+    /// PATH-like separator in some contexts.
     #[test]
     fn parse_config_rejects_colon_in_when_command_exists() {
-        // A colon introduces a Windows drive letter (e.g. "C:ls") or could be
-        // interpreted as a PATH-like separator in some contexts.
         let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"C:ls\"]\n";
         assert!(
             parse_config(toml).is_err(),
@@ -796,13 +804,16 @@ expand = "git commit -m"
         );
     }
 
-    // ─── when_command_exists list length limit ────────────────────────────────
-    //
-    // Each abbr rule's when_command_exists list is iterated on every expand call.
-    // Without a cap, a config with 100,000 entries would cause:
-    //   (a) ~25 MB memory per rule (100,000 × 255 bytes)
-    //   (b) 100,000 which::which() calls per keystroke — CPU/I/O DoS
-    // Cap the list at MAX_CMD_LIST_LEN entries per rule.
+    } // mod deceptive_unicode
+
+    /// Each abbr rule's `when_command_exists` list is iterated on every expand call.
+    /// Without a cap, a config with 100,000 entries would cause:
+    /// - ~25 MB memory per rule (100,000 × 255 bytes)
+    /// - 100,000 `which::which()` calls per keystroke — CPU/I/O DoS
+    ///
+    /// Capped at `MAX_CMD_LIST_LEN` entries per rule.
+    mod when_command_exists_limit {
+        use super::*;
 
     #[test]
     fn parse_config_rejects_too_many_when_command_exists_entries() {
@@ -830,12 +841,14 @@ expand = "git commit -m"
         );
     }
 
-    // ─── version field validation ─────────────────────────────────────────────
-    //
-    // The only supported config schema version is 1. A config file with version=2
-    // (or any other value) was written for a different schema and must be rejected
-    // rather than silently processed as version=1. Accepting unknown versions risks
-    // missing new validation rules introduced in a later schema.
+    } // mod when_command_exists_limit
+
+    /// The only supported config schema version is 1. A config file with version=2
+    /// (or any other value) was written for a different schema and must be rejected
+    /// rather than silently processed as version=1. Accepting unknown versions risks
+    /// missing new validation rules introduced in a later schema.
+    mod version_validation {
+        use super::*;
 
     #[test]
     fn parse_config_rejects_version_0() {
@@ -873,15 +886,15 @@ expand = "git commit -m"
         );
     }
 
-    // ─── expand empty / whitespace-only ──────────────────────────────────────
-    //
-    // An expand value that is empty or whitespace-only is functionally broken:
-    //   - Empty expand: pressing the trigger key replaces the token with nothing,
-    //     deleting the typed text without any expansion. This is almost certainly
-    //     a config mistake.
-    //   - Whitespace-only expand: replaces the token with invisible characters,
-    //     a confusing and likely unintended behaviour.
-    // Both are rejected early so users get a clear error rather than silent breakage.
+    } // mod version_validation
+
+    /// An expand value that is empty or whitespace-only is functionally broken:
+    /// - Empty: pressing the trigger key replaces the token with nothing — almost certainly a mistake.
+    /// - Whitespace-only: replaces the token with invisible characters — confusing and unintended.
+    ///
+    /// Both are rejected early so users get a clear error rather than silent breakage.
+    mod expand_validation {
+        use super::*;
 
     #[test]
     fn parse_config_rejects_empty_expand() {
@@ -910,4 +923,6 @@ expand = "git commit -m"
             "must accept a normal non-empty expand value"
         );
     }
+
+    } // mod expand_validation
 }

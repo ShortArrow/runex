@@ -422,6 +422,9 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
 mod tests {
     use super::*;
 
+    mod shell_parse {
+        use super::*;
+
     #[test]
     fn parse_bash() {
         assert_eq!(Shell::from_str("bash").unwrap(), Shell::Bash);
@@ -435,13 +438,9 @@ mod tests {
         assert_eq!(Shell::from_str("Zsh").unwrap(), Shell::Zsh);
     }
 
-    // --- ShellParseError::Display must not embed raw control characters --------
-    //
-    // `Shell::from_str` is called with user-supplied input. If the input contains
-    // ANSI escape sequences (e.g. "bash\x1b[2J"), embedding them raw in an error
-    // message that is later printed to stderr causes terminal injection.
-    // The Display impl must sanitize the shell name before embedding it.
-
+    /// `Shell::from_str` is called with user-supplied input. Embedding raw ANSI sequences
+    /// (e.g. `"bash\x1b[2J"`) in an error message printed to stderr causes terminal injection.
+    /// The `Display` impl must sanitize the shell name before embedding it.
     #[test]
     fn shell_parse_error_display_strips_esc_sequences() {
         let err = Shell::from_str("bash\x1b[2Jevil").unwrap_err();
@@ -507,6 +506,11 @@ mod tests {
         let err = Shell::from_str("fish").unwrap_err();
         assert_eq!(err.0, "fish");
     }
+
+    } // mod shell_parse
+
+    mod script_generation {
+        use super::*;
 
     #[test]
     fn export_script_contains_bin() {
@@ -730,11 +734,11 @@ mod tests {
         }
     }
 
+    /// `eval "$runex_debug_trap"` allows arbitrary code execution if bash-preexec or
+    /// another framework installed a DEBUG trap with an attacker-controlled string.
+    /// The script must NOT use eval to restore the trap.
     #[test]
     fn bash_script_does_not_eval_debug_trap() {
-        // `eval "$runex_debug_trap"` allows arbitrary code execution if bash-preexec or
-        // another framework installed a DEBUG trap with an attacker-controlled string.
-        // The script must NOT use eval to restore the trap.
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig { trigger: Some(TriggerKey::Space), ..Default::default() },
@@ -886,12 +890,12 @@ mod tests {
         assert!(!s.contains("echo INJECTED"), "nu: bin value must be quoted");
     }
 
+    /// In Nu, quoting a command name as `"runex"` makes it a string, not a command.
+    /// The correct external-command syntax is `^"runex"` — the `^` forces external execution.
+    /// Inside the `cmd: "..."` heredoc string, the quotes must be escaped: `^\"runex\"`.
+    /// The `{NU_BIN}` placeholder is only emitted when a trigger keybind is configured.
     #[test]
     fn nu_bin_uses_caret_external_command_syntax() {
-        // In Nu, quoting a command name as "runex" makes it a string, not a command.
-        // The correct external-command syntax is ^"runex" — the ^ forces external execution.
-        // Inside the cmd: "..." heredoc string, the quotes must be escaped: ^\"runex\".
-        // The {NU_BIN} placeholder is only emitted when a trigger keybind is configured.
         use crate::model::{Config, KeybindConfig, TriggerKey};
         let config = Config {
             version: 1,
@@ -918,11 +922,11 @@ mod tests {
         assert!(s.contains("^\\\"my\\\\\\\"app\\\""), "nu: special chars must be escaped in embedded context: {s}");
     }
 
+    /// REGRESSION: `{NU_BIN}` is substituted inside a `cmd: "..."` double-quoted Nu string.
+    /// If the substitution produces `^"runex"`, the `"` terminates the outer string → syntax error.
+    /// The substitution must use `\"` (escaped) inside the cmd context: `^\"runex\"`.
     #[test]
     fn nu_bin_in_cmd_string_does_not_break_outer_quotes() {
-        // REGRESSION: {NU_BIN} is substituted inside a `cmd: "..."` double-quoted Nu string.
-        // If the substitution produces ^"runex", the `"` terminates the outer string → syntax error.
-        // The substitution must use \" (escaped) inside the cmd context: ^\"runex\"
         use crate::model::{Config, KeybindConfig, TriggerKey};
         let config = Config {
             version: 1,
@@ -939,7 +943,10 @@ mod tests {
         );
     }
 
-    // --- nu_quote_string: \n/\r escaping ---
+    } // mod script_generation
+
+    mod quote_functions {
+        use super::*;
 
     #[test]
     fn nu_quote_string_escapes_newline() {
@@ -955,16 +962,14 @@ mod tests {
         assert!(s.contains("\\r"), "expected \\r escape: {s}");
     }
 
+    /// `expand --token $token` (space-separated) is vulnerable to argument injection:
+    /// if `$token` is `"--dry-run"`, Clap receives `["expand", "--token", "--dry-run"]` and
+    /// may treat `"--dry-run"` as a flag rather than the value for `--token`.
+    /// The safe form `expand --token=($token)` passes the value as part of the same argument.
+    /// Note: `($token)` is Nu's parenthesized expression, not string interpolation —
+    /// Nu evaluates it and passes `--token=<value>` as a single argument.
     #[test]
     fn nu_token_uses_equals_form_to_prevent_argument_injection() {
-        // `expand --token $token` (space-separated) is vulnerable to argument injection:
-        // if $token is "--dry-run", Clap receives ["expand", "--token", "--dry-run"] and
-        // may treat "--dry-run" as a separate flag rather than the value for --token.
-        // The safe form is `expand --token=($token)` which passes the value as part of
-        // the same argument, preventing Clap from treating it as a flag.
-        // Note: ($token) here is Nu's parenthesized expression, NOT string interpolation
-        // (which would be $"--token=($token)"). `--token=($token)` is safe because Nu
-        // evaluates ($token) as a value and passes `--token=<value>` as a single argument.
         use crate::model::{Config, KeybindConfig, TriggerKey};
         let config = Config {
             version: 1,
@@ -1060,7 +1065,6 @@ mod tests {
         assert!(!s.contains('\0'), "nu_quote_string must drop NUL: {s:?}");
     }
 
-    // --- bash_quote_string: safe in eval "$(...)" context ---
 
     #[test]
     fn bash_quote_string_newline_safe_in_eval_context() {
@@ -1150,7 +1154,10 @@ mod tests {
         assert!(!s.contains("'`"), "backtick-concat form must not be used (token split risk): {s:?}");
     }
 
-    // --- Issue 1: Clink io.popen RUNEX_BIN double-quote injection ---
+    } // mod quote_functions
+
+    mod regression_issues {
+        use super::*;
 
     #[test]
     fn clink_script_double_quote_in_bin_does_not_inject_into_popen() {
@@ -1189,7 +1196,6 @@ mod tests {
         );
     }
 
-    // --- Issue 2: nu_quote_string / nu_quote_path: tab not escaped ---
 
     #[test]
     fn nu_quote_string_escapes_tab() {
@@ -1198,7 +1204,6 @@ mod tests {
         assert!(s.contains("\\t"), "expected \\t escape: {s:?}");
     }
 
-    // --- Issue 3: Unicode line separators pass through all quote functions ---
 
     #[test]
     fn bash_quote_string_drops_unicode_line_separator() {
@@ -1218,7 +1223,6 @@ mod tests {
         assert!(!s.contains('\u{2028}'), "nu_quote_string must drop U+2028: {s:?}");
     }
 
-    // --- Issue 4: nu_quote_string DEL (\x7f) not dropped ---
 
     #[test]
     fn nu_quote_string_drops_del() {
@@ -1311,7 +1315,10 @@ mod tests {
         }
     }
 
-    // --- bash_quote_pattern: missing U+0085/U+2028/U+2029 (issue B) ---
+    } // mod regression_issues
+
+    mod unicode_edge_cases {
+        use super::*;
 
     #[test]
     fn bash_quote_pattern_drops_unicode_line_separators() {
@@ -1322,7 +1329,6 @@ mod tests {
         }
     }
 
-    // --- lua_quote_string: DEL and U+2028/U+2029 pass through (issue C) ---
 
     #[test]
     fn lua_quote_string_drops_del() {
@@ -1356,13 +1362,14 @@ mod tests {
         );
     }
 
-    // ─── bash/zsh case pattern: single-quoted globs are literal ─────────────
-    //
-    // In bash/zsh `case` patterns, characters enclosed in single quotes are
-    // treated as literals, not glob wildcards. `'*'` matches only a literal
-    // asterisk, not every string. `bash_quote_pattern` wraps keys in single
-    // quotes, so `*`, `?`, `[...]` are all safe in case patterns.
-    // These tests document that invariant and guard against regressions.
+    } // mod unicode_edge_cases
+
+    /// In bash/zsh `case` patterns, characters enclosed in single quotes are
+    /// treated as literals, not glob wildcards. `'*'` matches only a literal
+    /// asterisk, not every string. `bash_quote_pattern` wraps keys in single
+    /// quotes, so `*`, `?`, `[...]` are all safe in case patterns.
+    mod case_pattern_globs {
+        use super::*;
 
     #[test]
     fn bash_case_pattern_star_key_matches_only_literal_star() {
@@ -1463,4 +1470,6 @@ mod tests {
             assert_eq!(default_count, 1, "pwsh script must have exactly one default clause, got {default_count}");
         }
     }
+
+    } // mod case_pattern_globs
 }
