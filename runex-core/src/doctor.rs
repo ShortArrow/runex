@@ -146,6 +146,13 @@ mod tests {
         }
     }
 
+    fn abbr(key: &str, exp: &str) -> Abbr {
+        Abbr { key: key.into(), expand: exp.into(), when_command_exists: None }
+    }
+
+    mod diagnostics {
+        use super::*;
+
     #[test]
     fn all_healthy() {
         let dir = tempfile::tempdir().unwrap();
@@ -187,10 +194,6 @@ mod tests {
         assert!(result.checks[2].detail.contains("not found"));
     }
 
-    fn abbr(key: &str, exp: &str) -> Abbr {
-        Abbr { key: key.into(), expand: exp.into(), when_command_exists: None }
-    }
-
     #[test]
     fn doctor_warns_empty_key() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
@@ -225,12 +228,19 @@ mod tests {
         assert!(!result.is_healthy());
     }
 
-    // ─── detail string must not contain control characters from user-controlled input ──
+    } // mod diagnostics
 
+    /// Detail strings embed user-controlled values (keys, cmd names, config paths).
+    /// If these contain ANSI escape sequences or other control characters, they will
+    /// be printed raw to the terminal — enabling screen clearing, cursor movement,
+    /// or other terminal injection attacks. All detail and name fields must be sanitized.
+    mod sanitization {
+        use super::*;
+
+    /// A key containing a BEL (\x07) control character (valid TOML via \uXXXX escape)
+    /// must not appear raw in the detail string, which is printed to the terminal.
     #[test]
     fn doctor_self_loop_detail_strips_control_chars_from_key() {
-        // A key containing a BEL (\x07) control character (valid TOML via \uXXXX escape)
-        // must not appear raw in the detail string, which is printed to the terminal.
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![abbr("key\x07evil", "key\x07evil")]);
         let result = diagnose(&path, Some(&cfg), |_| true);
@@ -242,9 +252,9 @@ mod tests {
         );
     }
 
+    /// A cmd in `when_command_exists` containing a control char must not appear raw in detail.
     #[test]
     fn doctor_command_check_detail_strips_control_chars_from_cmd() {
-        // A cmd in when_command_exists containing a control char must not appear raw in detail.
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![crate::model::Abbr {
             key: "ls".into(),
@@ -260,11 +270,10 @@ mod tests {
         );
     }
 
+    /// `--config` path containing ANSI escape sequences must not appear raw in
+    /// the `config_file` check detail. Attack: a path with ESC sequences could clear the screen.
     #[test]
     fn doctor_config_file_detail_strips_control_chars_from_path() {
-        // --config path containing ANSI escape sequences must not appear raw in
-        // the config_file check detail, which is printed to the terminal.
-        // Attack: --config $'\x1b[2J/evil.toml' would clear the screen.
         let path = std::path::PathBuf::from("/home/user/\x1b[2Jevil.toml");
         let result = diagnose(&path, None, |_| true);
         let config_check = result.checks.iter().find(|c| c.name == "config_file");
@@ -275,11 +284,11 @@ mod tests {
         );
     }
 
+    /// The `name` field `"command:{cmd}"` is printed to the terminal.
+    /// A cmd containing ANSI escape sequences (e.g. ESC+`[2J` = clear screen) must
+    /// not appear raw in `check.name` — sanitized the same way as `detail`.
     #[test]
     fn doctor_command_check_name_strips_control_chars() {
-        // The `name` field "command:{cmd}" is printed to the terminal in human output.
-        // A cmd containing ANSI escape sequences (e.g. \x1b[2J = clear screen) must
-        // not appear raw in check.name — it must be sanitized the same way detail is.
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![crate::model::Abbr {
             key: "ls".into(),
@@ -295,4 +304,6 @@ mod tests {
             "check.name must not contain raw ESC (ANSI injection risk): {:?}", check.name
         );
     }
+
+    } // mod sanitization
 }

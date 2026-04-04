@@ -322,6 +322,9 @@ mod tests {
         }
     }
 
+    mod alias_parsing {
+        use super::*;
+
     #[test]
     fn collect_shell_alias_conflicts_reports_pwsh_and_bash() {
         let checks = collect_shell_alias_conflicts_with(
@@ -350,11 +353,11 @@ mod tests {
         assert_eq!(aliases.get("ls").map(String::as_str), Some("Get-ChildItem"));
     }
 
+    /// Strategy: create a temp HOME with a .bashrc that writes a sentinel file.
+    /// With `--norc --noprofile` the sentinel must not be created; `-i` would create it.
     #[test]
     #[cfg(unix)]
     fn load_bash_aliases_does_not_source_startup_files() {
-        // Strategy: create a temp HOME with a .bashrc that writes a sentinel file.
-        // With --norc --noprofile the sentinel must not be created; -i would create it.
         let home = tempfile::tempdir().unwrap();
         let sentinel = home.path().join("dotfile_executed");
         let bashrc = home.path().join(".bashrc");
@@ -430,12 +433,14 @@ mod tests {
         );
     }
 
-    // ─── alias parser DoS: line count limit ──────────────────────────────────
-    //
-    // `parse_bash_alias_lines` and `parse_pwsh_alias_lines` receive output from
-    // external shell processes. If a compromised or misbehaving shell emits an
-    // unbounded number of lines, parsing them all would consume unbounded memory
-    // and CPU. Parsers must silently truncate after a maximum number of lines.
+    } // mod alias_parsing
+
+    /// `parse_bash_alias_lines` and `parse_pwsh_alias_lines` receive output from
+    /// external shell processes. If a compromised or misbehaving shell emits an
+    /// unbounded number of lines, parsing them all would consume unbounded memory
+    /// and CPU. Parsers must silently truncate after a maximum number of lines.
+    mod alias_dos_line_count {
+        use super::*;
 
     #[test]
     fn parse_bash_alias_lines_truncates_at_max_lines() {
@@ -475,11 +480,13 @@ mod tests {
         assert_eq!(aliases.len(), 50, "parse_bash_alias_lines must return all entries below the limit");
     }
 
-    // ─── alias parser DoS: per-line length limit ─────────────────────────────
-    //
-    // Even with MAX_ALIAS_LINES, a single extremely long line (e.g. 10 MB) would
-    // consume unbounded memory for that one entry.  Parsers must silently truncate
-    // any alias value that exceeds MAX_ALIAS_VALUE_BYTES to cap per-entry memory.
+    } // mod alias_dos_line_count
+
+    /// Even with MAX_ALIAS_LINES, a single extremely long line (e.g. 10 MB) would
+    /// consume unbounded memory for that one entry. Parsers must silently truncate
+    /// any alias value that exceeds MAX_ALIAS_VALUE_BYTES to cap per-entry memory.
+    mod alias_dos_value_length {
+        use super::*;
 
     #[test]
     fn parse_bash_alias_lines_truncates_oversized_value() {
@@ -509,14 +516,16 @@ mod tests {
         }
     }
 
-    // ─── alias parser DoS: key (name) length limit ───────────────────────────
-    //
-    // `parse_bash_alias_lines` and `parse_pwsh_alias_lines` truncate the VALUE
-    // at MAX_ALIAS_VALUE_BYTES, but not the KEY (alias name).  A misbehaving
-    // shell that emits alias names with huge lengths (e.g. "alias AAAAAA…=v")
-    // fills the HashMap with oversized keys.  With MAX_ALIAS_LINES=10,000 entries
-    // and each key up to 1 MB, total memory could be 10 GB.
-    // Keys must be silently discarded when they exceed MAX_ALIAS_KEY_BYTES.
+    } // mod alias_dos_value_length
+
+    /// `parse_bash_alias_lines` and `parse_pwsh_alias_lines` truncate the VALUE
+    /// at MAX_ALIAS_VALUE_BYTES, but not the KEY (alias name). A misbehaving
+    /// shell that emits alias names with huge lengths (e.g. `alias AAAAAA…=v`)
+    /// fills the HashMap with oversized keys. With MAX_ALIAS_LINES=10,000 entries
+    /// and each key up to 1 MB, total memory could be 10 GB.
+    /// Keys must be silently discarded when they exceed MAX_ALIAS_KEY_BYTES.
+    mod alias_dos_key_length {
+        use super::*;
 
     #[test]
     fn parse_bash_alias_lines_discards_oversized_key() {
@@ -558,10 +567,18 @@ mod tests {
         assert_eq!(aliases.len(), 1, "key at exactly MAX_ALIAS_KEY_BYTES must be stored");
     }
 
-    // subprocess timeout ────────────────────────────────────────
+    } // mod alias_dos_key_length
+
+    /// Subprocess-level DoS limits: timeout and stdout size cap.
+    ///
+    /// A malicious or misbehaving shell binary on PATH must not cause alias
+    /// loading to hang or exhaust memory. These tests cover both the per-process
+    /// timeout and the maximum output size guard.
+    mod subprocess {
+        use super::*;
 
     /// A malicious `bash` on PATH that sleeps forever must not cause
-    /// load_bash_aliases to hang indefinitely.  The function must return
+    /// `load_bash_aliases` to hang indefinitely. The function must return
     /// within ALIAS_SUBPROCESS_TIMEOUT_SECS + a small margin.
     #[test]
     #[cfg(unix)]
@@ -619,8 +636,6 @@ mod tests {
         let _ = result;
     }
 
-    // subprocess stdout size limit ───────────────────────────────
-
     /// A shell that emits gigabytes of output must not cause OOM.
     ///
     /// Strategy: create a script that writes `MAX_SUBPROCESS_OUTPUT_BYTES * 2` bytes in a
@@ -652,4 +667,7 @@ mod tests {
             "run_with_timeout must return None when output exceeds MAX_SUBPROCESS_OUTPUT_BYTES"
         );
     }
+
+    } // mod subprocess
+
 }

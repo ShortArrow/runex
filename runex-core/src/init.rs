@@ -93,6 +93,9 @@ pub fn rc_file_for(shell: Shell) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    mod integration_line {
+        use super::*;
+
     #[test]
     fn default_config_content_has_version() {
         assert!(default_config_content().contains("version = 1"));
@@ -113,12 +116,11 @@ mod tests {
         assert!(line.contains("'runex' export pwsh"));
     }
 
+    /// `bin = "run'ex"` must not break out of the eval context.
     #[test]
     fn integration_line_bash_escapes_single_quote_in_bin() {
-        // bin = "run'ex" must not break out of the eval context
         let line = integration_line(Shell::Bash, "run'ex");
         assert!(!line.contains("run'ex"), "unescaped quote in bash line: {line}");
-        // must contain the properly escaped form
         assert!(line.contains(r"run'\''ex"), "expected bash-escaped form: {line}");
     }
 
@@ -129,28 +131,28 @@ mod tests {
         assert!(line.contains(r"run'\''ex"), "expected zsh-escaped form: {line}");
     }
 
+    /// PowerShell doubles single quotes inside single-quoted strings.
     #[test]
     fn integration_line_pwsh_escapes_single_quote_in_bin() {
         let line = integration_line(Shell::Pwsh, "run'ex");
         assert!(!line.contains("run'ex"), "unescaped quote in pwsh line: {line}");
-        // PowerShell doubles single quotes inside single-quoted strings
         assert!(line.contains("run''ex"), "expected pwsh-escaped form: {line}");
     }
 
+    /// `bin = "app; echo PWNED"` — semicolon must be enclosed in single quotes,
+    /// neutralising `;` to prevent command injection.
     #[test]
     fn integration_line_bash_semicolon_does_not_inject() {
-        // bin = "app; echo PWNED" — semicolon must be enclosed in single quotes
         let line = integration_line(Shell::Bash, "app; echo PWNED");
-        // The entire bin value must appear inside single quotes, neutralising ';'
         assert!(
             line.contains("'app; echo PWNED'"),
             "bin must be single-quoted in bash line: {line}"
         );
     }
 
+    /// `bin = "app; Write-Host PWNED"` — semicolon must be enclosed in single quotes.
     #[test]
     fn integration_line_pwsh_semicolon_does_not_inject() {
-        // bin = "app; Write-Host PWNED" — semicolon must be enclosed in single quotes
         let line = integration_line(Shell::Pwsh, "app; Write-Host PWNED");
         assert!(
             line.contains("'app; Write-Host PWNED'"),
@@ -158,9 +160,9 @@ mod tests {
         );
     }
 
+    /// Nu: quoting without `^` makes a string, not a command — must use `^"runex"`.
     #[test]
     fn integration_line_nu_uses_caret_external_command_syntax() {
-        // Nu: quoting without ^ makes a string, not a command — must use ^"runex"
         let line = integration_line(Shell::Nu, "runex");
         assert!(
             line.contains("^\"runex\""),
@@ -174,26 +176,26 @@ mod tests {
         assert!(line.contains("^\"my\\\"app\""), "nu: special chars must be escaped: {line}");
     }
 
+    /// `nu_quote_path` must wrap the path in double quotes so Nu doesn't tokenize on spaces.
     #[test]
     fn integration_line_nu_quotes_cfg_dir_with_spaces() {
-        // nu_quote_path must wrap the path in double quotes so Nu doesn't tokenize on spaces.
         let quoted = nu_quote_path("/home/my user/.config");
         assert_eq!(quoted, "\"/home/my user/.config\"");
         assert!(!quoted.starts_with('/'), "path must be quoted, not raw");
     }
 
+    /// Windows paths: backslashes must be escaped inside Nu double-quoted strings.
     #[test]
     fn integration_line_nu_quotes_cfg_dir_with_backslash() {
-        // Windows paths: backslashes must be escaped inside Nu double-quoted strings.
         let quoted = nu_quote_path(r"C:\Users\my user\AppData");
         assert_eq!(quoted, r#""C:\\Users\\my user\\AppData""#);
     }
 
+    /// The generated Nu integration line must quote the runex.nu path.
+    /// Both `save` and `source` must use quoted paths (starting with `"`).
     #[test]
     fn integration_line_nu_save_path_is_quoted() {
-        // The generated Nu integration line must quote the runex.nu path.
         let line = integration_line(Shell::Nu, "runex");
-        // save and source must use quoted paths (starting with ")
         for fragment in ["save --force \"", "source \""] {
             assert!(
                 line.contains(fragment),
@@ -202,12 +204,10 @@ mod tests {
         }
     }
 
-    // --- Clink integration_line: bin quoting ---
-
+    /// A single quote in bin must be passed through `lua_quote_string`.
+    /// `lua_quote_string("run'ex")` = `"run'ex"` (single quotes need no escaping in Lua double-quoted strings).
     #[test]
     fn integration_line_clink_single_quote_in_bin_is_lua_quoted() {
-        // A single quote in bin must be passed through lua_quote_string.
-        // lua_quote_string("run'ex") = "run'ex" (single quotes need no escaping in Lua double-quoted strings)
         let line = integration_line(Shell::Clink, "run'ex");
         assert!(
             line.contains("\"run'ex\""),
@@ -215,9 +215,9 @@ mod tests {
         );
     }
 
+    /// `lua_quote_string` escapes `\n` to `\\n`, preventing the Lua comment from being broken.
     #[test]
     fn integration_line_clink_newline_in_bin_does_not_inject() {
-        // lua_quote_string escapes \n to \\n, preventing the Lua comment from being broken.
         let line = integration_line(Shell::Clink, "runex\nos.execute('evil')");
         assert!(
             !line.contains('\n'),
@@ -229,7 +229,15 @@ mod tests {
         );
     }
 
-    // --- nu_quote_path: \n/\r/NUL handling ---
+    } // mod integration_line
+
+    /// Control-character and NUL handling in `nu_quote_path`.
+    ///
+    /// `nu_quote_path` embeds paths into Nu double-quoted string literals.
+    /// Newlines, carriage returns, tabs, NUL, DEL, and Unicode line separators
+    /// must be escaped or dropped so they cannot break out of the string context.
+    mod nu_quote_path_escaping {
+        use super::*;
 
     #[test]
     fn nu_quote_path_escapes_newline() {
@@ -245,9 +253,9 @@ mod tests {
         assert!(quoted.contains("\\r"), "expected \\r escape: {quoted}");
     }
 
+    /// If XDG_CONFIG_HOME contains a newline, it must not inject Nu statements into env.nu.
     #[test]
     fn integration_line_nu_newline_in_xdg_does_not_inject() {
-        // If XDG_CONFIG_HOME contains a newline, it must not inject Nu statements into env.nu.
         let quoted = nu_quote_path("/home/user/.config\nsource /tmp/evil.nu\n#");
         assert!(!quoted.contains('\n'), "newline injection must be escaped in nu path: {quoted}");
     }
@@ -258,8 +266,6 @@ mod tests {
         assert!(!quoted.contains('\0'), "nu_quote_path must not produce literal NUL: {quoted:?}");
         assert!(quoted.contains("path"), "path prefix must be preserved: {quoted:?}");
     }
-
-    // --- nu_quote_path: missing \t, DEL, NEL, U+2028/U+2029 handling (issue A) ---
 
     #[test]
     fn nu_quote_path_escapes_tab() {
@@ -290,9 +296,9 @@ mod tests {
         }
     }
 
+    /// C0 control chars other than `\n`, `\r`, `\t`, `\0`, `\x7f` must be dropped.
     #[test]
     fn nu_quote_path_drops_remaining_c0_control_chars() {
-        // C0 control chars other than \n, \r, \t, \0, \x7f must be dropped.
         let dangerous_c0: &[char] = &[
             '\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x07',
             '\x08', '\x0b', '\x0c', '\x0e', '\x0f',
@@ -311,17 +317,19 @@ mod tests {
         }
     }
 
-    // ─── nu_quote_path: Unicode visual-deception characters ──────────────────
-    //
-    // nu_quote_path embeds the XDG_CONFIG_HOME path into the `source "..."` line
-    // written to env.nu.  If XDG_CONFIG_HOME contains Unicode visual-deception
-    // characters (RLO, BOM, ZWSP, etc.), the displayed `source` path would appear
-    // different from its actual content, potentially deceiving the user into
-    // thinking a safe path is being sourced.  These characters must be dropped.
+    } // mod nu_quote_path_escaping
 
+    /// `nu_quote_path` embeds the XDG_CONFIG_HOME path into the `source "..."` line
+    /// written to env.nu. If XDG_CONFIG_HOME contains Unicode visual-deception
+    /// characters (RLO, BOM, ZWSP, etc.), the displayed `source` path would appear
+    /// different from its actual content, potentially deceiving the user into
+    /// thinking a safe path is being sourced. These characters must be dropped.
+    mod nu_quote_path_deceptive {
+        use super::*;
+
+    /// U+202E (Right-to-Left Override) reverses display order in the terminal.
     #[test]
     fn nu_quote_path_drops_rlo() {
-        // U+202E (Right-to-Left Override) reverses display order in the terminal.
         let quoted = nu_quote_path("/home/user\u{202E}/.config");
         assert!(
             !quoted.contains('\u{202E}'),
@@ -329,9 +337,9 @@ mod tests {
         );
     }
 
+    /// U+FEFF (BOM / zero-width no-break space) is invisible.
     #[test]
     fn nu_quote_path_drops_bom() {
-        // U+FEFF (BOM / zero-width no-break space) is invisible.
         let quoted = nu_quote_path("/home/user\u{FEFF}/.config");
         assert!(
             !quoted.contains('\u{FEFF}'),
@@ -339,9 +347,9 @@ mod tests {
         );
     }
 
+    /// U+200B (Zero-Width Space) is invisible.
     #[test]
     fn nu_quote_path_drops_zwsp() {
-        // U+200B (Zero-Width Space) is invisible.
         let quoted = nu_quote_path("/home/user\u{200B}/.config");
         assert!(
             !quoted.contains('\u{200B}'),
@@ -349,9 +357,9 @@ mod tests {
         );
     }
 
+    /// Non-deceptive Unicode (e.g. Japanese path components) must pass through.
     #[test]
     fn nu_quote_path_preserves_non_deceptive_unicode() {
-        // Non-deceptive Unicode (e.g. Japanese path components) must pass through.
         let quoted = nu_quote_path("/home/ユーザー/.config");
         assert!(
             quoted.contains("ユーザー"),
@@ -359,10 +367,10 @@ mod tests {
         );
     }
 
+    /// A `$` in XDG_CONFIG_HOME would allow Nu variable interpolation inside
+    /// the double-quoted `source "..."` path. Must be escaped as `\$`.
     #[test]
     fn nu_quote_path_escapes_dollar_sign() {
-        // A '$' in XDG_CONFIG_HOME would allow Nu variable interpolation inside
-        // the double-quoted `source "..."` path. Must be escaped as \$.
         let quoted = nu_quote_path("/home/$USER/.config");
         // Every '$' must be preceded by an odd number of backslashes.
         let bytes = quoted.as_bytes();
@@ -383,4 +391,7 @@ mod tests {
         }
         assert!(quoted.contains("\\$"), "expected \\$ in: {quoted:?}");
     }
+
+    } // mod nu_quote_path_deceptive
+
 }

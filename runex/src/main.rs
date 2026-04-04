@@ -616,6 +616,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
 
+    mod command_exists {
+        use super::*;
+
     #[test]
     fn make_command_exists_no_prepend_uses_which() {
         let exists = make_command_exists(None);
@@ -634,13 +637,15 @@ mod tests {
         assert!(!exists("__runex_other_fake__"));
     }
 
-    // ─── read_rc_content: size limit ─────────────────────────────────────────
-    //
-    // `init` reads the rc file to check for RUNEX_INIT_MARKER before appending.
-    // If the rc file is extremely large (e.g. corrupted or adversarially crafted),
-    // `read_to_string` would consume unbounded memory. `read_rc_content` must
-    // refuse files larger than MAX_RC_FILE_BYTES and return an empty string so
-    // that the marker check fails safe (appends as if unseen — idempotent).
+    } // mod command_exists
+
+    /// `init` reads the rc file to check for RUNEX_INIT_MARKER before appending.
+    /// If the rc file is extremely large (e.g. corrupted or adversarially crafted),
+    /// `read_to_string` would consume unbounded memory. `read_rc_content` must
+    /// refuse files larger than MAX_RC_FILE_BYTES and return an empty string so
+    /// that the marker check fails safe (appends as if unseen — idempotent).
+    mod rc_file_size_limit {
+        use super::*;
 
     #[test]
     fn read_rc_content_returns_content_for_normal_file() {
@@ -686,14 +691,16 @@ mod tests {
         );
     }
 
-    // ─── prompt_confirm: stdin read size limit ────────────────────────────────
-    //
-    // `prompt_confirm` reads one line from stdin to get a y/N answer.
-    // Without a size limit, a caller piping 10 MB of data would cause
-    // read_line() to allocate a 10 MB String before returning, wasting memory.
-    // The internal `prompt_confirm_from` helper must cap reading at
-    // MAX_CONFIRM_BYTES so that oversized input is treated as "no" without
-    // accumulating it all.
+    } // mod rc_file_size_limit
+
+    /// `prompt_confirm` reads one line from stdin to get a y/N answer.
+    /// Without a size limit, a caller piping 10 MB of data would cause
+    /// `read_line()` to allocate a 10 MB String before returning, wasting memory.
+    /// The internal `prompt_confirm_from` helper must cap reading at
+    /// MAX_CONFIRM_BYTES so that oversized input is treated as "no" without
+    /// accumulating it all.
+    mod prompt_confirm_limit {
+        use super::*;
 
     #[test]
     fn prompt_confirm_from_accepts_yes() {
@@ -728,10 +735,10 @@ mod tests {
         );
     }
 
+    /// A line far exceeding MAX_CONFIRM_BYTES must be treated as "no",
+    /// not buffered in full. The function must return false without OOM.
     #[test]
     fn prompt_confirm_from_rejects_oversized_input() {
-        // A line far exceeding MAX_CONFIRM_BYTES must be treated as "no",
-        // not buffered in full. The function must return false without OOM.
         use std::io::BufReader;
         let huge = vec![b'y'; MAX_CONFIRM_BYTES + 1];
         let mut reader = BufReader::new(huge.as_slice());
@@ -752,15 +759,17 @@ mod tests {
         );
     }
 
-    // ─── read_rc_content: non-regular file rejection ─────────────────────────
-    //
-    // `read_rc_content` reads the shell rc file to detect the RUNEX_INIT_MARKER.
-    // It must reject non-regular files (named pipes, device files) to prevent:
-    //   - Named pipe (FIFO): metadata().len() == 0, read_to_string() blocks
-    //     indefinitely waiting for a writer — process hangs.
-    //   - Device files (/dev/zero, /dev/urandom): report len=0, read_to_string()
-    //     fills memory unboundedly.
-    // The function must check metadata().is_file() before attempting to read.
+    } // mod prompt_confirm_limit
+
+    /// `read_rc_content` reads the shell rc file to detect the RUNEX_INIT_MARKER.
+    /// It must reject non-regular files (named pipes, device files) to prevent:
+    /// - Named pipe (FIFO): `metadata().len() == 0`, `read_to_string()` blocks
+    ///   indefinitely waiting for a writer — process hangs.
+    /// - Device files (`/dev/zero`, `/dev/urandom`): report len=0, `read_to_string()`
+    ///   fills memory unboundedly.
+    /// The function must check `metadata().is_file()` before attempting to read.
+    mod rc_file_non_regular {
+        use super::*;
 
     #[test]
     #[cfg(unix)]
@@ -787,5 +796,7 @@ mod tests {
             "read_rc_content must return empty string for /dev/zero (device file)"
         );
     }
+
+    } // mod rc_file_non_regular
 
 }
