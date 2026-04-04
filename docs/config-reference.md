@@ -111,6 +111,28 @@ $ runex --path-prepend /tmp/fake-bins which ls
 
 `expand` is inserted verbatim as shell-native text. Runex does not re-escape or reinterpret it. Shell quoting and special characters are passed through as-is.
 
+### Field limits and rejected characters
+
+Runex validates each field at config load time and rejects invalid values with a clear error.
+
+**Length limits:**
+
+| Field | Maximum |
+|---|---|
+| `key` | 1 024 bytes |
+| `expand` | 4 096 bytes |
+| `when_command_exists` — each entry | 255 bytes |
+| `when_command_exists` — number of entries | 64 |
+
+**Rejected characters** (in `key`, `expand`, and `when_command_exists` entries):
+
+- ASCII control characters (U+0000–U+001F, U+007F)
+- Unicode visual-deception characters — zero-width spaces, bidirectional overrides (RLO/LRO), BOM (U+FEFF), and similar invisible code points
+
+**`when_command_exists` — command names only:**
+
+Entries must be bare command names (`lsd`, `bat`, `eza`). Path separators (`/`, `\`, `:`) are not allowed. To check a command installed outside your normal PATH, use `--path-prepend` at runtime instead.
+
 ---
 
 ## Environment variables

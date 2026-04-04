@@ -160,9 +160,7 @@ See `docs/config-reference.md` for the full field reference.
 ### Near-term
 
 - Stabilize Nushell integration
-- Expand JSON output coverage beyond `list`, `doctor`, and `version`
 - Harden `doctor` and `init` around edge cases and clearer diagnostics
-- Improve config validation and error messages
 
 ### Later
 

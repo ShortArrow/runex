@@ -153,7 +153,7 @@ Global flags (available on every subcommand):
 ```
 --config <path>      override config file path
 --path-prepend <dir> prepend a directory to PATH for command existence checks
---json               JSON output (supported by: list, doctor, version)
+--json               JSON output (supported by: list, doctor, version, expand, which)
 ```
 
 ## Avoiding Expansion
@@ -183,9 +183,7 @@ If you use `trigger = "space"`, there are a few practical ways to avoid expansio
 Near-term:
 
 - Stabilize Nushell integration
-- Expand JSON output coverage beyond `list`, `doctor`, and `version`
 - Harden `doctor` and `init` around edge cases and clearer diagnostics
-- Improve config validation and error messages
 
 Later:
 
