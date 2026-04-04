@@ -57,6 +57,12 @@ pub enum ConfigError {
     CmdContainsPathSeparator(usize),
     #[error("abbr rule #{0}: when_command_exists has too many entries (max {MAX_CMD_LIST_LEN})")]
     TooManyCmds(usize),
+    #[error("unsupported config version {0}; only version 1 is supported")]
+    UnsupportedVersion(u32),
+    #[error("abbr rule #{0}: expand is empty (an empty expansion would silently delete the typed token)")]
+    ExpandEmpty(usize),
+    #[error("abbr rule #{0}: expand contains only whitespace (a whitespace-only expansion is almost certainly a config mistake)")]
+    ExpandWhitespaceOnly(usize),
 }
 
 /// Returns true if the character is a Unicode visual-deception character:
@@ -91,6 +97,12 @@ fn is_deceptive_unicode(c: char) -> bool {
 /// Parse a TOML string into Config.
 pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(s)?;
+    // Reject any version other than 1. The config schema is versioned so that future
+    // breaking changes can be introduced. Silently accepting an unknown version would
+    // mean missing new validation rules and potentially misinterpreting the schema.
+    if config.version != 1 {
+        return Err(ConfigError::UnsupportedVersion(config.version));
+    }
     if config.abbr.len() > MAX_ABBR_RULES {
         return Err(ConfigError::TooManyRules);
     }
@@ -108,6 +120,16 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
         }
         if abbr.key.len() > MAX_KEY_BYTES {
             return Err(ConfigError::KeyTooLong(n));
+        }
+        // Reject empty and whitespace-only expand values: they produce silent broken
+        // behavior — an empty expansion deletes the typed token, and a whitespace-only
+        // expansion replaces it with invisible characters. Both are almost certainly
+        // config mistakes; reject early with a clear error.
+        if abbr.expand.is_empty() {
+            return Err(ConfigError::ExpandEmpty(n));
+        }
+        if abbr.expand.trim().is_empty() {
+            return Err(ConfigError::ExpandWhitespaceOnly(n));
         }
         if abbr.expand.len() > MAX_EXPAND_BYTES {
             return Err(ConfigError::ExpandTooLong(n));
@@ -495,17 +517,6 @@ expand = "git commit -m"
         assert!(err.is_err(), "load_config must reject a named pipe");
     }
 
-    /// Canary: version=99 currently passes validation.
-    /// Update this test when explicit version validation is added.
-    #[test]
-    fn parse_version_99_currently_passes() {
-        let toml = "version = 99\n";
-        assert!(
-            parse_config(toml).is_ok(),
-            "version=99 currently passes — update this test when version validation is added"
-        );
-    }
-
     // ─── per-field validation ─────────────────────────────────────────────────
 
     #[test]
@@ -857,6 +868,93 @@ expand = "git commit -m"
         assert!(
             parse_config(&toml).is_ok(),
             "must accept when_command_exists with exactly 64 entries"
+        );
+    }
+
+    // ─── version field validation ─────────────────────────────────────────────
+    //
+    // The only supported config schema version is 1. A config file with version=2
+    // (or any other value) was written for a different schema and must be rejected
+    // rather than silently processed as version=1. Accepting unknown versions risks
+    // missing new validation rules introduced in a later schema.
+
+    #[test]
+    fn parse_config_rejects_version_0() {
+        // version=0 predates the current schema; must be rejected.
+        let toml = "version = 0\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject version=0 (unsupported schema version)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_version_2() {
+        // version=2 is an unknown future schema; must be rejected.
+        let toml = "version = 2\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject version=2 (unsupported schema version)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_version_99() {
+        // Replaces the old canary test: version=99 must now be rejected.
+        let toml = "version = 99\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject version=99 (unsupported schema version)"
+        );
+    }
+
+    #[test]
+    fn parse_config_accepts_version_1() {
+        // version=1 is the only supported schema; must be accepted.
+        let toml = "version = 1\n";
+        assert!(
+            parse_config(toml).is_ok(),
+            "must accept version=1 (the current supported schema)"
+        );
+    }
+
+    // ─── expand empty / whitespace-only ──────────────────────────────────────
+    //
+    // An expand value that is empty or whitespace-only is functionally broken:
+    //   - Empty expand: pressing the trigger key replaces the token with nothing,
+    //     deleting the typed text without any expansion. This is almost certainly
+    //     a config mistake.
+    //   - Whitespace-only expand: replaces the token with invisible characters,
+    //     a confusing and likely unintended behaviour.
+    // Both are rejected early so users get a clear error rather than silent breakage.
+
+    #[test]
+    fn parse_config_rejects_empty_expand() {
+        // expand = "" would silently delete the typed token on trigger. Reject early.
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject an abbr rule with an empty expand"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_whitespace_only_expand() {
+        // expand = "   " would replace the token with whitespace — silent confusion.
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"   \"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject an abbr rule with a whitespace-only expand"
+        );
+    }
+
+    #[test]
+    fn parse_config_accepts_normal_expand() {
+        // Sanity: a normal expand value must still be accepted.
+        let toml = "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n";
+        assert!(
+            parse_config(toml).is_ok(),
+            "must accept a normal non-empty expand value"
         );
     }
 }

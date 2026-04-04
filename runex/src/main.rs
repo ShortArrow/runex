@@ -458,15 +458,52 @@ const MAX_RC_FILE_BYTES: usize = 1024 * 1024; // 1 MB
 /// - the file does not exist (init should append)
 /// - the file exceeds MAX_RC_FILE_BYTES (safety: never read enormous files)
 /// - the file cannot be read for any other I/O reason
+///
+/// Uses a single file descriptor for both the metadata check and the read to
+/// eliminate the TOCTOU race that exists when `metadata()` and `read_to_string()`
+/// open the file separately.  On Unix, `O_NONBLOCK` prevents `open()` from
+/// blocking if the path points to a named pipe (FIFO) with no writer.
 fn read_rc_content(path: &Path) -> String {
-    let meta = match std::fs::metadata(path) {
+    use std::io::Read;
+    // Open the file once.  On Unix, O_NONBLOCK prevents open() from blocking on
+    // a FIFO that has no writer yet, closing the TOCTOU window between a separate
+    // metadata() call and a subsequent read_to_string().
+    // We intentionally do NOT use O_NOFOLLOW so that symlinked dotfiles (common
+    // in dotfile-manager setups) continue to work.
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+        {
+            Ok(f) => f,
+            Err(_) => return String::new(),
+        }
+    };
+    #[cfg(not(unix))]
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return String::new(),
+    };
+    // Metadata from the same fd — no second open, no TOCTOU window.
+    let meta = match file.metadata() {
         Ok(m) => m,
         Err(_) => return String::new(),
     };
+    // Reject non-regular files (named pipes, device files).
+    // On Unix these report len=0 but read_to_string() would consume unbounded
+    // data (/dev/zero) or block until a writer appears (FIFO).
+    if !meta.is_file() {
+        return String::new();
+    }
     if meta.len() > MAX_RC_FILE_BYTES as u64 {
         return String::new();
     }
-    std::fs::read_to_string(path).unwrap_or_default()
+    let mut content = String::new();
+    file.read_to_string(&mut content).unwrap_or_default();
+    content
 }
 
 // ─── Shell helpers ────────────────────────────────────────────────────────────
@@ -489,14 +526,39 @@ fn detect_shell() -> Option<Shell> {
     None
 }
 
-fn prompt_confirm(msg: &str) -> bool {
-    eprint!("{msg} [y/N] ");
-    let _ = io::stderr().flush();
+/// Maximum byte length accepted from a single `prompt_confirm` read.
+/// A real y/N answer is at most a few bytes; anything beyond this limit
+/// is treated as "no" to prevent unbounded memory growth from piped input.
+const MAX_CONFIRM_BYTES: usize = 1_024;
+
+/// Inner implementation of `prompt_confirm` that reads from an arbitrary `BufRead`.
+/// Returns true only for trimmed, case-insensitive "y" or "yes" responses
+/// that fit within MAX_CONFIRM_BYTES. Oversized input is treated as "no".
+fn prompt_confirm_from(reader: &mut impl io::BufRead) -> bool {
+    use io::{BufRead as _, Read as _};
     let mut input = String::new();
-    if io::stdin().read_line(&mut input).is_err() {
+    // Read at most MAX_CONFIRM_BYTES + 1 bytes via a by_ref adapter so we do not
+    // consume the reader itself.  The +1 lets us detect inputs that exceed the limit:
+    // if input.len() > MAX_CONFIRM_BYTES the response is abnormally long → treat as "no".
+    let mut limited = reader.by_ref().take(MAX_CONFIRM_BYTES as u64 + 1);
+    match limited.read_line(&mut input) {
+        Err(_) => return false,
+        Ok(0) => return false, // EOF with no data
+        Ok(_) => {}
+    }
+    // Reject if the limited read filled more than the allowed budget.
+    if input.len() > MAX_CONFIRM_BYTES {
         return false;
     }
     matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+fn prompt_confirm(msg: &str) -> bool {
+    eprint!("{msg} [y/N] ");
+    let _ = io::stderr().flush();
+    let stdin = io::stdin();
+    let mut reader = io::BufReader::new(stdin.lock());
+    prompt_confirm_from(&mut reader)
 }
 
 /// Maximum number of alias entries accepted from a single shell invocation.
@@ -514,6 +576,19 @@ const MAX_ALIAS_VALUE_BYTES: usize = 65_536;
 /// Alias names longer than any possible abbr key (MAX_KEY_BYTES = 1024) can
 /// never match and only waste memory.  Entries with oversized keys are discarded.
 const MAX_ALIAS_KEY_BYTES: usize = 1_024;
+
+/// Seconds to wait for a shell subprocess (bash/pwsh) to produce alias output.
+/// If the subprocess does not exit within this deadline it is killed and an
+/// empty alias map is returned.  Prevents a malicious `bash` or `pwsh` on PATH
+/// from hanging `runex doctor` indefinitely.
+const ALIAS_SUBPROCESS_TIMEOUT_SECS: u64 = 5;
+
+/// Maximum bytes read from a subprocess's stdout.
+/// Prevents a misbehaving or malicious shell from causing unbounded heap
+/// allocation during alias enumeration (e.g., outputting /dev/zero data within
+/// the timeout window).  Output exceeding this limit is treated as invalid and
+/// an empty alias map is returned.
+const MAX_SUBPROCESS_OUTPUT_BYTES: usize = 4 * 1024 * 1024; // 4 MB
 
 fn truncate_to_limit(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
@@ -546,27 +621,117 @@ fn parse_pwsh_alias_lines(stdout: &str) -> HashMap<String, String> {
     aliases
 }
 
+/// Run a command with a timeout.  If the child does not exit within
+/// `timeout_secs` seconds it is killed and `None` is returned.
+/// Returns `Some(stdout bytes)` on success (exit 0), `None` otherwise.
+///
+/// Uses a reader thread to collect stdout while the main thread enforces
+/// the deadline.  The child's stdin is closed immediately so that the child
+/// is not blocked waiting for input.
+fn run_with_timeout(
+    program: &str,
+    args: &[&str],
+    env_path: Option<&str>,
+    timeout_secs: u64,
+) -> Option<Vec<u8>> {
+    use std::io::Read;
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
+
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::null());
+    if let Some(path) = env_path {
+        cmd.env("PATH", path);
+    }
+    // Place the child in its own process group so that we can send SIGKILL
+    // to the entire group (including grandchildren like `sleep`) without
+    // affecting the current process group.
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let mut child = cmd.spawn().ok()?;
+
+    // Move the stdout pipe into a reader thread so that `wait()` below does
+    // not block on pipe drainage.  Cap the read at MAX_SUBPROCESS_OUTPUT_BYTES
+    // to prevent unbounded heap allocation from a misbehaving subprocess.
+    let stdout_pipe = child.stdout.take()?;
+    let reader_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe
+            .take(MAX_SUBPROCESS_OUTPUT_BYTES as u64 + 1)
+            .read_to_end(&mut buf);
+        buf
+    });
+
+    // Poll for child exit up to the deadline.
+    let deadline = Duration::from_secs(timeout_secs);
+    let poll_interval = Duration::from_millis(100);
+    let mut elapsed = Duration::ZERO;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) => {
+                if elapsed >= deadline {
+                    // Timed out: kill the child and all its descendants by
+                    // sending SIGKILL to the process group.
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(-(child.id() as i32), libc::SIGKILL);
+                    }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                thread::sleep(poll_interval);
+                elapsed += poll_interval;
+            }
+            Err(_) => break None,
+        }
+    };
+
+    let stdout = reader_handle.join().unwrap_or_default();
+
+    // Reject output that hit the cap (read MAX+1 bytes → oversized).
+    if stdout.len() > MAX_SUBPROCESS_OUTPUT_BYTES {
+        return None;
+    }
+
+    let status = status?;
+    if !status.success() {
+        return None;
+    }
+    Some(stdout)
+}
+
 fn load_pwsh_aliases() -> HashMap<String, String> {
-    if which::which("pwsh").is_err() {
+    load_pwsh_aliases_with_path(&std::env::var("PATH").unwrap_or_default())
+}
+
+fn load_pwsh_aliases_with_path(path_env: &str) -> HashMap<String, String> {
+    if which::which_in("pwsh", Some(path_env), std::env::current_dir().unwrap_or_default())
+        .is_err()
+    {
         return HashMap::new();
     }
 
-    let output = Command::new("pwsh")
-        .args([
+    let stdout = run_with_timeout(
+        "pwsh",
+        &[
             "-NoLogo",
             "-NoProfile",
             "-Command",
             "Get-Alias | ForEach-Object { \"{0}`t{1}\" -f $_.Name, $_.Definition }",
-        ])
-        .output();
-
-    let Ok(output) = output else {
-        return HashMap::new();
-    };
-    if !output.status.success() {
-        return HashMap::new();
+        ],
+        Some(path_env),
+        ALIAS_SUBPROCESS_TIMEOUT_SECS,
+    );
+    match stdout {
+        Some(bytes) => parse_pwsh_alias_lines(&String::from_utf8_lossy(&bytes)),
+        None => HashMap::new(),
     }
-    parse_pwsh_alias_lines(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn check_pwsh_alias_with<F>(token: &str, lookup: F) -> Option<Check>
@@ -606,25 +771,32 @@ fn parse_bash_alias_lines(stdout: &str) -> HashMap<String, String> {
 }
 
 fn load_bash_aliases() -> HashMap<String, String> {
+    load_bash_aliases_with_path(&std::env::var("PATH").unwrap_or_default())
+}
+
+fn load_bash_aliases_with_path(path_env: &str) -> HashMap<String, String> {
     if cfg!(windows) {
         return HashMap::new();
     }
 
-    if which::which("bash").is_err() {
+    if which::which_in("bash", Some(path_env), std::env::current_dir().unwrap_or_default())
+        .is_err()
+    {
         return HashMap::new();
     }
 
     // Use --norc --noprofile instead of -i to avoid sourcing ~/.bashrc and other
     // startup files, which could execute arbitrary user code during alias enumeration.
-    let output = Command::new("bash").args(["--norc", "--noprofile", "-c", "alias"]).output();
-
-    let Ok(output) = output else {
-        return HashMap::new();
-    };
-    if !output.status.success() {
-        return HashMap::new();
+    let stdout = run_with_timeout(
+        "bash",
+        &["--norc", "--noprofile", "-c", "alias"],
+        Some(path_env),
+        ALIAS_SUBPROCESS_TIMEOUT_SECS,
+    );
+    match stdout {
+        Some(bytes) => parse_bash_alias_lines(&String::from_utf8_lossy(&bytes)),
+        None => HashMap::new(),
     }
-    parse_bash_alias_lines(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn check_bash_alias_with<F>(token: &str, lookup: F) -> Option<Check>
@@ -678,11 +850,23 @@ fn add_shell_alias_conflicts(result: &mut DiagResult, config: Option<&Config>) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+/// Maximum byte length accepted for `--token` (expand) and `which <token>`.
+/// Tokens longer than any possible abbr key (MAX_KEY_BYTES = 1024 in config.rs)
+/// can never match and would cause needless memory allocation in sanitize_for_display.
+const MAX_TOKEN_BYTES: usize = 1_024;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Expand { token, dry_run } => {
+            if token.len() > MAX_TOKEN_BYTES {
+                eprintln!(
+                    "error: --token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
+                    token.len()
+                );
+                std::process::exit(1);
+            }
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
             if dry_run {
@@ -799,6 +983,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Which { token, why } => {
+            if token.len() > MAX_TOKEN_BYTES {
+                eprintln!(
+                    "error: token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
+                    token.len()
+                );
+                std::process::exit(1);
+            }
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
             let result = expand::which_abbr(&config, &token, &command_exists);
@@ -1315,6 +1506,23 @@ mod tests {
         assert!(content.is_empty(), "missing rc file must return empty string");
     }
 
+    /// A file exactly at MAX_RC_FILE_BYTES must be read (boundary: <=, not <).
+    /// This test exercises the single-fd size check introduced to close the TOCTOU
+    /// race: the same fd used for metadata() is also used for the read, so there
+    /// is no window for the file to be swapped between the size check and the read.
+    #[test]
+    fn read_rc_content_accepts_file_at_exact_size_limit() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        f.write_all(&vec![b'x'; MAX_RC_FILE_BYTES]).unwrap();
+        let content = read_rc_content(f.path());
+        assert_eq!(
+            content.len(),
+            MAX_RC_FILE_BYTES,
+            "read_rc_content must accept a file exactly at MAX_RC_FILE_BYTES"
+        );
+    }
+
     #[test]
     fn parse_pwsh_alias_lines_accepts_normal_count() {
         let mut input = String::new();
@@ -1416,4 +1624,221 @@ mod tests {
         let aliases = parse_pwsh_alias_lines(&input);
         assert_eq!(aliases.len(), 1, "key at exactly MAX_ALIAS_KEY_BYTES must be stored");
     }
+
+    // ─── prompt_confirm: stdin read size limit ────────────────────────────────
+    //
+    // `prompt_confirm` reads one line from stdin to get a y/N answer.
+    // Without a size limit, a caller piping 10 MB of data would cause
+    // read_line() to allocate a 10 MB String before returning, wasting memory.
+    // The internal `prompt_confirm_from` helper must cap reading at
+    // MAX_CONFIRM_BYTES so that oversized input is treated as "no" without
+    // accumulating it all.
+
+    #[test]
+    fn prompt_confirm_from_accepts_yes() {
+        use std::io::BufReader;
+        let input = b"y\n";
+        let mut reader = BufReader::new(&input[..]);
+        assert!(
+            prompt_confirm_from(&mut reader),
+            "prompt_confirm_from must return true for 'y\\n'"
+        );
+    }
+
+    #[test]
+    fn prompt_confirm_from_accepts_yes_long_form() {
+        use std::io::BufReader;
+        let input = b"yes\n";
+        let mut reader = BufReader::new(&input[..]);
+        assert!(
+            prompt_confirm_from(&mut reader),
+            "prompt_confirm_from must return true for 'yes\\n'"
+        );
+    }
+
+    #[test]
+    fn prompt_confirm_from_rejects_no() {
+        use std::io::BufReader;
+        let input = b"n\n";
+        let mut reader = BufReader::new(&input[..]);
+        assert!(
+            !prompt_confirm_from(&mut reader),
+            "prompt_confirm_from must return false for 'n\\n'"
+        );
+    }
+
+    #[test]
+    fn prompt_confirm_from_rejects_oversized_input() {
+        // A line far exceeding MAX_CONFIRM_BYTES must be treated as "no",
+        // not buffered in full. The function must return false without OOM.
+        use std::io::BufReader;
+        let huge = vec![b'y'; MAX_CONFIRM_BYTES + 1];
+        let mut reader = BufReader::new(huge.as_slice());
+        assert!(
+            !prompt_confirm_from(&mut reader),
+            "prompt_confirm_from must return false for input exceeding MAX_CONFIRM_BYTES"
+        );
+    }
+
+    #[test]
+    fn prompt_confirm_from_rejects_empty_input() {
+        use std::io::BufReader;
+        let input = b"";
+        let mut reader = BufReader::new(&input[..]);
+        assert!(
+            !prompt_confirm_from(&mut reader),
+            "prompt_confirm_from must return false for empty input (EOF)"
+        );
+    }
+
+    // ─── read_rc_content: non-regular file rejection ─────────────────────────
+    //
+    // `read_rc_content` reads the shell rc file to detect the RUNEX_INIT_MARKER.
+    // It must reject non-regular files (named pipes, device files) to prevent:
+    //   - Named pipe (FIFO): metadata().len() == 0, read_to_string() blocks
+    //     indefinitely waiting for a writer — process hangs.
+    //   - Device files (/dev/zero, /dev/urandom): report len=0, read_to_string()
+    //     fills memory unboundedly.
+    // The function must check metadata().is_file() before attempting to read.
+
+    #[test]
+    #[cfg(unix)]
+    fn read_rc_content_rejects_named_pipe() {
+        use std::ffi::CString;
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("fake_rc.sh");
+        let path_c = CString::new(pipe.to_str().unwrap()).unwrap();
+        unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) };
+        // If read_rc_content opens the pipe, read_to_string blocks indefinitely.
+        // The function must return an empty string without blocking.
+        let content = read_rc_content(&pipe);
+        assert_eq!(
+            content, "",
+            "read_rc_content must return empty string for a named pipe (FIFO), not block"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_rc_content_rejects_dev_zero() {
+        // /dev/zero reports metadata.len() == 0 and reads unlimited zero bytes.
+        // read_rc_content must not attempt to read it.
+        let path = std::path::Path::new("/dev/zero");
+        let content = read_rc_content(path);
+        assert_eq!(
+            content, "",
+            "read_rc_content must return empty string for /dev/zero (device file)"
+        );
+    }
+
+    // ── Vector 23: subprocess timeout ────────────────────────────────────────
+
+    /// A malicious `bash` on PATH that sleeps forever must not cause
+    /// load_bash_aliases to hang indefinitely.  The function must return
+    /// within ALIAS_SUBPROCESS_TIMEOUT_SECS + a small margin.
+    #[test]
+    #[cfg(unix)]
+    fn load_bash_aliases_returns_within_timeout_when_bash_hangs() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Instant;
+
+        // Create a fake "bash" that sleeps forever.
+        let dir = tempfile::tempdir().unwrap();
+        let fake_bash = dir.path().join("bash");
+        fs::write(&fake_bash, "#!/bin/sh\nsleep 999\n").unwrap();
+        fs::set_permissions(&fake_bash, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Inject the fake bash at the front of PATH.
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", dir.path().display(), original_path);
+
+        let start = Instant::now();
+        // We can't easily set PATH for load_bash_aliases without refactoring.
+        // Instead call Command directly with the env to simulate what load_bash_aliases does.
+        // This test documents the expected behavior: the function must time out.
+        //
+        // We call a helper (not yet existing) that mirrors load_bash_aliases but
+        // accepts a PATH override for testability.
+        let result = load_bash_aliases_with_path(&new_path);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_secs() < ALIAS_SUBPROCESS_TIMEOUT_SECS + 2,
+            "load_bash_aliases must return within timeout; took {:?}",
+            elapsed
+        );
+        // A hanging bash produces no usable output — empty map is fine.
+        let _ = result;
+    }
+
+    /// A malicious `pwsh` on PATH that sleeps forever must not cause
+    /// load_pwsh_aliases to hang indefinitely.
+    #[test]
+    #[cfg(unix)]
+    fn load_pwsh_aliases_returns_within_timeout_when_pwsh_hangs() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Instant;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fake_pwsh = dir.path().join("pwsh");
+        fs::write(&fake_pwsh, "#!/bin/sh\nsleep 999\n").unwrap();
+        fs::set_permissions(&fake_pwsh, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", dir.path().display(), original_path);
+
+        let start = Instant::now();
+        let result = load_pwsh_aliases_with_path(&new_path);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_secs() < ALIAS_SUBPROCESS_TIMEOUT_SECS + 2,
+            "load_pwsh_aliases must return within timeout; took {:?}",
+            elapsed
+        );
+        let _ = result;
+    }
+
+    // ── Vector 24: subprocess stdout size limit ───────────────────────────────
+
+    /// A shell that emits gigabytes of output must not cause OOM.
+    /// run_with_timeout must cap stdout at MAX_SUBPROCESS_OUTPUT_BYTES and
+    /// discard the rest without allocating unboundedly.
+    #[test]
+    #[cfg(unix)]
+    fn run_with_timeout_caps_output_size() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        // Create a script that outputs MAX_SUBPROCESS_OUTPUT_BYTES * 2 bytes fast
+        // using `yes` (outputs "y\n" in a tight loop) then exits 0.
+        // `yes | head -c N` is capped at N bytes by the shell, ensuring the
+        // process exits quickly and we can test the size cap independently of
+        // the timeout.
+        let dir = tempfile::tempdir().unwrap();
+        let fake_sh = dir.path().join("flood");
+        // Write a large block (MAX*2 bytes) using dd from /dev/zero with a large
+        // block size (fast) then exit 0.  Exits with status 0 so we can verify
+        // the size check — not the exit-code check — triggers the None return.
+        let bs = MAX_SUBPROCESS_OUTPUT_BYTES * 2;
+        let script = format!("#!/bin/sh\ndd if=/dev/zero bs={bs} count=1 2>/dev/null; exit 0\n");
+        fs::write(&fake_sh, &script).unwrap();
+        fs::set_permissions(&fake_sh, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let result = run_with_timeout(
+            fake_sh.to_str().unwrap(),
+            &[],
+            None,
+            ALIAS_SUBPROCESS_TIMEOUT_SECS,
+        );
+
+        // Output is 2×limit → exceeds MAX_SUBPROCESS_OUTPUT_BYTES → must be None.
+        assert!(
+            result.is_none(),
+            "run_with_timeout must return None when output exceeds MAX_SUBPROCESS_OUTPUT_BYTES"
+        );
+    }
+
 }

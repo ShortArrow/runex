@@ -6,7 +6,7 @@
 ///   --path-prepend <dir>  to inject fake command presence without altering PATH
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tempfile::{NamedTempFile, TempDir};
 
 fn bin() -> &'static str {
@@ -1086,5 +1086,135 @@ fn export_unknown_shell_with_zwsp_in_name_does_not_inject_into_stderr() {
     assert!(
         !stderr.contains('\u{200B}'),
         "stderr must not contain raw ZWSP U+200B from shell name: {stderr:?}"
+    );
+}
+
+// ─── expand / which: --token length limit ────────────────────────────────────
+//
+// The shell integration passes the token from the command-line buffer to
+// `runex expand --token=<token>`.  Without a length guard, a user pasting a
+// huge buffer could cause runex to allocate and process an arbitrarily large
+// string.  Any token longer than MAX_KEY_BYTES (1024) can never match an abbr
+// rule and must be rejected with a non-zero exit code so the shell integration
+// falls back to a plain space insertion.
+
+/// expand --token exceeding the maximum key length must exit non-zero.
+#[test]
+fn expand_with_oversized_token_exits_nonzero() {
+    let cfg = write_config("version = 1\n");
+    let huge_token = "k".repeat(1025);
+    let (_, stderr, ok) = run(
+        &["expand", &format!("--token={huge_token}")],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(
+        !ok,
+        "expand --token longer than 1024 bytes must exit non-zero"
+    );
+    assert!(
+        stderr.contains("token") || stderr.contains("long") || stderr.contains("invalid"),
+        "stderr must mention the invalid token: {stderr}"
+    );
+}
+
+/// which <token> exceeding the maximum key length must exit non-zero.
+#[test]
+fn which_with_oversized_token_exits_nonzero() {
+    let cfg = write_config("version = 1\n");
+    let huge_token = "k".repeat(1025);
+    let (_, stderr, ok) = run(
+        &["which", &huge_token],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(
+        !ok,
+        "which <token> longer than 1024 bytes must exit non-zero"
+    );
+    assert!(
+        stderr.contains("token") || stderr.contains("long") || stderr.contains("invalid"),
+        "stderr must mention the invalid token: {stderr}"
+    );
+}
+
+// ─── init: prompt_confirm stdin DoS ──────────────────────────────────────────
+//
+// `prompt_confirm` reads a line from stdin to ask the user y/N. Without a
+// maximum read size, piping a huge amount of data (e.g. 10 MB of 'a' with no
+// newline) causes read_line to buffer it all into a String, consuming memory
+// proportional to the input size.
+//
+// The fix must truncate or discard input beyond MAX_CONFIRM_BYTES, so the
+// process stays within expected memory bounds and terminates promptly.
+
+/// `init` must exit promptly even when stdin contains 10 MB of data without a newline.
+/// Without a read limit, read_line() buffers all of stdin before returning.
+#[test]
+fn init_prompt_confirm_handles_huge_stdin_without_oom() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+
+    let mut child = init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Write 10 MB of 'y' bytes with no newline, then close stdin.
+    // Without a limit, read_line buffers all of this before returning.
+    // With the limit, it reads only up to MAX_CONFIRM_BYTES and stops.
+    {
+        let stdin = child.stdin.take().unwrap();
+        let mut writer = std::io::BufWriter::new(stdin);
+        let chunk = vec![b'y'; 65_536];
+        for _ in 0..160 {
+            // 160 * 65,536 = ~10 MB
+            if writer.write_all(&chunk).is_err() {
+                break; // child already exited — that's fine
+            }
+        }
+        // Drop writer to close stdin
+    }
+
+    // The child must finish within a reasonable time; if it hangs, the test runner
+    // will time out. We assert it exits with any status (y/n doesn't matter here).
+    let status = child.wait().unwrap();
+    let _ = status;
+}
+
+/// `init` with 2 KB of 'y' (no newline) as stdin must not treat the input as "yes".
+/// After reading MAX_CONFIRM_BYTES, content beyond the limit is discarded;
+/// a blob of raw 'y' bytes without a valid "y\n" response must be treated as "no".
+#[test]
+fn init_prompt_confirm_huge_stdin_is_treated_as_no() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+
+    let mut child = init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Write 2 KB of 'y' with no newline — larger than a real "y\n" answer.
+    // Must not be interpreted as "yes".
+    {
+        let stdin = child.stdin.take().unwrap();
+        let mut writer = std::io::BufWriter::new(stdin);
+        let blob = vec![b'y'; 2048];
+        let _ = writer.write_all(&blob);
+    }
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Config file must NOT have been created (blob was not treated as "yes")
+    assert!(
+        !config_path.exists() || stdout.contains("Skipped"),
+        "huge 'yyy...' blob without newline must not be treated as 'yes': stdout={stdout}"
     );
 }
