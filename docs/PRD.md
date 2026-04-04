@@ -50,7 +50,7 @@ The core concept is **"rune-to-cast expansion"**.
 - zsh
 - PowerShell (pwsh)
 - cmd (via Clink)
-- Nushell (nu, experimental)
+- Nushell (nu)
 
 ---
 
@@ -159,7 +159,6 @@ See `docs/config-reference.md` for the full field reference.
 
 ### Near-term
 
-- Stabilize Nushell integration
 - Harden `doctor` and `init` around edge cases and clearer diagnostics
 
 ### Later

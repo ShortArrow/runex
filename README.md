@@ -86,9 +86,7 @@ eval "$(runex export zsh)"
 Invoke-Expression (& runex export pwsh | Out-String)
 ```
 
-### Nushell (Experimental)
-
-Nushell integration is experimental and not considered stable yet.
+### Nushell
 
 Add to `env.nu` (typically `~/.config/nushell/env.nu`):
 
@@ -182,7 +180,6 @@ If you use `trigger = "space"`, there are a few practical ways to avoid expansio
 
 Near-term:
 
-- Stabilize Nushell integration
 - Harden `doctor` and `init` around edge cases and clearer diagnostics
 
 Later:

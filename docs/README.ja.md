@@ -84,9 +84,7 @@ eval "$(runex export zsh)"
 Invoke-Expression (& runex export pwsh | Out-String)
 ```
 
-### Nushell（Experimental）
-
-Nushell 連携は experimental です。安定していない場合があります。
+### Nushell
 
 `env.nu`（多くの環境では `~/.config/nushell/env.nu`）に追加：
 
@@ -180,10 +178,7 @@ runex version                            バージョンとビルドコミット
 
 直近:
 
-- Nushell 連携の安定化
-- `list` / `doctor` / `version` 以外への JSON 出力拡張
 - `doctor` / `init` のエッジケース対応と診断改善
-- 設定バリデーションとエラーメッセージの改善
 
 後回し:
 
