@@ -762,28 +762,22 @@ fn which_rejects_config_with_ansi_escape_in_expansion() {
 #[test]
 fn expand_when_command_exists_with_path_separator_not_satisfied() {
     // when_command_exists values must be bare command names, not filesystem paths.
-    // A value containing a path separator must always be treated as not-found,
-    // even when --path-prepend points to a directory that makes dir.join(cmd)
-    // resolve to an existing file (filesystem probing via path traversal).
-    let bins = fake_bin_dir(&[]);
-    // Write an actual file the attacker wants to "find" via path traversal.
-    // On Unix, use the bins dir itself as the target: "../<bins_dir_name>/some_file"
-    // We simulate by creating a file in bins dir and using a relative path cmd.
-    std::fs::write(bins.path().join("target_file"), b"").unwrap();
-    let traversal_cmd = format!("../target_file");
+    // A value containing a path separator is rejected at config parse time, so
+    // the config is invalid and runex must exit non-zero.
+    // This prevents filesystem probing via dir.join("../target_file").
+    let traversal_cmd = "../target_file";
     let toml = format!(
         "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"{traversal_cmd}\"]\n"
     );
     let cfg = write_config(&toml);
-    // Even with --path-prepend pointing to a subdirectory of bins,
-    // the path-separator in the cmd must cause immediate not-found.
-    let sub = bins.path().join("sub");
-    std::fs::create_dir_all(&sub).unwrap();
-    let (stdout, _, ok) = run(&["expand", "--token=ls"], Some(cfg.path()), Some(&sub));
-    assert!(ok, "expand must succeed: {stdout}");
-    assert_eq!(
-        stdout.trim(), "ls",
-        "when_command_exists with path separator must not be satisfied (filesystem probe blocked)"
+    let (_, stderr, ok) = run(&["expand", "--token=ls"], Some(cfg.path()), None);
+    assert!(
+        !ok,
+        "expand must fail when when_command_exists entry contains a path separator (config rejected at parse)"
+    );
+    assert!(
+        stderr.contains("path separator") || stderr.contains("failed to load"),
+        "stderr must mention path separator rejection: {stderr:?}"
     );
 }
 
@@ -794,15 +788,18 @@ fn expand_when_command_exists_with_path_separator_not_satisfied() {
 fn expand_when_command_exists_with_colon_not_satisfied() {
     // On Windows, `dir.join("C:foo")` resolves as an absolute path, bypassing
     // the intended --path-prepend directory restriction.
-    // A cmd containing ':' must always be treated as not-found.
+    // A cmd containing ':' is now rejected at config parse time.
     let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"C:lsd\"]\n";
     let cfg = write_config(toml);
     let bins = fake_bin_dir(&["lsd"]);
-    let (stdout, _, ok) = run(&["expand", "--token=ls"], Some(cfg.path()), Some(bins.path()));
-    assert!(ok);
-    assert_eq!(
-        stdout.trim(), "ls",
-        "when_command_exists with ':' must not be satisfied (Windows path bypass blocked)"
+    let (_, stderr, ok) = run(&["expand", "--token=ls"], Some(cfg.path()), Some(bins.path()));
+    assert!(
+        !ok,
+        "expand must fail when when_command_exists entry contains ':' (config rejected at parse)"
+    );
+    assert!(
+        stderr.contains("path separator") || stderr.contains("failed to load"),
+        "stderr must mention rejection: {stderr:?}"
     );
 }
 
@@ -810,32 +807,31 @@ fn expand_when_command_exists_with_colon_not_satisfied() {
 
 #[test]
 fn doctor_when_command_exists_absolute_path_is_treated_as_not_found() {
-    // `when_command_exists` is intended for bare command names (e.g. "lsd"), not paths.
-    // Passing an absolute path like "/etc/passwd" would let an attacker probe the
-    // filesystem via doctor output (found vs not found).
-    // A bare-name check must be enforced: absolute paths must always be treated as
-    // not-found (or cause an error), never confirming file existence.
+    // `when_command_exists` values containing path separators are rejected at config
+    // parse time, so a path like "/etc/passwd" can never be probed via doctor output.
+    // The config must be rejected (doctor exits non-zero or doctor JSON shows config error),
+    // never confirming file existence via "found" in the output.
     #[cfg(unix)]
     {
         let cfg = write_config(
             "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"/etc/passwd\"]\n",
         );
-        let (stdout, _, _) = run(&["doctor", "--json"], Some(cfg.path()), None);
-        // The abbr check must report the condition as not satisfied (command not found),
-        // not as found — /etc/passwd exists but is not a command in PATH.
+        let (stdout, _stderr, _ok) = run(&["doctor", "--json"], Some(cfg.path()), None);
+        // Whether the config is rejected at parse (empty stdout) or doctor reports it as
+        // an error, the key invariant is that no check detail says "/etc/passwd" is found.
         let checks: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
         let empty = vec![];
         let check_arr = checks.as_array().unwrap_or(&empty);
-        let abbr_checks: Vec<_> = check_arr
-            .iter()
-            .filter(|c| c["name"].as_str().unwrap_or("").starts_with("abbr:"))
-            .collect();
-        // All abbr checks involving /etc/passwd must not report it as "found"
-        for check in &abbr_checks {
+        for check in check_arr {
             let detail = check["detail"].as_str().unwrap_or("");
             assert!(
                 !detail.contains("/etc/passwd: found"),
                 "doctor must not report absolute path /etc/passwd as found: {detail}"
+            );
+            let name = check["name"].as_str().unwrap_or("");
+            assert!(
+                !name.contains("/etc/passwd"),
+                "doctor check name must not contain raw path /etc/passwd: {name}"
             );
         }
     }
@@ -993,5 +989,46 @@ fn export_with_oversized_bin_exits_nonzero() {
     assert!(
         stderr.contains("bin") || stderr.contains("long") || stderr.contains("invalid"),
         "stderr must mention the invalid bin: {stderr}"
+    );
+}
+
+// ─── export --shell: terminal injection in error messages ─────────────────────
+
+/// export with an unknown shell containing an ANSI escape sequence must not
+/// echo the raw ESC byte into stderr (terminal injection via error message).
+/// `ShellParseError` embeds the user-supplied shell name in its Display output;
+/// that output must be sanitized before reaching the terminal.
+#[test]
+fn export_unknown_shell_with_control_char_in_name_does_not_inject_into_stderr() {
+    let cfg = write_config("version = 1\n");
+    // shell name = "bash\x1b[2Jevil" — ESC[2J would clear the screen if echoed raw
+    let evil_shell = "bash\x1b[2Jevil";
+    let (_, stderr, ok) = run(
+        &["export", evil_shell, "--bin=runex"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(!ok, "export with unknown shell must exit non-zero");
+    assert!(
+        !stderr.contains('\x1b'),
+        "stderr must not contain raw ESC from shell name (terminal injection risk): {stderr:?}"
+    );
+}
+
+/// export with an unknown shell containing a BEL byte (\x07) must not
+/// echo the raw BEL byte into stderr.
+#[test]
+fn export_unknown_shell_with_bel_in_name_does_not_inject_into_stderr() {
+    let cfg = write_config("version = 1\n");
+    let evil_shell = "bash\x07evil";
+    let (_, stderr, ok) = run(
+        &["export", evil_shell, "--bin=runex"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(!ok, "export with unknown shell must exit non-zero");
+    assert!(
+        !stderr.contains('\x07'),
+        "stderr must not contain raw BEL from shell name (terminal injection risk): {stderr:?}"
     );
 }

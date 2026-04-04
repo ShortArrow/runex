@@ -38,6 +38,51 @@ pub enum ConfigError {
     KeyContainsControlChar(usize),
     #[error("abbr rule #{0}: expand contains an ASCII control character (use printable characters only)")]
     ExpandContainsControlChar(usize),
+    #[error("abbr rule #{0}: key is empty (an empty key can never match anything)")]
+    KeyEmpty(usize),
+    #[error("abbr rule #{0}: key contains only whitespace (a whitespace-only key can never match)")]
+    KeyWhitespaceOnly(usize),
+    #[error("abbr rule #{0}: when_command_exists entry is empty (an empty command name can never be found)")]
+    CmdEmpty(usize),
+    #[error("abbr rule #{0}: when_command_exists entry contains only whitespace (a whitespace-only command name can never be found)")]
+    CmdWhitespaceOnly(usize),
+    #[error("abbr rule #{0}: key contains a Unicode visual-deception character (invisible/directional char that makes the key unmatchable or misleading)")]
+    KeyContainsDeceptiveUnicode(usize),
+    #[error("abbr rule #{0}: expand contains a Unicode visual-deception character (invisible/directional char that makes the expansion misleading)")]
+    ExpandContainsDeceptiveUnicode(usize),
+    #[error("abbr rule #{0}: when_command_exists entry contains a Unicode visual-deception character")]
+    CmdContainsDeceptiveUnicode(usize),
+    #[error("abbr rule #{0}: when_command_exists entry contains a path separator ('/', '\\\\', or ':'); only bare command names are allowed")]
+    CmdContainsPathSeparator(usize),
+}
+
+/// Returns true if the character is a Unicode visual-deception character:
+/// invisible characters, zero-width characters, directional overrides, BOM,
+/// or other code points that cause a visible string to differ from its byte
+/// representation in ways invisible to users.
+///
+/// These characters are dangerous in config fields because they can make a key
+/// look like a well-known command (e.g. "ls") while actually being a different
+/// string (e.g. "\u{FEFF}ls"), causing rules that never match or expansions that
+/// display differently than their actual content.
+fn is_deceptive_unicode(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}'                    // Soft Hyphen — invisible in many renderers
+        | '\u{034F}'                  // Combining Grapheme Joiner
+        | '\u{061C}'                  // Arabic Letter Mark
+        | '\u{115F}'..='\u{1160}'     // Hangul fillers (look like spaces)
+        | '\u{17B4}'..='\u{17B5}'     // Khmer invisible vowels
+        | '\u{180B}'..='\u{180F}'     // Mongolian free variation selectors
+        | '\u{200B}'..='\u{200F}'     // Zero-width space/non-joiner/joiner/marks
+        | '\u{202A}'..='\u{202E}'     // Bidirectional formatting (LRE, RLE, PDF, LRO, RLO)
+        | '\u{2060}'..='\u{206F}'     // Word joiner, invisible operators, bidi isolates
+        | '\u{3164}'                  // Hangul filler (looks like a space)
+        | '\u{FE00}'..='\u{FE0F}'     // Variation selectors (change glyph appearance)
+        | '\u{FEFF}'                  // BOM / zero-width no-break space
+        | '\u{FFA0}'                  // Halfwidth Hangul filler
+        | '\u{FFF9}'..='\u{FFFB}'     // Interlinear annotation characters
+        | '\u{E0000}'..='\u{E007F}'   // Tags block (invisible ASCII lookalikes)
+    )
 }
 
 /// Parse a TOML string into Config.
@@ -48,6 +93,16 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
     }
     for (i, abbr) in config.abbr.iter().enumerate() {
         let n = i + 1;
+        // Reject empty and whitespace-only keys early: they can never match a token
+        // (shell integrations extract tokens by splitting on spaces), and an empty key
+        // produces `''`) in generated bash/zsh case statements which matches the empty
+        // string — causing silent unexpected expansions.
+        if abbr.key.is_empty() {
+            return Err(ConfigError::KeyEmpty(n));
+        }
+        if abbr.key.trim().is_empty() {
+            return Err(ConfigError::KeyWhitespaceOnly(n));
+        }
         if abbr.key.len() > MAX_KEY_BYTES {
             return Err(ConfigError::KeyTooLong(n));
         }
@@ -71,8 +126,25 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
         if abbr.expand.chars().any(|c| c.is_ascii_control()) {
             return Err(ConfigError::ExpandContainsControlChar(n));
         }
+        // Reject Unicode visual-deception characters (invisible chars, directional overrides,
+        // BOM, zero-width chars) in key, expand, and when_command_exists entries.
+        // These characters are not visible in most terminals and text editors, allowing a
+        // config to appear safe while actually containing keys that never match, or expansions
+        // that display differently than their byte content (e.g. RLO reverses display order).
+        if abbr.key.chars().any(is_deceptive_unicode) {
+            return Err(ConfigError::KeyContainsDeceptiveUnicode(n));
+        }
+        if abbr.expand.chars().any(is_deceptive_unicode) {
+            return Err(ConfigError::ExpandContainsDeceptiveUnicode(n));
+        }
         if let Some(cmds) = &abbr.when_command_exists {
             for cmd in cmds {
+                if cmd.is_empty() {
+                    return Err(ConfigError::CmdEmpty(n));
+                }
+                if cmd.trim().is_empty() {
+                    return Err(ConfigError::CmdWhitespaceOnly(n));
+                }
                 if cmd.len() > MAX_CMD_BYTES {
                     return Err(ConfigError::CmdTooLong(n));
                 }
@@ -81,6 +153,16 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
                 }
                 if cmd.chars().any(|c| c.is_ascii_control()) {
                     return Err(ConfigError::CmdContainsControlChar(n));
+                }
+                if cmd.chars().any(is_deceptive_unicode) {
+                    return Err(ConfigError::CmdContainsDeceptiveUnicode(n));
+                }
+                // Reject path separators and Windows drive letters.
+                // when_command_exists values must be bare command names, not filesystem paths.
+                // A value containing '/' or '\' would make dir.join(cmd) traverse directories,
+                // bypassing the intent of checking only within path_prepend.
+                if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
+                    return Err(ConfigError::CmdContainsPathSeparator(n));
                 }
             }
         }
@@ -119,15 +201,16 @@ pub(crate) fn xdg_config_home() -> Option<PathBuf> {
 /// `read_to_string()` open the file separately.
 pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     use std::io::Read;
-    // On Unix, open with O_NOFOLLOW to refuse symlinks at the final path component.
-    // This prevents an attacker from racing to replace config.toml with a symlink
-    // to any readable regular file (e.g. /etc/passwd), not just device nodes.
+    // On Unix, open with O_NOFOLLOW to refuse symlinks at the final path component,
+    // and O_NONBLOCK so that opening a named pipe does not block indefinitely waiting
+    // for a writer. Named pipes are rejected immediately after open via the is_file()
+    // check; without O_NONBLOCK, open() on a FIFO blocks until a writer appears.
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt;
         std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(path)?
     };
     #[cfg(not(unix))]
@@ -518,6 +601,51 @@ expand = "git commit -m"
     }
 
     #[test]
+    fn parse_config_rejects_empty_key() {
+        // An empty key produces `''`) in bash/zsh case statements, which matches
+        // the empty string — any empty-token expansion would silently fire.
+        // Reject early with a clear error rather than producing a broken script.
+        let toml = "version = 1\n[[abbr]]\nkey = \"\"\nexpand = \"git commit -m\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject an abbr rule with an empty key"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_whitespace_only_key() {
+        // A key consisting only of spaces would also be silently dropped by
+        // quoting functions, making the rule unmatchable while appearing valid.
+        let toml = "version = 1\n[[abbr]]\nkey = \"   \"\nexpand = \"git commit -m\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject an abbr rule with a whitespace-only key"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_empty_when_command_exists_entry() {
+        // An empty string in when_command_exists is meaningless: which::which("") always
+        // fails, silently causing the rule to never expand. Reject early with a clear error.
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"\"]\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject when_command_exists entry that is an empty string"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_whitespace_only_when_command_exists_entry() {
+        // A whitespace-only command name silently makes the rule permanently inactive.
+        // Reject early so the user gets a clear error instead.
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"   \"]\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject when_command_exists entry that is whitespace-only"
+        );
+    }
+
+    #[test]
     fn parse_config_rejects_control_char_in_when_command_exists() {
         // ESC (\u001B) in a when_command_exists entry must be rejected.
         // It passes the NUL check and the /\: path-separator check, but would be
@@ -535,6 +663,132 @@ expand = "git commit -m"
         assert!(
             parse_config(toml).is_err(),
             "must reject when_command_exists entry containing DEL (\\u007F)"
+        );
+    }
+
+    // ─── Unicode visual-deception characters ─────────────────────────────────
+    //
+    // Characters such as U+FEFF (BOM/zero-width no-break space), U+202E (Right-to-Left
+    // Override), and other Unicode formatting/invisible characters cannot be seen in most
+    // terminals and text editors. If embedded in `key`, `expand`, or `when_command_exists`,
+    // they cause:
+    //   - `key`: rule appears valid but never matches (invisible difference from real command)
+    //   - `expand`: expansion contains invisible/deceptive text printed to terminal
+    //   - `when_command_exists`: command lookup silently fails forever
+    //   - `list` output: shows a key that looks like "ls" but is really "\u{FEFF}ls"
+    //
+    // These must be rejected early with a clear error.
+
+    #[test]
+    fn parse_config_rejects_bom_in_key() {
+        // U+FEFF is the BOM / zero-width no-break space. It is invisible in terminal
+        // output, so a key containing it looks identical to the key without it —
+        // the rule can never be triggered by a user who cannot see the hidden character.
+        let toml = "version = 1\n[[abbr]]\nkey = \"\\uFEFFls\"\nexpand = \"lsd\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject key containing U+FEFF (BOM / zero-width no-break space)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_rlo_in_key() {
+        // U+202E (Right-to-Left Override) reverses the display order of following
+        // characters in a terminal. In a `list` output it can make "evil" look like
+        // "live", deceiving the user about what a rule does.
+        let toml = "version = 1\n[[abbr]]\nkey = \"ab\\u202Ecd\"\nexpand = \"v\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject key containing U+202E (Right-to-Left Override)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_rlo_in_expand() {
+        // RLO in the expansion value can reverse the display order of the command
+        // that appears in `list` and `which` output, deceiving the user.
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"rm -rf \\u202E/ echo safe\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject expand containing U+202E (Right-to-Left Override)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_bom_in_expand() {
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\\uFEFF\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject expand containing U+FEFF (BOM)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_bom_in_when_command_exists() {
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"\\uFEFFlsd\"]\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject when_command_exists entry containing U+FEFF (BOM)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_zwsp_in_key() {
+        // U+200B (Zero-Width Space) is invisible and makes the key unmatchable.
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\\u200Bcd\"\nexpand = \"v\"\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject key containing U+200B (Zero-Width Space)"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_path_separator_in_when_command_exists() {
+        // when_command_exists values must be bare command names, not filesystem paths.
+        // A value like "/usr/bin/ls" looks like a valid command but is a path traversal
+        // attempt: dir.join("/usr/bin/ls") on Unix resolves to an absolute path, bypassing
+        // the intended restriction to check only within path_prepend.
+        // Reject at parse time to give a clear error instead of silently misbehaving.
+        for bad in ["/usr/bin/ls", "../../evil", "../bin/sh"] {
+            let toml = format!(
+                "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"{bad}\"]\n"
+            );
+            assert!(
+                parse_config(&toml).is_err(),
+                "must reject when_command_exists entry containing '/': {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_config_rejects_backslash_in_when_command_exists() {
+        // On Windows, backslash is a path separator. Reject it at parse time so that
+        // Windows paths like "C:\bin\ls" are caught before they reach make_command_exists.
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"bin\\\\ls\"]\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject when_command_exists entry containing backslash"
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_colon_in_when_command_exists() {
+        // A colon introduces a Windows drive letter (e.g. "C:ls") or could be
+        // interpreted as a PATH-like separator in some contexts.
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"C:ls\"]\n";
+        assert!(
+            parse_config(toml).is_err(),
+            "must reject when_command_exists entry containing colon"
+        );
+    }
+
+    #[test]
+    fn parse_config_accepts_bare_command_name_in_when_command_exists() {
+        // Simple bare names (no path separators) must be accepted.
+        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"lsd\"]\n";
+        assert!(
+            parse_config(toml).is_ok(),
+            "must accept bare command name in when_command_exists"
         );
     }
 }

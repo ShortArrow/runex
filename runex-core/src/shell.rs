@@ -32,12 +32,50 @@ pub struct ShellParseError(pub String);
 
 impl fmt::Display for ShellParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Sanitize the user-supplied shell name before embedding it in the error message.
+        // Strip ASCII control characters (terminal escape sequences, cursor movement, etc.)
+        // and Unicode visual-deception characters (invisible chars, directional overrides,
+        // BOM, zero-width chars) that could cause the displayed message to look different
+        // from its actual byte content.
+        let safe: String = self
+            .0
+            .chars()
+            .filter(|&c| !is_unsafe_for_display(c))
+            .collect();
         write!(
             f,
             "unknown shell '{}' (expected: bash, zsh, pwsh, clink, nu)",
-            self.0
+            safe
         )
     }
+}
+
+/// Returns true if `c` should be removed before printing to a terminal.
+///
+/// Removes ASCII control characters (U+0000-U+001F, U+007F), Unicode line/paragraph
+/// separators, and Unicode visual-deception characters (invisible chars, bidirectional
+/// overrides, BOM, zero-width chars) that can make displayed text misleading.
+fn is_unsafe_for_display(c: char) -> bool {
+    c.is_ascii_control()
+        || matches!(c,
+            '\u{0085}'                  // NEL (Next Line)
+            | '\u{00AD}'               // Soft Hyphen
+            | '\u{034F}'               // Combining Grapheme Joiner
+            | '\u{061C}'               // Arabic Letter Mark
+            | '\u{115F}'..='\u{1160}' // Hangul fillers
+            | '\u{17B4}'..='\u{17B5}' // Khmer invisible vowels
+            | '\u{180B}'..='\u{180F}' // Mongolian free variation selectors
+            | '\u{200B}'..='\u{200F}' // Zero-width space/non-joiner/joiner/marks
+            | '\u{202A}'..='\u{202E}' // Bidirectional formatting (includes RLO U+202E)
+            | '\u{2028}'..='\u{2029}' // Line/Paragraph separator
+            | '\u{2060}'..='\u{206F}' // Word joiner, invisible operators, bidi isolates
+            | '\u{3164}'               // Hangul filler
+            | '\u{FE00}'..='\u{FE0F}' // Variation selectors
+            | '\u{FEFF}'               // BOM / zero-width no-break space
+            | '\u{FFA0}'               // Halfwidth Hangul filler
+            | '\u{FFF9}'..='\u{FFFB}' // Interlinear annotation characters
+            | '\u{E0000}'..='\u{E007F}' // Tags block
+        )
 }
 
 impl std::error::Error for ShellParseError {}
@@ -454,6 +492,80 @@ mod tests {
         assert_eq!(Shell::from_str("Clink").unwrap(), Shell::Clink);
         assert_eq!(Shell::from_str("Nu").unwrap(), Shell::Nu);
         assert_eq!(Shell::from_str("Zsh").unwrap(), Shell::Zsh);
+    }
+
+    // --- ShellParseError::Display must not embed raw control characters --------
+    //
+    // `Shell::from_str` is called with user-supplied input. If the input contains
+    // ANSI escape sequences (e.g. "bash\x1b[2J"), embedding them raw in an error
+    // message that is later printed to stderr causes terminal injection.
+    // The Display impl must sanitize the shell name before embedding it.
+
+    #[test]
+    fn shell_parse_error_display_strips_esc_sequences() {
+        // ESC + "[2J" would clear the screen if emitted raw to a terminal.
+        let err = Shell::from_str("bash\x1b[2Jevil").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains('\x1b'),
+            "ShellParseError Display must not contain raw ESC: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn shell_parse_error_display_strips_bel() {
+        let err = Shell::from_str("bash\x07evil").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains('\x07'),
+            "ShellParseError Display must not contain raw BEL: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn shell_parse_error_display_strips_del() {
+        let err = Shell::from_str("bash\x7fevil").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains('\x7f'),
+            "ShellParseError Display must not contain DEL: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn shell_parse_error_display_strips_rlo() {
+        // U+202E (RIGHT-TO-LEFT OVERRIDE) reverses the visual display order of text.
+        // If embedded raw in an error message, the terminal renders text in reverse.
+        let err = Shell::from_str("bash\u{202E}lve").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains('\u{202E}'),
+            "ShellParseError Display must not contain RLO U+202E: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn shell_parse_error_display_strips_bom() {
+        // U+FEFF (BOM / zero-width no-break space) is invisible but can confuse parsers
+        // or be used to make a shell name look valid while differing from a real one.
+        let err = Shell::from_str("bash\u{FEFF}evil").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains('\u{FEFF}'),
+            "ShellParseError Display must not contain BOM U+FEFF: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn shell_parse_error_display_strips_zwsp() {
+        // U+200B (ZERO-WIDTH SPACE) is invisible but makes "bash" look like "bash"
+        // while differing at the byte level.
+        let err = Shell::from_str("ba\u{200B}sh").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains('\u{200B}'),
+            "ShellParseError Display must not contain ZWSP U+200B: {msg:?}"
+        );
     }
 
     #[test]
