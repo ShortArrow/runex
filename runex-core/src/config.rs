@@ -290,18 +290,51 @@ when_command_exists = ["lsd"]
         let toml = r#"
 version = 1
 
-[keybind]
-trigger = "space"
+[keybind.trigger]
+default = "space"
 bash = "alt-space"
 zsh = "space"
 pwsh = "tab"
 "#;
         let config = parse_config(toml).unwrap();
-        assert_eq!(config.keybind.trigger, Some(TriggerKey::Space));
-        assert_eq!(config.keybind.bash, Some(TriggerKey::AltSpace));
-        assert_eq!(config.keybind.zsh, Some(TriggerKey::Space));
-        assert_eq!(config.keybind.pwsh, Some(TriggerKey::Tab));
-        assert_eq!(config.keybind.nu, None);
+        assert_eq!(config.keybind.trigger.default, Some(TriggerKey::Space));
+        assert_eq!(config.keybind.trigger.bash, Some(TriggerKey::AltSpace));
+        assert_eq!(config.keybind.trigger.zsh, Some(TriggerKey::Space));
+        assert_eq!(config.keybind.trigger.pwsh, Some(TriggerKey::Tab));
+        assert_eq!(config.keybind.trigger.nu, None);
+    }
+
+    #[test]
+    fn parse_config_with_subtable_trigger() {
+        let toml = r#"
+version = 1
+
+[keybind.trigger]
+default = "space"
+bash = "alt-space"
+pwsh = "tab"
+
+[keybind.self_insert]
+pwsh = "shift-space"
+nu   = "shift-space"
+"#;
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.keybind.trigger.default, Some(TriggerKey::Space));
+        assert_eq!(config.keybind.trigger.bash, Some(TriggerKey::AltSpace));
+        assert_eq!(config.keybind.trigger.pwsh, Some(TriggerKey::Tab));
+        assert_eq!(config.keybind.trigger.zsh, None);
+        assert_eq!(config.keybind.self_insert.pwsh, Some(TriggerKey::ShiftSpace));
+        assert_eq!(config.keybind.self_insert.nu, Some(TriggerKey::ShiftSpace));
+        assert_eq!(config.keybind.self_insert.bash, None);
+    }
+
+    #[test]
+    fn parse_config_keybind_absent_gives_all_none() {
+        let toml = "version = 1\n";
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.keybind.trigger.default, None);
+        assert_eq!(config.keybind.trigger.bash, None);
+        assert_eq!(config.keybind.self_insert.pwsh, None);
     }
 
     /// TOML allows any string for `trigger`, but only known variants are valid.
@@ -309,7 +342,7 @@ pwsh = "tab"
     /// silently falling back to a default they didn't request.
     #[test]
     fn parse_config_rejects_invalid_trigger_key() {
-        let toml = "version = 1\n[keybind]\ntrigger = \"invalid-key\"\n";
+        let toml = "version = 1\n[keybind.trigger]\ndefault = \"invalid-key\"\n";
         assert!(
             parse_config(toml).is_err(),
             "must reject unknown trigger key value 'invalid-key'"
@@ -319,7 +352,7 @@ pwsh = "tab"
     #[test]
     fn parse_config_rejects_invalid_per_shell_keybind() {
         for field in ["bash", "zsh", "pwsh", "nu"] {
-            let toml = format!("version = 1\n[keybind]\n{field} = \"unknown-keybind\"\n");
+            let toml = format!("version = 1\n[keybind.trigger]\n{field} = \"unknown-keybind\"\n");
             assert!(
                 parse_config(&toml).is_err(),
                 "must reject unknown keybind value for field '{field}'"

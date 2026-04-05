@@ -108,7 +108,10 @@ where
 
 fn check_keybind(config: &Config) -> Vec<Check> {
     let mut checks = Vec::new();
-    if config.keybind.self_insert == Some(TriggerKey::ShiftSpace) {
+    let si = &config.keybind.self_insert;
+    let bash_si = si.bash.or(si.default);
+    let zsh_si = si.zsh.or(si.default);
+    if bash_si == Some(TriggerKey::ShiftSpace) || zsh_si == Some(TriggerKey::ShiftSpace) {
         checks.push(Check {
             name: "keybind.self_insert".into(),
             status: CheckStatus::Warn,
@@ -247,7 +250,10 @@ mod tests {
         let cfg = Config {
             version: 1,
             keybind: crate::model::KeybindConfig {
-                self_insert: Some(crate::model::TriggerKey::ShiftSpace),
+                self_insert: crate::model::PerShellKey {
+                    bash: Some(crate::model::TriggerKey::ShiftSpace),
+                    ..Default::default()
+                },
                 ..crate::model::KeybindConfig::default()
             },
             abbr: vec![],
@@ -255,7 +261,7 @@ mod tests {
         let result = diagnose(&path, Some(&cfg), |_| true);
         assert!(
             result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
-            "must warn when self_insert = shift-space: {:?}", result.checks
+            "must warn when self_insert.bash = shift-space: {:?}", result.checks
         );
     }
 
@@ -265,7 +271,10 @@ mod tests {
         let cfg = Config {
             version: 1,
             keybind: crate::model::KeybindConfig {
-                self_insert: Some(crate::model::TriggerKey::AltSpace),
+                self_insert: crate::model::PerShellKey {
+                    pwsh: Some(crate::model::TriggerKey::ShiftSpace),
+                    ..Default::default()
+                },
                 ..crate::model::KeybindConfig::default()
             },
             abbr: vec![],
@@ -273,7 +282,49 @@ mod tests {
         let result = diagnose(&path, Some(&cfg), |_| true);
         assert!(
             !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
-            "must not warn when self_insert = alt-space: {:?}", result.checks
+            "must not warn when only self_insert.pwsh = shift-space: {:?}", result.checks
+        );
+    }
+
+    #[test]
+    fn doctor_warns_when_default_self_insert_is_shift_space() {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let cfg = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                self_insert: crate::model::PerShellKey {
+                    default: Some(crate::model::TriggerKey::ShiftSpace),
+                    ..Default::default()
+                },
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let result = diagnose(&path, Some(&cfg), |_| true);
+        assert!(
+            result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
+            "must warn when default self_insert = shift-space (propagates to bash/zsh): {:?}", result.checks
+        );
+    }
+
+    #[test]
+    fn doctor_ok_when_only_pwsh_self_insert_is_shift_space() {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let cfg = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                self_insert: crate::model::PerShellKey {
+                    pwsh: Some(crate::model::TriggerKey::ShiftSpace),
+                    ..Default::default()
+                },
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let result = diagnose(&path, Some(&cfg), |_| true);
+        assert!(
+            !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
+            "must not warn when only pwsh self_insert = shift-space: {:?}", result.checks
         );
     }
 

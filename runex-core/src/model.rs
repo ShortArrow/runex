@@ -11,13 +11,20 @@ pub enum TriggerKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub struct KeybindConfig {
-    pub trigger: Option<TriggerKey>,
+pub struct PerShellKey {
+    pub default: Option<TriggerKey>,
     pub bash: Option<TriggerKey>,
     pub zsh: Option<TriggerKey>,
     pub pwsh: Option<TriggerKey>,
     pub nu: Option<TriggerKey>,
-    pub self_insert: Option<TriggerKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub struct KeybindConfig {
+    #[serde(default)]
+    pub trigger: PerShellKey,
+    #[serde(default)]
+    pub self_insert: PerShellKey,
 }
 
 /// A single abbreviation rule: rune → cast.
@@ -86,35 +93,44 @@ mod tests {
     #[test]
     fn keybind_config_fields() {
         let k = KeybindConfig {
-            trigger: Some(TriggerKey::Space),
-            bash: Some(TriggerKey::AltSpace),
-            zsh: Some(TriggerKey::Space),
-            pwsh: Some(TriggerKey::Tab),
-            nu: None,
-            self_insert: None,
+            trigger: PerShellKey {
+                default: Some(TriggerKey::Space),
+                bash: Some(TriggerKey::AltSpace),
+                zsh: Some(TriggerKey::Space),
+                pwsh: Some(TriggerKey::Tab),
+                nu: None,
+            },
+            self_insert: PerShellKey::default(),
         };
-        assert_eq!(k.trigger, Some(TriggerKey::Space));
-        assert_eq!(k.bash, Some(TriggerKey::AltSpace));
-        assert_eq!(k.zsh, Some(TriggerKey::Space));
-        assert_eq!(k.pwsh, Some(TriggerKey::Tab));
-        assert_eq!(k.nu, None);
-        assert_eq!(k.self_insert, None);
+        assert_eq!(k.trigger.default, Some(TriggerKey::Space));
+        assert_eq!(k.trigger.bash, Some(TriggerKey::AltSpace));
+        assert_eq!(k.trigger.zsh, Some(TriggerKey::Space));
+        assert_eq!(k.trigger.pwsh, Some(TriggerKey::Tab));
+        assert_eq!(k.trigger.nu, None);
+        assert_eq!(k.self_insert, PerShellKey::default());
     }
 
     #[test]
     fn parse_config_accepts_self_insert_shift_space() {
         let toml = r#"
 version = 1
-[keybind]
-trigger = "space"
-self_insert = "shift-space"
+[keybind.self_insert]
+pwsh = "shift-space"
 "#;
         let config: Config = toml::from_str(toml).expect("should parse");
         assert_eq!(
-            config.keybind.self_insert,
+            config.keybind.self_insert.pwsh,
             Some(TriggerKey::ShiftSpace),
-            "self_insert should deserialize to ShiftSpace"
+            "self_insert.pwsh should deserialize to ShiftSpace"
         );
+    }
+
+    #[test]
+    fn parse_config_keybind_entirely_absent() {
+        let toml = "version = 1\n";
+        let config: Config = toml::from_str(toml).expect("should parse");
+        assert_eq!(config.keybind.trigger, PerShellKey::default());
+        assert_eq!(config.keybind.self_insert, PerShellKey::default());
     }
 
     #[test]
