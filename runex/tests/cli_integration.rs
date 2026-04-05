@@ -27,7 +27,6 @@ fn fake_bin_dir(cmds: &[&str]) -> TempDir {
     for cmd in cmds {
         let path = dir.path().join(cmd);
         std::fs::write(&path, b"").unwrap();
-        // On Unix, mark as executable so is_file() returns true.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -89,7 +88,6 @@ fn expand_condition_skipped_when_command_absent() {
     let cfg = write_config(
         "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"__runex_fake_lsd__\"\nwhen_command_exists = [\"__runex_fake_lsd__\"]\n",
     );
-    // No path_prepend → __runex_fake_lsd__ not on PATH → pass-through
     let (stdout, _, ok) = run(&["expand", "--token", "ls"], Some(cfg.path()), None);
     assert!(ok);
     assert_eq!(stdout, "ls");
@@ -184,7 +182,6 @@ fn list_json_is_valid_json_array() {
     );
     let (stdout, _, ok) = run(&["list", "--json"], Some(cfg.path()), None);
     assert!(ok);
-    // Must parse as a JSON array
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("list --json is not valid JSON: {e}\nstdout: {stdout}"));
     assert!(parsed.is_array());
@@ -259,9 +256,9 @@ fn which_json_no_match() {
     assert_eq!(v["result"], "no_match");
 }
 
+/// JSON output must use 1-based `rule_index` to match the text output ("rule #1").
 #[test]
 fn which_json_rule_index_is_one_based() {
-    // JSON output must use 1-based rule_index to match the text output ("rule #1")
     let cfg = write_config(
         "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
     );
@@ -275,9 +272,9 @@ fn which_json_rule_index_is_one_based() {
     );
 }
 
+/// Skipped entries in JSON output must also use 1-based indices.
 #[test]
 fn which_json_skipped_indices_are_one_based() {
-    // Skipped entries must also use 1-based indices
     let cfg = write_config(
         "version = 1\n\
          [[abbr]]\nkey = \"ls\"\nexpand = \"ls\"\n\
@@ -287,7 +284,6 @@ fn which_json_skipped_indices_are_one_based() {
     assert!(ok);
     let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(v["result"], "expanded");
-    // First rule (index 0 internally) was skipped as self-loop → must appear as 1
     let skipped = v["skipped"].as_array().expect("skipped must be array");
     assert!(!skipped.is_empty(), "expected at least one skipped entry");
     assert_eq!(
@@ -364,7 +360,6 @@ fn doctor_with_path_prepend_finds_command() {
     let (stdout, _, ok) =
         run(&["doctor", "--json"], Some(cfg.path()), Some(bins.path()));
     assert!(ok);
-    // The command:__runex_fake_lsd__ check should be OK (not Warn) because we prepended the fake bin
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let checks = parsed.as_array().unwrap();
     let fake_cmd_check = checks
@@ -400,9 +395,9 @@ fn version_json_has_version_field() {
 
 // ─── duplicate-key fallthrough (bug regression) ──────────────────────────────
 
+/// Rule 1 is a self-loop (skipped by expand); rule 2 is the real expansion.
 #[test]
 fn expand_duplicate_key_self_loop_then_real() {
-    // rule 1: self-loop (skipped by expand), rule 2: real expansion
     let cfg = write_config(
         "version = 1\n\
          [[abbr]]\nkey = \"ls\"\nexpand = \"ls\"\n\
@@ -422,7 +417,6 @@ fn which_duplicate_key_shows_skipped_and_final() {
     );
     let (stdout, _, ok) = run(&["which", "ls", "--why"], Some(cfg.path()), None);
     assert!(ok);
-    // First rule skipped (self-loop), second rule is the match
     assert!(stdout.contains("rule #1 skipped"), "stdout: {stdout}");
     assert!(stdout.contains("lsd2"), "stdout: {stdout}");
 }
@@ -453,9 +447,9 @@ fn export_explicit_invalid_config_fails() {
     assert!(!ok, "export with explicit invalid --config should fail");
 }
 
+/// `--config` can appear before the subcommand; that variant must also fail when the path is invalid.
 #[test]
 fn export_explicit_missing_config_also_fails() {
-    // A second way to pass --config before the subcommand — must also fail.
     let (stdout, _, ok) =
         run(&["--config", "/nonexistent/config.toml", "export", "bash"], None, None);
     assert!(!ok, "stdout: {stdout}");
@@ -487,9 +481,9 @@ fn explicit_config_parse_error_exits_nonzero() {
     assert!(!ok, "list with broken config must exit non-zero");
 }
 
+/// `doctor` reports `config_file` as Error when the file doesn't exist and exits non-zero.
 #[test]
 fn doctor_with_missing_explicit_config_exits_nonzero() {
-    // doctor reports config_file as Error when the file doesn't exist → exit 1
     let (_, _, ok) = run(&["doctor"], Some(std::path::Path::new("/nonexistent/config.toml")), None);
     assert!(!ok, "doctor must exit non-zero when config file is missing");
 }
@@ -548,14 +542,15 @@ fn json_doctor_is_array_with_name_and_status() {
 /// Build a Command for `runex init` with HOME/USERPROFILE/PSModulePath/SHELL all
 /// redirected into `home_dir` so that shell detection and rc-file resolution
 /// stay entirely inside the temp directory on every platform.
+///
+/// `PSModulePath` is removed to suppress pwsh detection on Windows; `SHELL` is
+/// forced to `/bin/bash` so that `rc_file_for()` resolves to `$HOME/.bashrc`
+/// inside the temp directory.
 fn init_cmd_in_dir(home_dir: &std::path::Path) -> Command {
     let mut cmd = Command::new(bin());
     cmd.env("HOME", home_dir)
         .env("USERPROFILE", home_dir)
         .env("XDG_CONFIG_HOME", home_dir.join(".config"))
-        // Force bash detection so rc_file_for() → $HOME/.bashrc (inside temp dir).
-        // On Windows, PSModulePath triggers pwsh detection; removing it falls back
-        // to $SHELL, which we set to bash.
         .env_remove("PSModulePath")
         .env("SHELL", "/bin/bash");
     cmd
@@ -697,11 +692,11 @@ fn dry_run_json_no_match() {
 
 // ─── doctor --no-shell-aliases ────────────────────────────────────────────────
 
+/// `--no-shell-aliases` must not spawn pwsh/bash, so the test completes quickly
+/// and no `shell:pwsh:*` or `shell:bash:*` checks appear in JSON output.
 #[test]
 fn doctor_no_shell_aliases_skips_external_shells() {
     let cfg = write_config("version = 1\n");
-    // --no-shell-aliases must not spawn pwsh/bash, so the test completes quickly
-    // and there are no shell:pwsh:* or shell:bash:* checks in JSON output
     let (stdout, _, ok) = run(
         &["doctor", "--no-shell-aliases", "--json"],
         Some(cfg.path()),
@@ -727,16 +722,15 @@ fn doctor_no_shell_aliases_skips_external_shells() {
 
 // --- Terminal escape sequence injection: expansion values must not pass ANSI escapes ---
 
+/// TOML spec forbids raw control characters (U+0000–U+001F, U+007F) in strings.
+/// A config containing a raw ESC byte (`\x1b`) in an expansion value must be
+/// rejected by the TOML parser, preventing terminal escape injection via `list`.
 #[test]
 fn list_rejects_config_with_ansi_escape_in_expansion() {
-    // TOML spec forbids raw control characters (U+0000–U+001F, U+007F) in strings.
-    // A config file containing a raw ESC byte (\x1b) in an expansion value must be
-    // rejected by the TOML parser, preventing terminal escape injection via `list`.
     let mut toml = String::from("version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"");
     toml.push('\x1b'); // literal ESC byte — invalid in TOML string
     toml.push_str("[2Jmalicious\"\n");
     let cfg = write_config(&toml);
-    // runex must exit non-zero: the TOML parser rejects the control character
     let (_, _, ok) = run(&["list"], Some(cfg.path()), None);
     assert!(
         !ok,
@@ -759,12 +753,11 @@ fn which_rejects_config_with_ansi_escape_in_expansion() {
 
 // --- doctor/expand: when_command_exists with path-like values ---
 
+/// `when_command_exists` values must be bare command names, not filesystem paths.
+/// A value containing a path separator is rejected at config parse time, preventing
+/// filesystem probing via `dir.join("../target_file")`.
 #[test]
 fn expand_when_command_exists_with_path_separator_not_satisfied() {
-    // when_command_exists values must be bare command names, not filesystem paths.
-    // A value containing a path separator is rejected at config parse time, so
-    // the config is invalid and runex must exit non-zero.
-    // This prevents filesystem probing via dir.join("../target_file").
     let traversal_cmd = "../target_file";
     let toml = format!(
         "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"{traversal_cmd}\"]\n"
@@ -783,12 +776,12 @@ fn expand_when_command_exists_with_path_separator_not_satisfied() {
 
 // --- when_command_exists: Windows drive-letter colon must be rejected ─────────
 
+/// On Windows, `dir.join("C:foo")` resolves as an absolute path, bypassing the
+/// intended `--path-prepend` directory restriction.  A `when_command_exists` entry
+/// containing `:` is rejected at config parse time.
 #[test]
 #[cfg(windows)]
 fn expand_when_command_exists_with_colon_not_satisfied() {
-    // On Windows, `dir.join("C:foo")` resolves as an absolute path, bypassing
-    // the intended --path-prepend directory restriction.
-    // A cmd containing ':' is now rejected at config parse time.
     let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"C:lsd\"]\n";
     let cfg = write_config(toml);
     let bins = fake_bin_dir(&["lsd"]);
@@ -805,20 +798,17 @@ fn expand_when_command_exists_with_colon_not_satisfied() {
 
 // --- doctor: when_command_exists with absolute path must not probe filesystem ---
 
+/// `when_command_exists` values containing path separators are rejected at config parse time,
+/// so a path like `"/etc/passwd"` can never be probed via doctor output. The config must be
+/// rejected, never confirming file existence via "found" in the output.
 #[test]
 fn doctor_when_command_exists_absolute_path_is_treated_as_not_found() {
-    // `when_command_exists` values containing path separators are rejected at config
-    // parse time, so a path like "/etc/passwd" can never be probed via doctor output.
-    // The config must be rejected (doctor exits non-zero or doctor JSON shows config error),
-    // never confirming file existence via "found" in the output.
     #[cfg(unix)]
     {
         let cfg = write_config(
             "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"/etc/passwd\"]\n",
         );
         let (stdout, _stderr, _ok) = run(&["doctor", "--json"], Some(cfg.path()), None);
-        // Whether the config is rejected at parse (empty stdout) or doctor reports it as
-        // an error, the key invariant is that no check detail says "/etc/passwd" is found.
         let checks: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
         let empty = vec![];
         let check_arr = checks.as_array().unwrap_or(&empty);
@@ -847,10 +837,8 @@ fn init_does_not_follow_symlink_at_rc_file() {
     use std::os::unix::fs::symlink;
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
-    // Create a target file that must NOT be written to
     let target = dir.path().join("sensitive_target.txt");
     std::fs::write(&target, b"original content").unwrap();
-    // Create a .bashrc symlink pointing to the sensitive target
     let bashrc = dir.path().join(".bashrc");
     symlink(&target, &bashrc).unwrap();
 
@@ -859,14 +847,12 @@ fn init_does_not_follow_symlink_at_rc_file() {
         .output()
         .unwrap();
 
-    // The sensitive_target must not have been modified
     let content = std::fs::read_to_string(&target).unwrap();
     assert_eq!(
         content, "original content",
         "init must not follow symlink at rc file path and write to the symlink target"
     );
-    // init may succeed (skipping the symlinked rc) or fail, but must not corrupt target
-    let _ = out; // exit code is not the key assertion here
+    let _ = out;
 }
 
 // ─── export --bin validation ──────────────────────────────────────────────────
@@ -898,10 +884,10 @@ fn export_with_whitespace_only_bin_exits_nonzero() {
 
 /// export with a --bin containing control characters must exit non-zero.
 /// Silent dropping would produce a silently different binary name.
+/// `\x07` (BEL) and `\x7f` (DEL) must both be rejected.
 #[test]
 fn export_with_control_char_in_bin_exits_nonzero() {
     let cfg = write_config("version = 1\n");
-    // \x07 is BEL, \x7f is DEL — both must be rejected
     let (_, stderr, ok) = run(&["export", "bash", "--bin=run\x07ex"], Some(cfg.path()), None);
     assert!(!ok, "export --bin with control char must exit non-zero");
     assert!(
@@ -957,7 +943,6 @@ fn export_with_del_in_bin_exits_nonzero() {
 /// This is the primary defense; sanitize_for_display is defense-in-depth.
 #[test]
 fn list_rejects_config_with_control_char_in_expansion() {
-    // \u001B[2J = ESC clear-screen — injected via TOML Unicode escape
     let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"\\u001B[2Jmalicious\"\n";
     let cfg = write_config(toml);
     let (_, _, ok) = run(&["list"], Some(cfg.path()), None);
@@ -967,9 +952,9 @@ fn list_rejects_config_with_control_char_in_expansion() {
     );
 }
 
+/// A key containing BEL (`\u{0007}`) via TOML Unicode escape must be rejected by `parse_config`.
 #[test]
 fn list_rejects_config_with_control_char_in_key() {
-    // Key containing BEL (\u0007) via TOML Unicode escape must be rejected.
     let toml = "version = 1\n[[abbr]]\nkey = \"k\\u0007ey\"\nexpand = \"git commit -m\"\n";
     let cfg = write_config(toml);
     let (_, _, ok) = run(&["list"], Some(cfg.path()), None);
@@ -1001,7 +986,6 @@ fn export_with_oversized_bin_exits_nonzero() {
 #[test]
 fn export_unknown_shell_with_control_char_in_name_does_not_inject_into_stderr() {
     let cfg = write_config("version = 1\n");
-    // shell name = "bash\x1b[2Jevil" — ESC[2J would clear the screen if echoed raw
     let evil_shell = "bash\x1b[2Jevil";
     let (_, stderr, ok) = run(
         &["export", evil_shell, "--bin=runex"],
@@ -1163,24 +1147,17 @@ fn init_prompt_confirm_handles_huge_stdin_without_oom() {
         .spawn()
         .unwrap();
 
-    // Write 10 MB of 'y' bytes with no newline, then close stdin.
-    // Without a limit, read_line buffers all of this before returning.
-    // With the limit, it reads only up to MAX_CONFIRM_BYTES and stops.
     {
         let stdin = child.stdin.take().unwrap();
         let mut writer = std::io::BufWriter::new(stdin);
         let chunk = vec![b'y'; 65_536];
         for _ in 0..160 {
-            // 160 * 65,536 = ~10 MB
             if writer.write_all(&chunk).is_err() {
-                break; // child already exited — that's fine
+                break;
             }
         }
-        // Drop writer to close stdin
     }
 
-    // The child must finish within a reasonable time; if it hangs, the test runner
-    // will time out. We assert it exits with any status (y/n doesn't matter here).
     let status = child.wait().unwrap();
     let _ = status;
 }
@@ -1201,8 +1178,6 @@ fn init_prompt_confirm_huge_stdin_is_treated_as_no() {
         .spawn()
         .unwrap();
 
-    // Write 2 KB of 'y' with no newline — larger than a real "y\n" answer.
-    // Must not be interpreted as "yes".
     {
         let stdin = child.stdin.take().unwrap();
         let mut writer = std::io::BufWriter::new(stdin);
@@ -1212,7 +1187,6 @@ fn init_prompt_confirm_huge_stdin_is_treated_as_no() {
 
     let output = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Config file must NOT have been created (blob was not treated as "yes")
     assert!(
         !config_path.exists() || stdout.contains("Skipped"),
         "huge 'yyy...' blob without newline must not be treated as 'yes': stdout={stdout}"

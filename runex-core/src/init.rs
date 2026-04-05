@@ -67,13 +67,15 @@ pub fn integration_line(shell: Shell, bin: &str) -> String {
 }
 
 /// The rc file path for a given shell (best-effort; may not exist yet).
+///
+/// For PowerShell, `$PROFILE` is a runtime variable and cannot be resolved statically,
+/// so the conventional filesystem path is used instead.
 pub fn rc_file_for(shell: Shell) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     match shell {
         Shell::Bash => Some(home.join(".bashrc")),
         Shell::Zsh => Some(home.join(".zshrc")),
         Shell::Pwsh => {
-            // $PROFILE is a runtime variable; use the conventional Windows path.
             let base = if cfg!(windows) {
                 home.join("Documents").join("PowerShell")
             } else {
@@ -372,7 +374,6 @@ mod tests {
     #[test]
     fn nu_quote_path_escapes_dollar_sign() {
         let quoted = nu_quote_path("/home/$USER/.config");
-        // Every '$' must be preceded by an odd number of backslashes.
         let bytes = quoted.as_bytes();
         for i in 0..bytes.len() {
             if bytes[i] == b'$' {

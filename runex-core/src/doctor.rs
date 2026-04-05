@@ -188,7 +188,6 @@ mod tests {
         let cfg = test_config(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
         let result = diagnose(&path, Some(&cfg), |_| false);
 
-        // is_healthy returns true for Warn
         assert!(result.is_healthy());
         assert_eq!(result.checks[2].status, CheckStatus::Warn);
         assert!(result.checks[2].detail.contains("not found"));
@@ -293,7 +292,6 @@ mod tests {
         let cfg = test_config(vec![crate::model::Abbr {
             key: "ls".into(),
             expand: "lsd".into(),
-            // ESC [ 2 J = clear screen, a common terminal injection payload
             when_command_exists: Some(vec!["cmd\x1b[2Jevil".into()]),
         }]);
         let result = diagnose(&path, Some(&cfg), |_| false);

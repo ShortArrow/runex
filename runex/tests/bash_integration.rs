@@ -28,6 +28,7 @@ mod bash {
     /// Returns false if bash is not found or is too old (< 4.0).
     /// macOS ships bash 3.2 (GPLv2 constraint) which does not support
     /// process substitution in non-interactive mode. Require bash 4+.
+    /// `$BASH_VERSION` has the form `"5.2.37(1)-release"`; only the major version is checked.
     fn bash_available() -> bool {
         let Ok(path) = which::which("bash") else { return false };
         let out = Command::new(path)
@@ -35,7 +36,6 @@ mod bash {
             .output();
         let Ok(out) = out else { return false };
         let ver = String::from_utf8_lossy(&out.stdout);
-        // BASH_VERSION looks like "5.2.37(1)-release"; major version must be >= 4
         ver.trim()
             .split('.')
             .next()
@@ -69,7 +69,6 @@ mod bash {
     fn test_source_no_error() {
         if !bash_available() { return; }
         let config = write_config();
-        // run_bash itself asserts exit 0
         run_bash(&config, "true");
     }
 

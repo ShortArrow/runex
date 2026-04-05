@@ -42,8 +42,9 @@ Replace `/mnt/path/to/runex` with the WSL path to your checkout. The tests are g
 ### Language and style
 
 - Source code, comments, doc comments (`///`), and commit messages are written in **English**.
-- Use `///` doc comments for public items and for `mod` / `fn` declarations inside `#[cfg(test)]` blocks. Use `//` only for inline notes within a function body where the logic is non-obvious.
-- No trailing summaries in comments ("this function does X") — state the *why*, not the *what*.
+- Use `///` doc comments for public-facing items and for `fn` declarations inside `#[cfg(test)]` blocks when the *why* is non-obvious from the name alone.
+- Avoid `//` inline comments inside function bodies. If an explanation is needed, move it to a `///` docstring, extract a named helper function, or restructure the code so the intent is clear without prose.
+- State the *why*, not the *what* — never restate what the code already says.
 - Keep functions small and single-purpose. Prefer flat code over deep nesting.
 - Do not add error handling, fallbacks, or validation for scenarios that cannot occur. Trust internal invariants; validate only at system boundaries (user input, external processes, file I/O).
 

@@ -216,11 +216,6 @@ const MAX_RC_FILE_BYTES: usize = 1024 * 1024; // 1 MB
 /// blocking if the path points to a named pipe (FIFO) with no writer.
 fn read_rc_content(path: &Path) -> String {
     use std::io::Read;
-    // Open the file once.  On Unix, O_NONBLOCK prevents open() from blocking on
-    // a FIFO that has no writer yet, closing the TOCTOU window between a separate
-    // metadata() call and a subsequent read_to_string().
-    // We intentionally do NOT use O_NOFOLLOW so that symlinked dotfiles (common
-    // in dotfile-manager setups) continue to work.
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt;
@@ -238,14 +233,10 @@ fn read_rc_content(path: &Path) -> String {
         Ok(f) => f,
         Err(_) => return String::new(),
     };
-    // Metadata from the same fd — no second open, no TOCTOU window.
     let meta = match file.metadata() {
         Ok(m) => m,
         Err(_) => return String::new(),
     };
-    // Reject non-regular files (named pipes, device files).
-    // On Unix these report len=0 but read_to_string() would consume unbounded
-    // data (/dev/zero) or block until a writer appears (FIFO).
     if !meta.is_file() {
         return String::new();
     }
@@ -257,8 +248,11 @@ fn read_rc_content(path: &Path) -> String {
     content
 }
 
+/// Infer the current shell from environment variables.
+///
+/// On Unix, reads `$SHELL`. On Windows, the presence of `PSModulePath` indicates
+/// a PowerShell parent process.
 fn detect_shell() -> Option<Shell> {
-    // Unix: $SHELL environment variable
     if let Ok(sh) = std::env::var("SHELL") {
         let base = Path::new(&sh)
             .file_name()
@@ -268,7 +262,6 @@ fn detect_shell() -> Option<Shell> {
             return Some(s);
         }
     }
-    // Windows: presence of PSModulePath implies a PowerShell parent
     if std::env::var("PSModulePath").is_ok() {
         return Some(Shell::Pwsh);
     }
@@ -286,16 +279,12 @@ const MAX_CONFIRM_BYTES: usize = 1_024;
 fn prompt_confirm_from(reader: &mut impl io::BufRead) -> bool {
     use io::{BufRead as _, Read as _};
     let mut input = String::new();
-    // Read at most MAX_CONFIRM_BYTES + 1 bytes via a by_ref adapter so we do not
-    // consume the reader itself.  The +1 lets us detect inputs that exceed the limit:
-    // if input.len() > MAX_CONFIRM_BYTES the response is abnormally long → treat as "no".
     let mut limited = reader.by_ref().take(MAX_CONFIRM_BYTES as u64 + 1);
     match limited.read_line(&mut input) {
         Err(_) => return false,
-        Ok(0) => return false, // EOF with no data
+        Ok(0) => return false,
         Ok(_) => {}
     }
-    // Reject if the limited read filled more than the allowed budget.
     if input.len() > MAX_CONFIRM_BYTES {
         return false;
     }
@@ -620,9 +609,9 @@ mod tests {
         use super::*;
 
     #[test]
+    /// `cargo` is guaranteed to be on PATH in a Rust build environment.
     fn make_command_exists_no_prepend_uses_which() {
         let exists = make_command_exists(None);
-        // "cargo" is guaranteed to be on PATH in a Rust build environment
         assert!(exists("cargo"));
         assert!(!exists("__runex_fake_cmd_that_does_not_exist__"));
     }
