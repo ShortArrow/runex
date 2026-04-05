@@ -154,4 +154,5 @@ function __runex_register_expand_handler {
 
 if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {
 {PWSH_REGISTER_LINES}
+{PWSH_SELF_INSERT_LINES}
 }

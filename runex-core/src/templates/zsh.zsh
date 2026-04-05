@@ -81,3 +81,4 @@ function __runex_expand() {
 
 zle -N __runex_expand
 {ZSH_BIND_LINES}
+{ZSH_SELF_INSERT_LINES}

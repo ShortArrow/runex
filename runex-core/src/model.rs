@@ -7,6 +7,7 @@ pub enum TriggerKey {
     Space,
     Tab,
     AltSpace,
+    ShiftSpace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -16,6 +17,7 @@ pub struct KeybindConfig {
     pub zsh: Option<TriggerKey>,
     pub pwsh: Option<TriggerKey>,
     pub nu: Option<TriggerKey>,
+    pub self_insert: Option<TriggerKey>,
 }
 
 /// A single abbreviation rule: rune → cast.
@@ -89,12 +91,30 @@ mod tests {
             zsh: Some(TriggerKey::Space),
             pwsh: Some(TriggerKey::Tab),
             nu: None,
+            self_insert: None,
         };
         assert_eq!(k.trigger, Some(TriggerKey::Space));
         assert_eq!(k.bash, Some(TriggerKey::AltSpace));
         assert_eq!(k.zsh, Some(TriggerKey::Space));
         assert_eq!(k.pwsh, Some(TriggerKey::Tab));
         assert_eq!(k.nu, None);
+        assert_eq!(k.self_insert, None);
+    }
+
+    #[test]
+    fn parse_config_accepts_self_insert_shift_space() {
+        let toml = r#"
+version = 1
+[keybind]
+trigger = "space"
+self_insert = "shift-space"
+"#;
+        let config: Config = toml::from_str(toml).expect("should parse");
+        assert_eq!(
+            config.keybind.self_insert,
+            Some(TriggerKey::ShiftSpace),
+            "self_insert should deserialize to ShiftSpace"
+        );
     }
 
     #[test]

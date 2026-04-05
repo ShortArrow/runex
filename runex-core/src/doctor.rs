@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::model::Config;
+use crate::model::{Config, TriggerKey};
 use crate::sanitize::sanitize_for_display;
 use serde::Serialize;
 
@@ -106,6 +106,19 @@ where
     checks
 }
 
+fn check_keybind(config: &Config) -> Vec<Check> {
+    let mut checks = Vec::new();
+    if config.keybind.self_insert == Some(TriggerKey::ShiftSpace) {
+        checks.push(Check {
+            name: "keybind.self_insert".into(),
+            status: CheckStatus::Warn,
+            detail:
+                "self_insert = \"shift-space\" has no effect in bash/zsh (Shift+Space is terminal-dependent); use \"alt-space\" for cross-shell support".into(),
+        });
+    }
+    checks
+}
+
 /// Run environment diagnostics.
 ///
 /// `config` is `None` when config loading failed (parse error, etc.).
@@ -118,6 +131,7 @@ where
     checks.push(check_config_file(config_path));
     checks.push(check_config_parse(config));
     if let Some(cfg) = config {
+        checks.extend(check_keybind(cfg));
         checks.extend(check_abbr_quality(cfg));
         checks.extend(check_when_command_exists(cfg, &command_exists));
     }
@@ -225,6 +239,42 @@ mod tests {
             }],
         };
         assert!(!result.is_healthy());
+    }
+
+    #[test]
+    fn doctor_warns_shift_space_self_insert() {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let cfg = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                self_insert: Some(crate::model::TriggerKey::ShiftSpace),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let result = diagnose(&path, Some(&cfg), |_| true);
+        assert!(
+            result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
+            "must warn when self_insert = shift-space: {:?}", result.checks
+        );
+    }
+
+    #[test]
+    fn doctor_ok_alt_space_self_insert() {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let cfg = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                self_insert: Some(crate::model::TriggerKey::AltSpace),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let result = diagnose(&path, Some(&cfg), |_| true);
+        assert!(
+            !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
+            "must not warn when self_insert = alt-space: {:?}", result.checks
+        );
     }
 
     } // mod diagnostics

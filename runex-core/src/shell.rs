@@ -73,6 +73,7 @@ fn bash_chord(trigger: TriggerKey) -> &'static str {
         TriggerKey::Space => "\\x20",
         TriggerKey::Tab => "\\C-i",
         TriggerKey::AltSpace => "\\e ",
+        TriggerKey::ShiftSpace => unreachable!("ShiftSpace cannot be used as a trigger in bash"),
     }
 }
 
@@ -81,6 +82,7 @@ fn zsh_chord(trigger: TriggerKey) -> &'static str {
         TriggerKey::Space => " ",
         TriggerKey::Tab => "^I",
         TriggerKey::AltSpace => "^[ ",
+        TriggerKey::ShiftSpace => unreachable!("ShiftSpace cannot be used as a trigger in zsh"),
     }
 }
 
@@ -154,6 +156,7 @@ fn pwsh_chord(trigger: TriggerKey) -> &'static str {
         TriggerKey::Space => " ",
         TriggerKey::Tab => "Tab",
         TriggerKey::AltSpace => "Alt+Spacebar",
+        TriggerKey::ShiftSpace => unreachable!("ShiftSpace cannot be used as a trigger in pwsh"),
     }
 }
 
@@ -274,6 +277,7 @@ fn pwsh_known_cases(config: Option<&Config>) -> String {
 fn nu_modifier(trigger: TriggerKey) -> &'static str {
     match trigger {
         TriggerKey::AltSpace => "alt",
+        TriggerKey::ShiftSpace => "shift",
         TriggerKey::Space | TriggerKey::Tab => "none",
     }
 }
@@ -293,7 +297,7 @@ fn clink_known_cases(config: Option<&Config>) -> String {
 
 fn nu_keycode(trigger: TriggerKey) -> &'static str {
     match trigger {
-        TriggerKey::Space | TriggerKey::AltSpace => "space",
+        TriggerKey::Space | TriggerKey::AltSpace | TriggerKey::ShiftSpace => "space",
         TriggerKey::Tab => "tab",
     }
 }
@@ -303,6 +307,7 @@ fn clink_key_sequence(trigger: TriggerKey) -> &'static str {
         TriggerKey::Space => r#"" ""#,
         TriggerKey::Tab => r#""\t""#,
         TriggerKey::AltSpace => r#""\e ""#,
+        TriggerKey::ShiftSpace => unreachable!("ShiftSpace cannot be used as a trigger in clink"),
     }
 }
 
@@ -334,6 +339,28 @@ fn zsh_bind_lines(trigger: Option<TriggerKey>) -> String {
     lines.join("\n")
 }
 
+fn bash_self_insert_lines(self_insert: Option<TriggerKey>) -> String {
+    match self_insert {
+        Some(TriggerKey::AltSpace) => [
+            r#"bind -r "\e " 2>/dev/null || true"#,
+            r#"bind '"\e ": self-insert'"#,
+        ]
+        .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn zsh_self_insert_lines(self_insert: Option<TriggerKey>) -> String {
+    match self_insert {
+        Some(TriggerKey::AltSpace) => [
+            r#"bindkey -r "^[ " 2>/dev/null"#,
+            r#"bindkey "^[ " self-insert"#,
+        ]
+        .join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn pwsh_register_lines(trigger: Option<TriggerKey>) -> String {
     let mut lines = Vec::new();
     if let Some(trigger) = trigger {
@@ -354,13 +381,20 @@ fn pwsh_register_lines(trigger: Option<TriggerKey>) -> String {
         lines.extend(vi_lines);
         lines.push("    }".to_string());
     }
-    if trigger == Some(TriggerKey::Space) {
-        lines.push(
-            "    Set-PSReadLineKeyHandler -Chord 'Shift+Spacebar' -Function SelfInsert"
-                .to_string(),
-        );
-    }
     lines.join("\n")
+}
+
+fn pwsh_self_insert_lines(self_insert: Option<TriggerKey>) -> String {
+    match self_insert {
+        Some(TriggerKey::ShiftSpace) => {
+            "    Set-PSReadLineKeyHandler -Chord 'Shift+Spacebar' -Function SelfInsert"
+                .to_string()
+        }
+        Some(TriggerKey::AltSpace) => {
+            "    Set-PSReadLineKeyHandler -Chord 'Alt+Spacebar' -Function SelfInsert".to_string()
+        }
+        _ => String::new(),
+    }
 }
 
 fn nu_bindings(trigger: Option<TriggerKey>, bin: &str) -> String {
@@ -374,6 +408,20 @@ fn nu_bindings(trigger: Option<TriggerKey>, bin: &str) -> String {
         );
     }
     blocks.join(" | append ")
+}
+
+fn nu_self_insert_lines(self_insert: Option<TriggerKey>) -> String {
+    let key = match self_insert {
+        Some(TriggerKey::ShiftSpace) => Some(("shift", "space")),
+        Some(TriggerKey::AltSpace) => Some(("alt", "space")),
+        _ => None,
+    };
+    let Some((modifier, keycode)) = key else {
+        return String::new();
+    };
+    include_str!("templates/nu_self_insert_binding.nu")
+        .replace("{NU_SI_MODIFIER}", modifier)
+        .replace("{NU_SI_KEYCODE}", keycode)
 }
 
 fn clink_binding(trigger: Option<TriggerKey>) -> String {
@@ -407,21 +455,26 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
         Shell::Nu => include_str!("templates/nu.nu"),
     };
     let trigger = trigger_for(shell, config);
+    let self_insert = config.map(|c| c.keybind.self_insert).unwrap_or(None);
     template
         .replace("\r\n", "\n")
         .replace("{BASH_BIN}", &bash_quote_string(bin))
         .replace("{BASH_BIND_LINES}", &bash_bind_lines(trigger))
+        .replace("{BASH_SELF_INSERT_LINES}", &bash_self_insert_lines(self_insert))
         .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
         .replace("{ZSH_BIN}", &bash_quote_string(bin))
         .replace("{ZSH_BIND_LINES}", &zsh_bind_lines(trigger))
+        .replace("{ZSH_SELF_INSERT_LINES}", &zsh_self_insert_lines(self_insert))
         .replace("{ZSH_KNOWN_CASES}", &zsh_known_cases(config))
         .replace("{CLINK_BIN}", &lua_quote_string(bin))
         .replace("{CLINK_BINDING}", &clink_binding(trigger))
         .replace("{CLINK_KNOWN_CASES}", &clink_known_cases(config))
         .replace("{PWSH_BIN}", &pwsh_quote_string(bin))
         .replace("{PWSH_REGISTER_LINES}", &pwsh_register_lines(trigger))
+        .replace("{PWSH_SELF_INSERT_LINES}", &pwsh_self_insert_lines(self_insert))
         .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
         .replace("{NU_BINDINGS}", &nu_bindings(trigger, bin))
+        .replace("{NU_SELF_INSERT_BINDINGS}", &nu_self_insert_lines(self_insert))
 }
 
 #[cfg(test)]
@@ -703,6 +756,7 @@ mod tests {
                 zsh: None,
                 pwsh: None,
                 nu: None,
+                self_insert: None,
             },
             abbr: vec![],
         };
@@ -778,6 +832,7 @@ mod tests {
                 zsh: None,
                 pwsh: None,
                 nu: None,
+                self_insert: None,
             },
             abbr: vec![],
         };
@@ -798,6 +853,7 @@ mod tests {
                 zsh: None,
                 pwsh: Some(TriggerKey::AltSpace),
                 nu: None,
+                self_insert: None,
             },
             abbr: vec![],
         };
@@ -1255,11 +1311,42 @@ mod tests {
         }
     }
 
-    /// PSReadLine does not automatically bind `Shift+Spacebar` to `SelfInsert` when
-    /// `Spacebar` is rebound. Without an explicit binding, Shift+Space falls through
-    /// to the runex handler and triggers expansion instead of inserting a plain space.
     #[test]
-    fn pwsh_script_binds_shift_space_to_self_insert_when_trigger_is_space() {
+    fn pwsh_self_insert_shift_space_when_configured() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                self_insert: Some(TriggerKey::ShiftSpace),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Pwsh, "runex", Some(&config));
+        assert!(
+            s.contains("Set-PSReadLineKeyHandler -Chord 'Shift+Spacebar' -Function SelfInsert"),
+            "pwsh script must bind Shift+Spacebar to SelfInsert when self_insert = shift-space: {s}"
+        );
+    }
+
+    #[test]
+    fn pwsh_self_insert_alt_space_when_configured() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                self_insert: Some(TriggerKey::AltSpace),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Pwsh, "runex", Some(&config));
+        assert!(
+            s.contains("Set-PSReadLineKeyHandler -Chord 'Alt+Spacebar' -Function SelfInsert"),
+            "pwsh script must bind Alt+Spacebar to SelfInsert when self_insert = alt-space: {s}"
+        );
+    }
+
+    #[test]
+    fn pwsh_no_self_insert_when_not_configured() {
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig {
@@ -1270,25 +1357,127 @@ mod tests {
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
         assert!(
-            s.contains("Set-PSReadLineKeyHandler -Chord 'Shift+Spacebar' -Function SelfInsert"),
-            "pwsh script must bind Shift+Spacebar to SelfInsert when trigger is Space: {s}"
+            !s.contains("SelfInsert"),
+            "pwsh script must not bind SelfInsert when self_insert is not configured (even if trigger is Space): {s}"
         );
     }
 
     #[test]
-    fn pwsh_script_does_not_bind_shift_space_when_trigger_is_not_space() {
+    fn nu_self_insert_shift_space_when_configured() {
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig {
-                trigger: Some(TriggerKey::Tab),
+                self_insert: Some(TriggerKey::ShiftSpace),
                 ..crate::model::KeybindConfig::default()
             },
             abbr: vec![],
         };
-        let s = export_script(Shell::Pwsh, "runex", Some(&config));
+        let s = export_script(Shell::Nu, "runex", Some(&config));
         assert!(
-            !s.contains("Set-PSReadLineKeyHandler -Chord 'Shift+Spacebar' -Function SelfInsert"),
-            "pwsh script must not bind Shift+Spacebar when trigger is not Space: {s}"
+            s.contains("runex_self_insert") && s.contains("modifier: shift") && s.contains("keycode: space"),
+            "nu script must include shift+space self-insert binding when self_insert = shift-space: {s}"
+        );
+    }
+
+    #[test]
+    fn nu_self_insert_alt_space_when_configured() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                self_insert: Some(TriggerKey::AltSpace),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Nu, "runex", Some(&config));
+        assert!(
+            s.contains("runex_self_insert") && s.contains("modifier: alt") && s.contains("keycode: space"),
+            "nu script must include alt+space self-insert binding when self_insert = alt-space: {s}"
+        );
+    }
+
+    #[test]
+    fn nu_no_self_insert_when_not_configured() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                trigger: Some(TriggerKey::Space),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Nu, "runex", Some(&config));
+        assert!(
+            !s.contains("insertchar"),
+            "nu script must not contain insertchar append block when self_insert is not configured: {s}"
+        );
+    }
+
+    #[test]
+    fn bash_self_insert_alt_space_when_configured() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                self_insert: Some(TriggerKey::AltSpace),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Bash, "runex", Some(&config));
+        assert!(
+            s.contains(r#"bind '"\e ": self-insert'"#),
+            "bash script must bind Alt+Space to self-insert when self_insert = alt-space: {s}"
+        );
+    }
+
+    #[test]
+    fn bash_no_self_insert_when_not_configured() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                trigger: Some(TriggerKey::Space),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Bash, "runex", Some(&config));
+        assert!(
+            !s.contains("self-insert"),
+            "bash script must not contain self-insert when self_insert is not configured: {s}"
+        );
+    }
+
+    #[test]
+    fn zsh_self_insert_alt_space_when_configured() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                self_insert: Some(TriggerKey::AltSpace),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Zsh, "runex", Some(&config));
+        assert!(
+            s.contains(r#"bindkey "^[ " self-insert"#),
+            "zsh script must bind Alt+Space to self-insert when self_insert = alt-space: {s}"
+        );
+    }
+
+    #[test]
+    fn zsh_no_self_insert_when_not_configured() {
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                trigger: Some(TriggerKey::Space),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Zsh, "runex", Some(&config));
+        assert!(
+            !s.contains("self-insert"),
+            "zsh script must not contain self-insert when self_insert is not configured: {s}"
         );
     }
 

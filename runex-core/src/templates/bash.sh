@@ -89,3 +89,4 @@ __runex_expand() {
     PROMPT_COMMAND="$runex_prompt_command"
 }
 {BASH_BIND_LINES}
+{BASH_SELF_INSERT_LINES}
