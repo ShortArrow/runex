@@ -73,21 +73,53 @@ pub(crate) fn parse_pwsh_alias_lines(stdout: &str) -> HashMap<String, String> {
     aliases
 }
 
-/// Spawn a thread that drains `reader` into a buffer capped at `max_bytes + 1`.
+/// Spawn a thread that drains `reader` into a shared buffer capped at `max_bytes + 1`.
 ///
 /// Reading one byte beyond the limit acts as an overflow sentinel: if the returned
 /// buffer's length exceeds `max_bytes`, the caller should treat the output as
 /// truncated and discard it.
+///
+/// Returns an `Arc<Mutex<Option<Vec<u8>>>>` rather than a `JoinHandle` so the caller
+/// can retrieve the result without blocking when the pipe's write end outlives the child
+/// process (e.g. grandchildren that inherited the fd on macOS).
 pub(crate) fn spawn_stdout_reader(
     reader: impl io::Read + Send + 'static,
     max_bytes: usize,
-) -> thread::JoinHandle<Vec<u8>> {
+) -> std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>> {
     use std::io::Read;
+    use std::sync::{Arc, Mutex};
+    let result: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let result_clone = Arc::clone(&result);
     thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = reader.take(max_bytes as u64 + 1).read_to_end(&mut buf);
-        buf
-    })
+        if let Ok(mut guard) = result_clone.lock() {
+            *guard = Some(buf);
+        }
+    });
+    result
+}
+
+/// Poll `slot` until the reader thread writes its result or `deadline` is reached.
+///
+/// The child's pipe write end closes when the child exits, so the reader thread
+/// finishes almost immediately after a successful (non-timed-out) child exit.
+/// The 500 ms deadline is a safety net for scheduler jitter.
+fn take_reader_result(
+    slot: &std::sync::Mutex<Option<Vec<u8>>>,
+    deadline: std::time::Instant,
+) -> Vec<u8> {
+    loop {
+        if let Ok(mut guard) = slot.try_lock() {
+            if let Some(buf) = guard.take() {
+                return buf;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Vec::new();
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Poll `child` until it exits or `timeout` elapses.
@@ -150,14 +182,14 @@ pub(crate) fn run_with_timeout(
 
     let mut child = cmd.spawn().ok()?;
     let stdout_pipe = child.stdout.take()?;
-    let reader_handle = spawn_stdout_reader(stdout_pipe, MAX_SUBPROCESS_OUTPUT_BYTES);
-    let status = poll_child_with_timeout(&mut child, Duration::from_secs(timeout_secs));
-    let stdout = reader_handle.join().unwrap_or_default();
+    let reader_result = spawn_stdout_reader(stdout_pipe, MAX_SUBPROCESS_OUTPUT_BYTES);
+    let status = poll_child_with_timeout(&mut child, Duration::from_secs(timeout_secs))?;
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    let stdout = take_reader_result(&reader_result, deadline);
 
     if stdout.len() > MAX_SUBPROCESS_OUTPUT_BYTES {
         return None;
     }
-    let status = status?;
     if !status.success() {
         return None;
     }
