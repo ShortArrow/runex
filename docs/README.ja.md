@@ -156,9 +156,22 @@ runex version                            バージョンとビルドコミット
 
 `trigger = "space"` を使う場合：
 
-- 多くの端末では `Shift+Space` で展開せずに空白を入力できます（端末依存）。
 - bash では先頭に `\` を付ける（例: `\ls`）か、`command ls` を使います。
 - PowerShell では `\ls` は別トークンになるだけです。標準 alias をそのまま使いたいなら `Get-ChildItem` のように完全なコマンド名を書いてください。
+
+`self_insert` でキーを「展開せずにスペース挿入」にバインドすることもできます：
+
+```toml
+[keybind]
+trigger     = "space"
+self_insert = "shift-space"   # pwsh/nu: Shift+Space は展開せずにスペースを挿入
+# self_insert = "alt-space"   # bash/zsh を含む全シェル対応
+```
+
+| 値 | bash | zsh | pwsh | nu |
+|---|---|---|---|---|
+| `"alt-space"` | yes | yes | yes | yes |
+| `"shift-space"` | no | no | yes | yes |
 
 ## alias との差異
 

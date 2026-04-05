@@ -27,6 +27,7 @@ Controls which key triggers expansion in each shell. All fields are optional.
 | `zsh` | string | falls back to `trigger` | zsh-specific override. |
 | `pwsh` | string | falls back to `trigger` | PowerShell-specific override. |
 | `nu` | string | falls back to `trigger` | Nushell-specific override. |
+| `self_insert` | string | — | Key to bind to plain-space insertion (bypasses expansion). |
 
 Clink does not have a shell-specific field — it always uses `trigger`.
 
@@ -47,6 +48,29 @@ bash    = "alt-space"   # bash uses Alt+Space; other shells use Space
 | `"space"` | Space bar |
 | `"tab"` | Tab |
 | `"alt-space"` | Alt + Space |
+| `"shift-space"` | Shift + Space (pwsh and nu only) |
+
+### `self_insert`
+
+Binds a key to plain-space insertion, bypassing expansion entirely. Useful when the trigger key has a modifier variant that would otherwise fall through to the expansion handler.
+
+```toml
+[keybind]
+trigger     = "space"
+self_insert = "shift-space"   # Shift+Space inserts a space without expanding
+```
+
+Shell support for `self_insert`:
+
+| Shell | `"alt-space"` | `"shift-space"` |
+|---|---|---|
+| bash | yes | no (terminal-dependent — use `alt-space` instead) |
+| zsh | yes | no (terminal-dependent — use `alt-space` instead) |
+| pwsh | yes | yes |
+| nu | yes | yes |
+| clink | — | — |
+
+> **Note:** Setting `self_insert = "shift-space"` produces a warning from `runex doctor` because Shift+Space cannot be reliably detected in bash or zsh. Use `"alt-space"` for cross-shell support.
 
 ---
 
@@ -149,8 +173,9 @@ Entries must be bare command names (`lsd`, `bat`, `eza`). Path separators (`/`, 
 version = 1
 
 [keybind]
-trigger = "space"
-bash    = "alt-space"
+trigger     = "space"
+bash        = "alt-space"
+self_insert = "shift-space"
 
 # lsd as ls — only when lsd is installed
 [[abbr]]

@@ -158,9 +158,22 @@ Global flags (available on every subcommand):
 
 If you use `trigger = "space"`, there are a few practical ways to avoid expansion:
 
-- `Shift+Space` inserts a plain space in many terminals without triggering runex (terminal-dependent).
 - In bash, prefix the token with `\` — e.g. `\ls` — or use `command ls`.
 - In PowerShell, `\ls` is just a different token. For built-in aliases, prefer the full command name (e.g. `Get-ChildItem`).
+
+You can also bind a key to plain-space insertion using `self_insert`:
+
+```toml
+[keybind]
+trigger     = "space"
+self_insert = "shift-space"   # pwsh/nu: Shift+Space inserts a space without expanding
+# self_insert = "alt-space"   # all shells including bash/zsh
+```
+
+| Value | bash | zsh | pwsh | nu |
+|---|---|---|---|---|
+| `"alt-space"` | yes | yes | yes | yes |
+| `"shift-space"` | no | no | yes | yes |
 
 ## Why not alias?
 
