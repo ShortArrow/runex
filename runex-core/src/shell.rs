@@ -354,6 +354,12 @@ fn pwsh_register_lines(trigger: Option<TriggerKey>) -> String {
         lines.extend(vi_lines);
         lines.push("    }".to_string());
     }
+    if trigger == Some(TriggerKey::Space) {
+        lines.push(
+            "    Set-PSReadLineKeyHandler -Chord 'Shift+Spacebar' -Function SelfInsert"
+                .to_string(),
+        );
+    }
     lines.join("\n")
 }
 
@@ -1313,6 +1319,45 @@ mod tests {
                 ch as u32
             );
         }
+    }
+
+    #[test]
+    fn pwsh_script_binds_shift_space_to_self_insert_when_trigger_is_space() {
+        // When the trigger key is Space, Shift+Space must be explicitly bound to
+        // SelfInsert so that the user can bypass expansion by pressing Shift+Space.
+        // PSReadLine does not automatically bind Shift+Spacebar when Spacebar is rebound.
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                trigger: Some(TriggerKey::Space),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Pwsh, "runex", Some(&config));
+        assert!(
+            s.contains("Set-PSReadLineKeyHandler -Chord 'Shift+Spacebar' -Function SelfInsert"),
+            "pwsh script must bind Shift+Spacebar to SelfInsert when trigger is Space: {s}"
+        );
+    }
+
+    #[test]
+    fn pwsh_script_does_not_bind_shift_space_when_trigger_is_not_space() {
+        // When the trigger key is not Space (e.g. Tab), there is no need to
+        // bind Shift+Spacebar — doing so would clobber the default behaviour for no benefit.
+        let config = Config {
+            version: 1,
+            keybind: crate::model::KeybindConfig {
+                trigger: Some(TriggerKey::Tab),
+                ..crate::model::KeybindConfig::default()
+            },
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Pwsh, "runex", Some(&config));
+        assert!(
+            !s.contains("Set-PSReadLineKeyHandler -Chord 'Shift+Spacebar' -Function SelfInsert"),
+            "pwsh script must not bind Shift+Spacebar when trigger is not Space: {s}"
+        );
     }
 
     } // mod regression_issues
