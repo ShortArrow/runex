@@ -220,10 +220,11 @@ pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt;
+        let resolved = path.canonicalize()?;
         std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)?
+            .open(&resolved)?
     };
     #[cfg(not(unix))]
     let mut file = std::fs::File::open(path)?;
@@ -466,18 +467,19 @@ expand = "git commit -m"
         assert!(err.is_err(), "load_config must reject a symlink to /dev/zero");
     }
 
-    /// A symlink pointing to a regular file (e.g. /etc/passwd) must be rejected.
-    /// The O_NOFOLLOW protection must prevent following the symlink.
+    /// A symlink pointing to a regular TOML file must be followed.
+    /// This supports the common dotfiles pattern where ~/.config/runex/config.toml
+    /// is a symlink into a dotfiles repository.
     #[test]
     #[cfg(unix)]
-    fn load_config_rejects_symlink_to_regular_file() {
+    fn load_config_follows_symlink_to_regular_file() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("target.toml");
         std::fs::write(&target, b"version = 1\n").unwrap();
         let link = dir.path().join("link_config.toml");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        let err = load_config(&link);
-        assert!(err.is_err(), "load_config must reject a symlink even to a regular file (O_NOFOLLOW)");
+        let result = load_config(&link);
+        assert!(result.is_ok(), "load_config must follow a symlink to a regular file: {result:?}");
     }
 
     /// A named pipe reports metadata().len() == 0 and read_to_string() blocks.
