@@ -58,7 +58,7 @@ impl Spinner {
                 eprint!("\r{} {}", frames[i % frames.len()], message);
                 let _ = io::stderr().flush();
                 i += 1;
-                thread::sleep(Duration::from_millis(shell_alias::POLL_INTERVAL_MILLIS));
+                thread::sleep(Duration::from_millis(100));
             }
             eprint!("\r\x1b[2K");
             let _ = io::stderr().flush();

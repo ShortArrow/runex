@@ -1,14 +1,10 @@
 use std::collections::HashMap;
-use std::io;
-use std::thread;
+#[cfg(unix)]
 use std::time::Duration;
 
 use runex_core::doctor::{Check, CheckStatus, DiagResult};
 use runex_core::model::{Abbr, Config};
 use runex_core::sanitize::sanitize_for_display;
-
-/// Interval between child-process liveness polls during timeout.
-pub(crate) const POLL_INTERVAL_MILLIS: u64 = 100;
 
 /// Maximum number of alias entries accepted from a single shell invocation.
 /// Prevents unbounded memory consumption if a misbehaving or compromised shell
@@ -73,98 +69,50 @@ pub(crate) fn parse_pwsh_alias_lines(stdout: &str) -> HashMap<String, String> {
     aliases
 }
 
-/// Spawn a thread that drains `reader` into a shared buffer capped at `max_bytes + 1`.
-///
-/// Reading one byte beyond the limit acts as an overflow sentinel: if the returned
-/// buffer's length exceeds `max_bytes`, the caller should treat the output as
-/// truncated and discard it.
-///
-/// Returns an `Arc<Mutex<Option<Vec<u8>>>>` rather than a `JoinHandle` so the caller
-/// can retrieve the result without blocking when the pipe's write end outlives the child
-/// process (e.g. grandchildren that inherited the fd on macOS).
-pub(crate) fn spawn_stdout_reader(
-    reader: impl io::Read + Send + 'static,
-    max_bytes: usize,
-) -> std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>> {
-    use std::io::Read;
-    use std::sync::{Arc, Mutex};
-    let result: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
-    let result_clone = Arc::clone(&result);
-    thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = reader.take(max_bytes as u64 + 1).read_to_end(&mut buf);
-        if let Ok(mut guard) = result_clone.lock() {
-            *guard = Some(buf);
-        }
-    });
-    result
-}
-
-/// Poll `slot` until the reader thread writes its result or `deadline` is reached.
-///
-/// The child's pipe write end closes when the child exits, so the reader thread
-/// finishes almost immediately after a successful (non-timed-out) child exit.
-/// The 500 ms deadline is a safety net for scheduler jitter.
-fn take_reader_result(
-    slot: &std::sync::Mutex<Option<Vec<u8>>>,
-    deadline: std::time::Instant,
-) -> Vec<u8> {
-    loop {
-        if let Ok(mut guard) = slot.try_lock() {
-            if let Some(buf) = guard.take() {
-                return buf;
-            }
-        }
-        if std::time::Instant::now() >= deadline {
-            return Vec::new();
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-/// Poll `child` until it exits or `timeout` elapses.
-///
-/// On timeout, sends SIGKILL to the entire process group so that grandchildren
-/// (e.g. a `sleep` spawned by the child) cannot keep the stdout pipe open.
-/// Returns `None` if the child was killed before it exited naturally.
-pub(crate) fn poll_child_with_timeout(
-    child: &mut std::process::Child,
-    timeout: Duration,
-) -> Option<std::process::ExitStatus> {
-    let poll_interval = Duration::from_millis(POLL_INTERVAL_MILLIS);
-    let mut elapsed = Duration::ZERO;
-    loop {
-        match child.try_wait() {
-            Ok(Some(s)) => return Some(s),
-            Ok(None) => {
-                if elapsed >= timeout {
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(-(child.id() as i32), libc::SIGKILL);
-                    }
-                    let _ = child.kill();
-                    #[cfg(unix)]
-                    reap_child_nonblocking(child.id());
-                    #[cfg(not(unix))]
-                    let _ = child.wait();
-                    return None;
-                }
-                thread::sleep(poll_interval);
-                elapsed += poll_interval;
-            }
-            Err(_) => return None,
-        }
-    }
-}
-
-/// Reap the child process using WNOHANG so we never block waiting for it.
-///
-/// After SIGKILL the child may not have exited yet; a blocking waitpid would
-/// stall the caller on macOS when the child's stdout pipe is still open.
+/// Set O_NONBLOCK on fd so reads return EAGAIN instead of blocking.
 #[cfg(unix)]
-fn reap_child_nonblocking(pid: u32) {
+fn set_nonblocking(fd: std::os::unix::io::RawFd) {
     unsafe {
-        libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG);
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 {
+            let _ = libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+}
+
+/// Returns true if fd has data available within the given millisecond budget.
+#[cfg(unix)]
+fn poll_readable(fd: std::os::unix::io::RawFd, millis: i32) -> bool {
+    let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+    unsafe { libc::poll(&mut pfd, 1, millis) > 0 }
+}
+
+/// Send SIGKILL to the process group rooted at pid without waiting for exit.
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+}
+
+#[cfg(unix)]
+enum DrainResult { Drained, Overflow }
+
+/// Read all currently available bytes from fd into buf up to limit total bytes.
+///
+/// Returns Overflow when buf would exceed limit, indicating the caller must abort.
+#[cfg(unix)]
+fn drain_readable(fd: std::os::unix::io::RawFd, buf: &mut Vec<u8>, limit: usize) -> DrainResult {
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = unsafe {
+            libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len())
+        };
+        if n <= 0 {
+            return DrainResult::Drained;
+        }
+        buf.extend_from_slice(&chunk[..n as usize]);
+        if buf.len() > limit {
+            return DrainResult::Overflow;
+        }
     }
 }
 
@@ -174,13 +122,14 @@ fn reap_child_nonblocking(pid: u32) {
 /// `timeout_secs` seconds and its output fits within [`MAX_SUBPROCESS_OUTPUT_BYTES`].
 /// Returns `None` if the child times out, exits with a non-zero status, or produces
 /// oversized output.
+#[cfg(unix)]
 pub(crate) fn run_with_timeout(
     program: &str,
     args: &[&str],
     env_path: Option<&str>,
     timeout_secs: u64,
 ) -> Option<Vec<u8>> {
-    #[cfg(unix)]
+    use std::os::unix::io::AsRawFd;
     use std::os::unix::process::CommandExt;
 
     let mut cmd = std::process::Command::new(program);
@@ -191,23 +140,82 @@ pub(crate) fn run_with_timeout(
     if let Some(path) = env_path {
         cmd.env("PATH", path);
     }
-    #[cfg(unix)]
     cmd.process_group(0);
 
     let mut child = cmd.spawn().ok()?;
-    let stdout_pipe = child.stdout.take()?;
-    let reader_result = spawn_stdout_reader(stdout_pipe, MAX_SUBPROCESS_OUTPUT_BYTES);
-    let status = poll_child_with_timeout(&mut child, Duration::from_secs(timeout_secs))?;
-    let deadline = std::time::Instant::now() + Duration::from_millis(500);
-    let stdout = take_reader_result(&reader_result, deadline);
+    let stdout = child.stdout.take()?;
+    let fd = stdout.as_raw_fd();
+    set_nonblocking(fd);
+    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
+    let mut buf = Vec::new();
 
-    if stdout.len() > MAX_SUBPROCESS_OUTPUT_BYTES {
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            kill_process_group(child.id());
+            return None;
+        }
+        let millis = remaining.as_millis().min(i32::MAX as u128) as i32;
+        if poll_readable(fd, millis) {
+            if let DrainResult::Overflow = drain_readable(fd, &mut buf, MAX_SUBPROCESS_OUTPUT_BYTES) {
+                kill_process_group(child.id());
+                return None;
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                drain_readable(fd, &mut buf, MAX_SUBPROCESS_OUTPUT_BYTES);
+                if buf.len() > MAX_SUBPROCESS_OUTPUT_BYTES {
+                    return None;
+                }
+                if !status.success() {
+                    return None;
+                }
+                return Some(buf);
+            }
+            Ok(None) => continue,
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Run a command with a timeout.
+///
+/// Returns `Some(stdout bytes)` when the child exits successfully within
+/// `timeout_secs` seconds and its output fits within [`MAX_SUBPROCESS_OUTPUT_BYTES`].
+/// Returns `None` if the child times out, exits with a non-zero status, or produces
+/// oversized output.
+#[cfg(not(unix))]
+pub(crate) fn run_with_timeout(
+    program: &str,
+    args: &[&str],
+    env_path: Option<&str>,
+    _timeout_secs: u64,
+) -> Option<Vec<u8>> {
+    use std::io::Read;
+
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::null());
+    if let Some(path) = env_path {
+        cmd.env("PATH", path);
+    }
+
+    let mut child = cmd.spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let mut buf = Vec::new();
+    let _ = stdout.take(MAX_SUBPROCESS_OUTPUT_BYTES as u64 + 1).read_to_end(&mut buf);
+    let status = child.wait().ok()?;
+
+    if buf.len() > MAX_SUBPROCESS_OUTPUT_BYTES {
         return None;
     }
     if !status.success() {
         return None;
     }
-    Some(stdout)
+    Some(buf)
 }
 
 pub(crate) fn load_pwsh_aliases() -> HashMap<String, String> {
