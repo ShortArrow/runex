@@ -225,14 +225,12 @@ mod tests {
 
     #[test]
     fn duplicate_key_self_loop_then_real_expands() {
-        // expand() must skip the self-loop and expand using the second rule
         let c = cfg(vec![abbr("ls", "ls"), abbr("ls", "lsd")]);
         assert_eq!(expand(&c, "ls", |_| true), ExpandResult::Expanded("lsd".into()));
     }
 
     #[test]
     fn duplicate_key_failed_condition_then_real_expands() {
-        // expand() skips the first (condition fails) and uses the second (no condition)
         let c = cfg(vec![abbr_when("ls", "lsd", vec!["lsd"]), abbr("ls", "ls2")]);
         assert_eq!(expand(&c, "ls", |_| false), ExpandResult::Expanded("ls2".into()));
     }

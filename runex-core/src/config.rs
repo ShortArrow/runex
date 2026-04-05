@@ -210,25 +210,25 @@ pub(crate) fn xdg_config_home() -> Option<PathBuf> {
 /// Opens the file once and uses the same file descriptor for both the size check
 /// and the read, eliminating the TOCTOU race that exists when `metadata()` and
 /// `read_to_string()` open the file separately.
+///
+/// On Unix, `O_NOFOLLOW` rejects symlinks at the final path component, and `O_NONBLOCK`
+/// prevents `open()` from blocking on a named pipe with no writer. Non-regular files
+/// (device nodes, FIFOs) can bypass the size guard by reporting `len() == 0`, so they
+/// are rejected via `is_file()` immediately after open.
 pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     use std::io::Read;
-    // On Unix, open with O_NOFOLLOW to refuse symlinks at the final path component,
-    // and O_NONBLOCK so that opening a named pipe does not block indefinitely waiting
-    // for a writer. Named pipes are rejected immediately after open via the is_file()
-    // check; without O_NONBLOCK, open() on a FIFO blocks until a writer appears.
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt;
+        let resolved = path.canonicalize()?;
         std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)?
+            .open(&resolved)?
     };
     #[cfg(not(unix))]
     let mut file = std::fs::File::open(path)?;
     let meta = file.metadata()?;
-    // Reject non-regular files (symlinks to /dev/zero, named pipes, device nodes).
-    // These can bypass the size guard (reporting len=0) or block indefinitely on read.
     if !meta.is_file() {
         return Err(ConfigError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -290,27 +290,59 @@ when_command_exists = ["lsd"]
         let toml = r#"
 version = 1
 
-[keybind]
-trigger = "space"
+[keybind.trigger]
+default = "space"
 bash = "alt-space"
 zsh = "space"
 pwsh = "tab"
 "#;
         let config = parse_config(toml).unwrap();
-        assert_eq!(config.keybind.trigger, Some(TriggerKey::Space));
-        assert_eq!(config.keybind.bash, Some(TriggerKey::AltSpace));
-        assert_eq!(config.keybind.zsh, Some(TriggerKey::Space));
-        assert_eq!(config.keybind.pwsh, Some(TriggerKey::Tab));
-        assert_eq!(config.keybind.nu, None);
+        assert_eq!(config.keybind.trigger.default, Some(TriggerKey::Space));
+        assert_eq!(config.keybind.trigger.bash, Some(TriggerKey::AltSpace));
+        assert_eq!(config.keybind.trigger.zsh, Some(TriggerKey::Space));
+        assert_eq!(config.keybind.trigger.pwsh, Some(TriggerKey::Tab));
+        assert_eq!(config.keybind.trigger.nu, None);
     }
 
     #[test]
+    fn parse_config_with_subtable_trigger() {
+        let toml = r#"
+version = 1
+
+[keybind.trigger]
+default = "space"
+bash = "alt-space"
+pwsh = "tab"
+
+[keybind.self_insert]
+pwsh = "shift-space"
+nu   = "shift-space"
+"#;
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.keybind.trigger.default, Some(TriggerKey::Space));
+        assert_eq!(config.keybind.trigger.bash, Some(TriggerKey::AltSpace));
+        assert_eq!(config.keybind.trigger.pwsh, Some(TriggerKey::Tab));
+        assert_eq!(config.keybind.trigger.zsh, None);
+        assert_eq!(config.keybind.self_insert.pwsh, Some(TriggerKey::ShiftSpace));
+        assert_eq!(config.keybind.self_insert.nu, Some(TriggerKey::ShiftSpace));
+        assert_eq!(config.keybind.self_insert.bash, None);
+    }
+
+    #[test]
+    fn parse_config_keybind_absent_gives_all_none() {
+        let toml = "version = 1\n";
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.keybind.trigger.default, None);
+        assert_eq!(config.keybind.trigger.bash, None);
+        assert_eq!(config.keybind.self_insert.pwsh, None);
+    }
+
+    /// TOML allows any string for `trigger`, but only known variants are valid.
+    /// An unknown value must be rejected so the user gets an explicit error rather than
+    /// silently falling back to a default they didn't request.
+    #[test]
     fn parse_config_rejects_invalid_trigger_key() {
-        // TOML allows any string value for `trigger`, but only "space", "tab", and
-        // "alt-space" are valid TriggerKey variants. An unknown value must cause a parse
-        // error so the user gets an explicit message instead of silently falling back to
-        // a default binding they didn't request.
-        let toml = "version = 1\n[keybind]\ntrigger = \"invalid-key\"\n";
+        let toml = "version = 1\n[keybind.trigger]\ndefault = \"invalid-key\"\n";
         assert!(
             parse_config(toml).is_err(),
             "must reject unknown trigger key value 'invalid-key'"
@@ -319,10 +351,8 @@ pwsh = "tab"
 
     #[test]
     fn parse_config_rejects_invalid_per_shell_keybind() {
-        // Per-shell keybind overrides must also be validated. An invalid value in
-        // `bash`, `zsh`, `pwsh`, or `nu` must be rejected.
         for field in ["bash", "zsh", "pwsh", "nu"] {
-            let toml = format!("version = 1\n[keybind]\n{field} = \"unknown-keybind\"\n");
+            let toml = format!("version = 1\n[keybind.trigger]\n{field} = \"unknown-keybind\"\n");
             assert!(
                 parse_config(&toml).is_err(),
                 "must reject unknown keybind value for field '{field}'"
@@ -377,7 +407,6 @@ expand = "git commit -m"
     #[test]
     #[serial]
     fn default_config_path_env_override() {
-        // RUNEX_CONFIG takes priority over XDG_CONFIG_HOME.
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         unsafe { std::env::set_var("RUNEX_CONFIG", "/tmp/custom.toml") };
         let path = default_config_path().unwrap();
@@ -402,7 +431,6 @@ expand = "git commit -m"
         unsafe { std::env::set_var("XDG_CONFIG_HOME", "") };
         let dir = xdg_config_home().unwrap();
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        // Falls back to home/.config — must end with .config
         assert!(dir.ends_with(".config"), "expected ~/.config fallback, got {dir:?}");
     }
 
@@ -421,7 +449,6 @@ expand = "git commit -m"
     #[test]
     #[serial]
     fn default_config_path_ignores_empty_runex_config() {
-        // RUNEX_CONFIG="" must be treated as unset, falling through to XDG resolution.
         unsafe { std::env::set_var("RUNEX_CONFIG", "") };
         unsafe { std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-empty-test") };
         let path = default_config_path().unwrap();
@@ -456,7 +483,6 @@ expand = "git commit -m"
     fn load_config_rejects_oversized_file() {
         use std::io::Write;
         let mut f = tempfile::NamedTempFile::new().unwrap();
-        // Write 11 MB of data (above 10 MB limit)
         f.write_all(&vec![b'x'; 11 * 1024 * 1024]).unwrap();
         f.flush().unwrap();
         assert!(load_config(f.path()).is_err(), "must reject files larger than 10 MB");
@@ -474,19 +500,19 @@ expand = "git commit -m"
         assert!(err.is_err(), "load_config must reject a symlink to /dev/zero");
     }
 
-    /// A symlink pointing to a regular file (e.g. /etc/passwd) must be rejected.
-    /// The O_NOFOLLOW protection must prevent following the symlink.
+    /// A symlink pointing to a regular TOML file must be followed.
+    /// This supports the common dotfiles pattern where ~/.config/runex/config.toml
+    /// is a symlink into a dotfiles repository.
     #[test]
     #[cfg(unix)]
-    fn load_config_rejects_symlink_to_regular_file() {
+    fn load_config_follows_symlink_to_regular_file() {
         let dir = tempfile::tempdir().unwrap();
-        // Create a real regular file to link to (avoid depending on /etc/passwd existing)
         let target = dir.path().join("target.toml");
         std::fs::write(&target, b"version = 1\n").unwrap();
         let link = dir.path().join("link_config.toml");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        let err = load_config(&link);
-        assert!(err.is_err(), "load_config must reject a symlink even to a regular file (O_NOFOLLOW)");
+        let result = load_config(&link);
+        assert!(result.is_ok(), "load_config must follow a symlink to a regular file: {result:?}");
     }
 
     /// A named pipe reports metadata().len() == 0 and read_to_string() blocks.
@@ -916,7 +942,6 @@ expand = "git commit -m"
 
     #[test]
     fn parse_config_accepts_normal_expand() {
-        // Sanity: a normal expand value must still be accepted.
         let toml = "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n";
         assert!(
             parse_config(toml).is_ok(),
