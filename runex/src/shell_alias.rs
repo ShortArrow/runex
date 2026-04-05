@@ -143,6 +143,9 @@ pub(crate) fn poll_child_with_timeout(
                         libc::kill(-(child.id() as i32), libc::SIGKILL);
                     }
                     let _ = child.kill();
+                    #[cfg(unix)]
+                    reap_child_nonblocking(child.id());
+                    #[cfg(not(unix))]
                     let _ = child.wait();
                     return None;
                 }
@@ -151,6 +154,17 @@ pub(crate) fn poll_child_with_timeout(
             }
             Err(_) => return None,
         }
+    }
+}
+
+/// Reap the child process using WNOHANG so we never block waiting for it.
+///
+/// After SIGKILL the child may not have exited yet; a blocking waitpid would
+/// stall the caller on macOS when the child's stdout pipe is still open.
+#[cfg(unix)]
+fn reap_child_nonblocking(pid: u32) {
+    unsafe {
+        libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG);
     }
 }
 
