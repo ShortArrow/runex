@@ -6,6 +6,10 @@ Override with the `RUNEX_CONFIG` environment variable or the `--config` flag.
 
 ---
 
+> **Note:** Unknown fields and table names are silently ignored. Typos like `[[abr]]` or `expad = "lsd"` will not produce an error — the misspelled entry is simply skipped. Use `runex doctor` to verify that your config loads correctly.
+
+---
+
 ## Top-level fields
 
 | Field | Type | Required | Description |
