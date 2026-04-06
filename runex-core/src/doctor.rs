@@ -8,7 +8,8 @@ use serde::Serialize;
 #[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
     Ok,
-    Ng,
+    Warn,
+    Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -28,7 +29,7 @@ pub struct DiagResult {
 
 impl DiagResult {
     pub fn is_healthy(&self) -> bool {
-        self.checks.iter().all(|c| c.status == CheckStatus::Ok)
+        self.checks.iter().all(|c| c.status != CheckStatus::Error)
     }
 }
 
@@ -36,7 +37,7 @@ fn check_config_file(config_path: &Path) -> Check {
     let exists = config_path.exists();
     Check {
         name: "config_file".into(),
-        status: if exists { CheckStatus::Ok } else { CheckStatus::Ng },
+        status: if exists { CheckStatus::Ok } else { CheckStatus::Error },
         detail: if exists {
             format!("found: {}", sanitize_for_display(&config_path.display().to_string()))
         } else {
@@ -58,7 +59,7 @@ fn check_config_parse(config: Option<&Config>, parse_error: Option<&str>) -> Che
     } else {
         ("failed to load config".into(), None)
     };
-    Check { name: "config_parse".into(), status: if config.is_some() { CheckStatus::Ok } else { CheckStatus::Ng }, detail, detail_verbose }
+    Check { name: "config_parse".into(), status: if config.is_some() { CheckStatus::Ok } else { CheckStatus::Error }, detail, detail_verbose }
 }
 
 fn check_abbr_quality(config: &Config) -> Vec<Check> {
@@ -67,7 +68,7 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
         if abbr.key.is_empty() {
             checks.push(Check {
                 name: format!("abbr[{i}].empty_key"),
-                status: CheckStatus::Ng,
+                status: CheckStatus::Warn,
                 detail: format!("rule #{n} has an empty key — it will never match", n = i + 1),
                 detail_verbose: None,
             });
@@ -75,7 +76,7 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
         if abbr.key == abbr.expand {
             checks.push(Check {
                 name: format!("abbr[{i}].self_loop"),
-                status: CheckStatus::Ng,
+                status: CheckStatus::Warn,
                 detail: format!(
                     "rule #{n} key == expand ('{key}') — this rule is always skipped",
                     n = i + 1,
@@ -99,7 +100,7 @@ where
                 let exists = command_exists(cmd);
                 checks.push(Check {
                     name: format!("command:{}", sanitize_for_display(cmd)),
-                    status: if exists { CheckStatus::Ok } else { CheckStatus::Ng },
+                    status: if exists { CheckStatus::Ok } else { CheckStatus::Warn },
                     detail: if exists {
                         format!("'{}' found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
                     } else {
@@ -121,7 +122,7 @@ fn check_keybind(config: &Config) -> Vec<Check> {
     if bash_si == Some(TriggerKey::ShiftSpace) || zsh_si == Some(TriggerKey::ShiftSpace) {
         checks.push(Check {
             name: "keybind.self_insert".into(),
-            status: CheckStatus::Ng,
+            status: CheckStatus::Warn,
             detail:
                 "self_insert = \"shift-space\" has no effect in bash/zsh (Shift+Space is terminal-dependent); use \"alt-space\" for cross-shell support".into(),
             detail_verbose: None,
@@ -201,8 +202,8 @@ mod tests {
         let result = diagnose(&path, None, None, |_| true);
 
         assert!(!result.is_healthy());
-        assert_eq!(result.checks[0].status, CheckStatus::Ng);
-        assert_eq!(result.checks[1].status, CheckStatus::Ng);
+        assert_eq!(result.checks[0].status, CheckStatus::Error);
+        assert_eq!(result.checks[1].status, CheckStatus::Error);
     }
 
     #[test]
@@ -211,7 +212,7 @@ mod tests {
         let result = diagnose(&path, None, Some("TOML parse error at line 4"), |_| true);
 
         let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
-        assert_eq!(parse_check.status, CheckStatus::Ng);
+        assert_eq!(parse_check.status, CheckStatus::Error);
         assert!(parse_check.detail.contains("TOML parse error at line 4"),
             "detail must include the parse error message: {:?}", parse_check.detail);
     }
@@ -223,7 +224,7 @@ mod tests {
         let result = diagnose(&path, None, Some(multiline), |_| true);
 
         let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
-        assert_eq!(parse_check.status, CheckStatus::Ng);
+        assert_eq!(parse_check.status, CheckStatus::Error);
 
         let detail_lines: Vec<&str> = parse_check.detail.lines().collect();
         assert_eq!(detail_lines.len(), 1,
@@ -248,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn command_not_found_is_ng() {
+    fn command_not_found_is_warn() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "version = 1").unwrap();
@@ -256,8 +257,8 @@ mod tests {
         let cfg = test_config(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
         let result = diagnose(&path, Some(&cfg), None, |_| false);
 
-        assert!(!result.is_healthy());
-        assert_eq!(result.checks[2].status, CheckStatus::Ng);
+        assert!(result.is_healthy());
+        assert_eq!(result.checks[2].status, CheckStatus::Warn);
         assert!(result.checks[2].detail.contains("not found"));
     }
 
@@ -267,7 +268,7 @@ mod tests {
         let cfg = test_config(vec![abbr("", "git commit -m")]);
         let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            result.checks.iter().any(|c| c.name.contains("empty_key") && c.status == CheckStatus::Ng),
+            result.checks.iter().any(|c| c.name.contains("empty_key") && c.status == CheckStatus::Warn),
             "must warn on empty key: {:?}", result.checks
         );
     }
@@ -278,7 +279,7 @@ mod tests {
         let cfg = test_config(vec![abbr("ls", "ls")]);
         let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            result.checks.iter().any(|c| c.name.contains("self_loop") && c.status == CheckStatus::Ng),
+            result.checks.iter().any(|c| c.name.contains("self_loop") && c.status == CheckStatus::Warn),
             "must warn on self-loop: {:?}", result.checks
         );
     }
@@ -288,7 +289,7 @@ mod tests {
         let result = DiagResult {
             checks: vec![Check {
                 name: "test".into(),
-                status: CheckStatus::Ng,
+                status: CheckStatus::Error,
                 detail: "bad".into(),
                 detail_verbose: None,
             }],
@@ -312,7 +313,7 @@ mod tests {
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Ng),
+            result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must warn when self_insert.bash = shift-space: {:?}", result.checks
         );
     }
@@ -333,7 +334,7 @@ mod tests {
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Ng),
+            !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must not warn when only self_insert.pwsh = shift-space: {:?}", result.checks
         );
     }
@@ -354,7 +355,7 @@ mod tests {
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Ng),
+            result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must warn when default self_insert = shift-space (propagates to bash/zsh): {:?}", result.checks
         );
     }
@@ -375,7 +376,7 @@ mod tests {
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Ng),
+            !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must not warn when only pwsh self_insert = shift-space: {:?}", result.checks
         );
     }

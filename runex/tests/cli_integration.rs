@@ -357,8 +357,9 @@ fn doctor_with_path_prepend_finds_command() {
         "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"__runex_fake_lsd__\"\nwhen_command_exists = [\"__runex_fake_lsd__\"]\n",
     );
     let bins = fake_bin_dir(&["__runex_fake_lsd__"]);
-    let (stdout, _, _) =
+    let (stdout, _, ok) =
         run(&["doctor", "--json"], Some(cfg.path()), Some(bins.path()));
+    assert!(ok, "doctor should exit 0 when required command is found");
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let checks = parsed.as_array().unwrap();
     let fake_cmd_check = checks

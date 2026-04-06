@@ -253,7 +253,7 @@ where
     let definition = lookup(token)?;
     Some(Check {
         name: format!("shell:pwsh:key:{}", sanitize_for_display(token)),
-        status: CheckStatus::Ng,
+        status: CheckStatus::Warn,
         detail: format!(
             "conflicts with existing alias '{}' -> {}",
             sanitize_for_display(token),
@@ -322,7 +322,7 @@ where
     let detail = lookup(token)?;
     Some(Check {
         name: format!("shell:bash:key:{}", sanitize_for_display(token)),
-        status: CheckStatus::Ng,
+        status: CheckStatus::Warn,
         detail: format!("conflicts with existing alias {}", sanitize_for_display(&detail)),
         detail_verbose: None,
     })

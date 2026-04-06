@@ -26,6 +26,7 @@ use std::time::Duration;
 pub(crate) const ANSI_RESET: &str = "\x1b[0m";
 pub(crate) const ANSI_GREEN: &str = "\x1b[32m";
 pub(crate) const ANSI_RED: &str = "\x1b[31m";
+pub(crate) const ANSI_YELLOW: &str = "\x1b[33m";
 pub(crate) const GIT_COMMIT: Option<&str> = option_env!("RUNEX_GIT_COMMIT");
 
 /// Column width for the check status tag in `doctor` output.

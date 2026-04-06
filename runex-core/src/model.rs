@@ -11,6 +11,7 @@ pub enum TriggerKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct PerShellKey {
     pub default: Option<TriggerKey>,
     pub bash: Option<TriggerKey>,
@@ -20,6 +21,7 @@ pub struct PerShellKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct KeybindConfig {
     #[serde(default)]
     pub trigger: PerShellKey,
@@ -29,6 +31,7 @@ pub struct KeybindConfig {
 
 /// A single abbreviation rule: rune → cast.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Abbr {
     pub key: String,
     pub expand: String,
@@ -37,6 +40,7 @@ pub struct Abbr {
 
 /// Top-level configuration.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub version: u32,
     #[serde(default)]
