@@ -12,7 +12,7 @@ const MAX_CMD_LIST_LEN: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("TOML parse error: {0}")]
+    #[error("{0}")]
     Parse(#[from] toml::de::Error),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

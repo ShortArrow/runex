@@ -1,15 +1,14 @@
 use std::path::Path;
 
 use crate::model::{Config, TriggerKey};
-use crate::sanitize::sanitize_for_display;
+use crate::sanitize::{sanitize_for_display, sanitize_multiline_for_display};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
     Ok,
-    Warn,
-    Error,
+    Ng,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -17,6 +16,9 @@ pub struct Check {
     pub name: String,
     pub status: CheckStatus,
     pub detail: String,
+    /// Full detail shown only with --verbose. None when same as detail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_verbose: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -26,9 +28,7 @@ pub struct DiagResult {
 
 impl DiagResult {
     pub fn is_healthy(&self) -> bool {
-        self.checks
-            .iter()
-            .all(|c| c.status == CheckStatus::Ok || c.status == CheckStatus::Warn)
+        self.checks.iter().all(|c| c.status == CheckStatus::Ok)
     }
 }
 
@@ -36,25 +36,29 @@ fn check_config_file(config_path: &Path) -> Check {
     let exists = config_path.exists();
     Check {
         name: "config_file".into(),
-        status: if exists { CheckStatus::Ok } else { CheckStatus::Error },
+        status: if exists { CheckStatus::Ok } else { CheckStatus::Ng },
         detail: if exists {
             format!("found: {}", sanitize_for_display(&config_path.display().to_string()))
         } else {
             format!("not found: {}", sanitize_for_display(&config_path.display().to_string()))
         },
+        detail_verbose: None,
     }
 }
 
-fn check_config_parse(config: Option<&Config>) -> Check {
-    Check {
-        name: "config_parse".into(),
-        status: if config.is_some() { CheckStatus::Ok } else { CheckStatus::Error },
-        detail: if config.is_some() {
-            "config loaded successfully".into()
-        } else {
-            "failed to load config".into()
-        },
-    }
+fn check_config_parse(config: Option<&Config>, parse_error: Option<&str>) -> Check {
+    let (detail, detail_verbose) = if config.is_some() {
+        ("config loaded successfully".into(), None)
+    } else if let Some(e) = parse_error {
+        let first_line = e.lines().next().unwrap_or(e);
+        let short = format!("failed to load config: {}", sanitize_for_display(first_line));
+        let full = format!("failed to load config: {}", sanitize_multiline_for_display(e));
+        let verbose = if full != short { Some(full) } else { None };
+        (short, verbose)
+    } else {
+        ("failed to load config".into(), None)
+    };
+    Check { name: "config_parse".into(), status: if config.is_some() { CheckStatus::Ok } else { CheckStatus::Ng }, detail, detail_verbose }
 }
 
 fn check_abbr_quality(config: &Config) -> Vec<Check> {
@@ -63,19 +67,21 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
         if abbr.key.is_empty() {
             checks.push(Check {
                 name: format!("abbr[{i}].empty_key"),
-                status: CheckStatus::Warn,
+                status: CheckStatus::Ng,
                 detail: format!("rule #{n} has an empty key — it will never match", n = i + 1),
+                detail_verbose: None,
             });
         }
         if abbr.key == abbr.expand {
             checks.push(Check {
                 name: format!("abbr[{i}].self_loop"),
-                status: CheckStatus::Warn,
+                status: CheckStatus::Ng,
                 detail: format!(
                     "rule #{n} key == expand ('{key}') — this rule is always skipped",
                     n = i + 1,
                     key = sanitize_for_display(&abbr.key)
                 ),
+                detail_verbose: None,
             });
         }
     }
@@ -93,12 +99,13 @@ where
                 let exists = command_exists(cmd);
                 checks.push(Check {
                     name: format!("command:{}", sanitize_for_display(cmd)),
-                    status: if exists { CheckStatus::Ok } else { CheckStatus::Warn },
+                    status: if exists { CheckStatus::Ok } else { CheckStatus::Ng },
                     detail: if exists {
                         format!("'{}' found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
                     } else {
                         format!("'{}' not found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
                     },
+                    detail_verbose: None,
                 });
             }
         }
@@ -114,9 +121,10 @@ fn check_keybind(config: &Config) -> Vec<Check> {
     if bash_si == Some(TriggerKey::ShiftSpace) || zsh_si == Some(TriggerKey::ShiftSpace) {
         checks.push(Check {
             name: "keybind.self_insert".into(),
-            status: CheckStatus::Warn,
+            status: CheckStatus::Ng,
             detail:
                 "self_insert = \"shift-space\" has no effect in bash/zsh (Shift+Space is terminal-dependent); use \"alt-space\" for cross-shell support".into(),
+            detail_verbose: None,
         });
     }
     checks
@@ -125,14 +133,15 @@ fn check_keybind(config: &Config) -> Vec<Check> {
 /// Run environment diagnostics.
 ///
 /// `config` is `None` when config loading failed (parse error, etc.).
+/// `parse_error` carries the error message when `config` is `None` due to a parse failure.
 /// `command_exists` is injected for testability.
-pub fn diagnose<F>(config_path: &Path, config: Option<&Config>, command_exists: F) -> DiagResult
+pub fn diagnose<F>(config_path: &Path, config: Option<&Config>, parse_error: Option<&str>, command_exists: F) -> DiagResult
 where
     F: Fn(&str) -> bool,
 {
     let mut checks = Vec::new();
     checks.push(check_config_file(config_path));
-    checks.push(check_config_parse(config));
+    checks.push(check_config_parse(config, parse_error));
     if let Some(cfg) = config {
         checks.extend(check_keybind(cfg));
         checks.extend(check_abbr_quality(cfg));
@@ -178,7 +187,7 @@ mod tests {
         writeln!(f, "version = 1").unwrap();
 
         let cfg = test_config(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
-        let result = diagnose(&path, Some(&cfg), |_| true);
+        let result = diagnose(&path, Some(&cfg), None, |_| true);
 
         assert!(result.is_healthy());
         assert_eq!(result.checks[0].status, CheckStatus::Ok); // file exists
@@ -189,24 +198,66 @@ mod tests {
     #[test]
     fn config_file_missing() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
-        let result = diagnose(&path, None, |_| true);
+        let result = diagnose(&path, None, None, |_| true);
 
         assert!(!result.is_healthy());
-        assert_eq!(result.checks[0].status, CheckStatus::Error);
-        assert_eq!(result.checks[1].status, CheckStatus::Error);
+        assert_eq!(result.checks[0].status, CheckStatus::Ng);
+        assert_eq!(result.checks[1].status, CheckStatus::Ng);
     }
 
     #[test]
-    fn command_not_found_is_warn() {
+    fn config_parse_error_detail_shown() {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let result = diagnose(&path, None, Some("TOML parse error at line 4"), |_| true);
+
+        let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
+        assert_eq!(parse_check.status, CheckStatus::Ng);
+        assert!(parse_check.detail.contains("TOML parse error at line 4"),
+            "detail must include the parse error message: {:?}", parse_check.detail);
+    }
+
+    #[test]
+    fn config_parse_multiline_error_splits_detail_and_verbose() {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let multiline = "TOML parse error at line 4, column 11\n  |\n4 | trigger = \"space\"\n  |           ^^^^^^^\ninvalid type";
+        let result = diagnose(&path, None, Some(multiline), |_| true);
+
+        let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
+        assert_eq!(parse_check.status, CheckStatus::Ng);
+
+        let detail_lines: Vec<&str> = parse_check.detail.lines().collect();
+        assert_eq!(detail_lines.len(), 1,
+            "detail must be a single line, got: {:?}", parse_check.detail);
+        assert!(parse_check.detail.contains("TOML parse error at line 4, column 11"),
+            "detail must contain the first line: {:?}", parse_check.detail);
+
+        let verbose = parse_check.detail_verbose.as_deref()
+            .expect("detail_verbose must be Some for multiline errors");
+        assert!(verbose.contains("invalid type"),
+            "detail_verbose must contain later lines: {:?}", verbose);
+    }
+
+    #[test]
+    fn config_parse_single_line_error_has_no_verbose() {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let result = diagnose(&path, None, Some("unsupported version: 99"), |_| true);
+
+        let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
+        assert!(parse_check.detail_verbose.is_none(),
+            "detail_verbose must be None when error is single-line: {:?}", parse_check.detail_verbose);
+    }
+
+    #[test]
+    fn command_not_found_is_ng() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "version = 1").unwrap();
 
         let cfg = test_config(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
-        let result = diagnose(&path, Some(&cfg), |_| false);
+        let result = diagnose(&path, Some(&cfg), None, |_| false);
 
-        assert!(result.is_healthy());
-        assert_eq!(result.checks[2].status, CheckStatus::Warn);
+        assert!(!result.is_healthy());
+        assert_eq!(result.checks[2].status, CheckStatus::Ng);
         assert!(result.checks[2].detail.contains("not found"));
     }
 
@@ -214,9 +265,9 @@ mod tests {
     fn doctor_warns_empty_key() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![abbr("", "git commit -m")]);
-        let result = diagnose(&path, Some(&cfg), |_| true);
+        let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            result.checks.iter().any(|c| c.name.contains("empty_key") && c.status == CheckStatus::Warn),
+            result.checks.iter().any(|c| c.name.contains("empty_key") && c.status == CheckStatus::Ng),
             "must warn on empty key: {:?}", result.checks
         );
     }
@@ -225,9 +276,9 @@ mod tests {
     fn doctor_warns_self_loop() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![abbr("ls", "ls")]);
-        let result = diagnose(&path, Some(&cfg), |_| true);
+        let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            result.checks.iter().any(|c| c.name.contains("self_loop") && c.status == CheckStatus::Warn),
+            result.checks.iter().any(|c| c.name.contains("self_loop") && c.status == CheckStatus::Ng),
             "must warn on self-loop: {:?}", result.checks
         );
     }
@@ -237,8 +288,9 @@ mod tests {
         let result = DiagResult {
             checks: vec![Check {
                 name: "test".into(),
-                status: CheckStatus::Error,
+                status: CheckStatus::Ng,
                 detail: "bad".into(),
+                detail_verbose: None,
             }],
         };
         assert!(!result.is_healthy());
@@ -258,9 +310,9 @@ mod tests {
             },
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), |_| true);
+        let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
+            result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Ng),
             "must warn when self_insert.bash = shift-space: {:?}", result.checks
         );
     }
@@ -279,9 +331,9 @@ mod tests {
             },
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), |_| true);
+        let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
+            !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Ng),
             "must not warn when only self_insert.pwsh = shift-space: {:?}", result.checks
         );
     }
@@ -300,9 +352,9 @@ mod tests {
             },
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), |_| true);
+        let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
+            result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Ng),
             "must warn when default self_insert = shift-space (propagates to bash/zsh): {:?}", result.checks
         );
     }
@@ -321,9 +373,9 @@ mod tests {
             },
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), |_| true);
+        let result = diagnose(&path, Some(&cfg), None, |_| true);
         assert!(
-            !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
+            !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Ng),
             "must not warn when only pwsh self_insert = shift-space: {:?}", result.checks
         );
     }
@@ -343,7 +395,7 @@ mod tests {
     fn doctor_self_loop_detail_strips_control_chars_from_key() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![abbr("key\x07evil", "key\x07evil")]);
-        let result = diagnose(&path, Some(&cfg), |_| true);
+        let result = diagnose(&path, Some(&cfg), None, |_| true);
         let self_loop = result.checks.iter().find(|c| c.name.contains("self_loop"));
         let check = self_loop.expect("must produce a self_loop check for a self-loop key");
         assert!(
@@ -361,7 +413,7 @@ mod tests {
             expand: "lsd".into(),
             when_command_exists: Some(vec!["cmd\x07inject".into()]),
         }]);
-        let result = diagnose(&path, Some(&cfg), |_| false);
+        let result = diagnose(&path, Some(&cfg), None, |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.contains("command:"));
         let check = cmd_check.expect("must produce a command check");
         assert!(
@@ -375,7 +427,7 @@ mod tests {
     #[test]
     fn doctor_config_file_detail_strips_control_chars_from_path() {
         let path = std::path::PathBuf::from("/home/user/\x1b[2Jevil.toml");
-        let result = diagnose(&path, None, |_| true);
+        let result = diagnose(&path, None, None, |_| true);
         let config_check = result.checks.iter().find(|c| c.name == "config_file");
         let check = config_check.expect("must produce a config_file check");
         assert!(
@@ -395,7 +447,7 @@ mod tests {
             expand: "lsd".into(),
             when_command_exists: Some(vec!["cmd\x1b[2Jevil".into()]),
         }]);
-        let result = diagnose(&path, Some(&cfg), |_| false);
+        let result = diagnose(&path, Some(&cfg), None, |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.starts_with("command:"));
         let check = cmd_check.expect("must produce a command check");
         assert!(

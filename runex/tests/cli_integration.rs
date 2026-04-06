@@ -357,9 +357,8 @@ fn doctor_with_path_prepend_finds_command() {
         "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"__runex_fake_lsd__\"\nwhen_command_exists = [\"__runex_fake_lsd__\"]\n",
     );
     let bins = fake_bin_dir(&["__runex_fake_lsd__"]);
-    let (stdout, _, ok) =
+    let (stdout, _, _) =
         run(&["doctor", "--json"], Some(cfg.path()), Some(bins.path()));
-    assert!(ok);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let checks = parsed.as_array().unwrap();
     let fake_cmd_check = checks
@@ -486,6 +485,45 @@ fn explicit_config_parse_error_exits_nonzero() {
 fn doctor_with_missing_explicit_config_exits_nonzero() {
     let (_, _, ok) = run(&["doctor"], Some(std::path::Path::new("/nonexistent/config.toml")), None);
     assert!(!ok, "doctor must exit non-zero when config file is missing");
+}
+
+#[test]
+fn doctor_shows_parse_error_in_output() {
+    let cfg = write_config("[keybind]\ntrigger = \"space\"\n");
+    let (stdout, _, ok) = run(&["doctor"], Some(cfg.path()), None);
+    assert!(!ok, "doctor must exit non-zero with broken config");
+    assert!(stdout.contains("config_parse"), "stdout must contain config_parse check: {stdout}");
+    assert!(stdout.contains("failed to load config"), "stdout must contain error message: {stdout}");
+}
+
+#[test]
+fn doctor_verbose_shows_multiline_parse_error() {
+    let cfg = write_config("[keybind]\ntrigger = \"space\"\n");
+    let (stdout_normal, _, _) = run(&["doctor"], Some(cfg.path()), None);
+    let (stdout_verbose, _, _) = run(&["doctor", "--verbose"], Some(cfg.path()), None);
+    assert!(
+        stdout_verbose.lines().count() > stdout_normal.lines().count(),
+        "doctor --verbose must produce more output lines than plain doctor\nnormal: {stdout_normal}\nverbose: {stdout_verbose}"
+    );
+}
+
+#[test]
+fn doctor_parse_error_unsupported_version() {
+    let cfg = write_config("version = 99\n");
+    let (stdout, _, ok) = run(&["doctor"], Some(cfg.path()), None);
+    assert!(!ok, "doctor must exit non-zero for unsupported version");
+    assert!(stdout.contains("config_parse"), "stdout must contain config_parse check: {stdout}");
+    assert!(stdout.contains("failed to load config"), "stdout must mention the error: {stdout}");
+}
+
+#[test]
+fn doctor_parse_error_key_too_long() {
+    let long_key = "a".repeat(1025);
+    let cfg = write_config(&format!("version = 1\n[[abbr]]\nkey = \"{long_key}\"\nexpand = \"x\"\n"));
+    let (stdout, _, ok) = run(&["doctor"], Some(cfg.path()), None);
+    assert!(!ok, "doctor must exit non-zero for key too long");
+    assert!(stdout.contains("config_parse"), "stdout must contain config_parse check: {stdout}");
+    assert!(stdout.contains("failed to load config"), "stdout must mention the error: {stdout}");
 }
 
 #[test]

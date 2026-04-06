@@ -2,22 +2,26 @@ use runex_core::doctor::{Check, CheckStatus};
 use runex_core::expand::{self, WhichResult};
 use runex_core::sanitize::sanitize_for_display;
 
-use crate::{ANSI_GREEN, ANSI_RED, ANSI_RESET, ANSI_YELLOW, CHECK_TAG_WIDTH, GIT_COMMIT};
+use crate::{ANSI_GREEN, ANSI_RED, ANSI_RESET, CHECK_TAG_WIDTH, GIT_COMMIT};
 
 pub(crate) fn format_check_tag(status: &CheckStatus) -> String {
     match status {
         CheckStatus::Ok => format!("[{ANSI_GREEN}OK{ANSI_RESET}]"),
-        CheckStatus::Warn => format!("[{ANSI_YELLOW}WARN{ANSI_RESET}]"),
-        CheckStatus::Error => format!("[{ANSI_RED}ERROR{ANSI_RESET}]"),
+        CheckStatus::Ng => format!("[{ANSI_RED}NG{ANSI_RESET}]"),
     }
 }
 
-pub(crate) fn format_check_line(check: &Check) -> String {
+pub(crate) fn format_check_line(check: &Check, verbose: bool) -> String {
+    let detail = if verbose {
+        check.detail_verbose.as_deref().unwrap_or(&check.detail)
+    } else {
+        &check.detail
+    };
     format!(
         "{:>CHECK_TAG_WIDTH$}  {}: {}",
         format_check_tag(&check.status),
         check.name,
-        check.detail
+        detail
     )
 }
 
@@ -265,12 +269,13 @@ mod tests {
     fn format_check_line_colors_only_tag_text() {
         let check = Check {
             name: "config_file".into(),
-            status: CheckStatus::Warn,
+            status: CheckStatus::Ng,
             detail: "detail".into(),
+            detail_verbose: None,
         };
 
-        let line = format_check_line(&check);
-        assert!(line.starts_with(&format!("[{ANSI_YELLOW}WARN{ANSI_RESET}]")));
+        let line = format_check_line(&check, false);
+        assert!(line.starts_with(&format!("[{ANSI_RED}NG{ANSI_RESET}]")));
         assert!(line.contains("config_file: detail"));
     }
 

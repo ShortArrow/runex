@@ -25,7 +25,6 @@ use std::time::Duration;
 
 pub(crate) const ANSI_RESET: &str = "\x1b[0m";
 pub(crate) const ANSI_GREEN: &str = "\x1b[32m";
-pub(crate) const ANSI_YELLOW: &str = "\x1b[33m";
 pub(crate) const ANSI_RED: &str = "\x1b[31m";
 pub(crate) const GIT_COMMIT: Option<&str> = option_env!("RUNEX_GIT_COMMIT");
 
@@ -114,6 +113,9 @@ enum Commands {
         /// Skip shell alias conflict checks (avoids spawning pwsh/bash)
         #[arg(long)]
         no_shell_aliases: bool,
+        /// Show full error details (e.g. multi-line parse errors)
+        #[arg(long)]
+        verbose: bool,
     },
     /// Show build version information
     Version,
@@ -162,13 +164,18 @@ fn resolve_config(
 
 /// Load config, returning None on failure. Used by commands that degrade
 /// gracefully when config is absent (Doctor, Export).
-fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config>) {
+///
+/// Returns the config path, the parsed config (or None), and the error message if parsing failed.
+fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config>, Option<String>) {
     if let Some(path) = config_override {
-        return (path.to_path_buf(), load_config(path).ok());
+        let result = load_config(path);
+        let err = result.as_ref().err().map(|e| e.to_string());
+        return (path.to_path_buf(), result.ok(), err);
     }
     let path = default_config_path().unwrap_or_default();
-    let config = load_config(&path).ok();
-    (path, config)
+    let result = load_config(&path);
+    let err = result.as_ref().err().map(|e| e.to_string());
+    (path, result.ok(), err)
 }
 
 
@@ -444,7 +451,7 @@ fn handle_export(
         let (_path, cfg) = resolve_config(config_flag)?;
         Some(cfg)
     } else {
-        let (_path, cfg) = resolve_config_opt(None);
+        let (_path, cfg, _err) = resolve_config_opt(None);
         cfg
     };
     print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
@@ -455,12 +462,13 @@ fn handle_doctor(
     config_flag: Option<&Path>,
     path_prepend: Option<&Path>,
     no_shell_aliases: bool,
+    verbose: bool,
     json: bool,
 ) -> CmdResult {
-    let (config_path, config) = resolve_config_opt(config_flag);
+    let (config_path, config, parse_error) = resolve_config_opt(config_flag);
     let command_exists = make_command_exists(path_prepend);
     let spinner = Spinner::start("Checking environment...");
-    let mut result = doctor::diagnose(&config_path, config.as_ref(), &command_exists);
+    let mut result = doctor::diagnose(&config_path, config.as_ref(), parse_error.as_deref(), &command_exists);
     if !no_shell_aliases {
         add_shell_alias_conflicts(&mut result, config.as_ref());
     }
@@ -470,7 +478,7 @@ fn handle_doctor(
         println!("{}", serde_json::to_string_pretty(&result.checks)?);
     } else {
         for check in &result.checks {
-            println!("{}", format_check_line(check));
+            println!("{}", format_check_line(check, verbose));
         }
     }
 
@@ -580,11 +588,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Export { shell, bin } => {
             handle_export(shell, bin, cli.config.as_deref())?;
         }
-        Commands::Doctor { no_shell_aliases } => {
+        Commands::Doctor { no_shell_aliases, verbose } => {
             handle_doctor(
                 cli.config.as_deref(),
                 cli.path_prepend.as_deref(),
                 no_shell_aliases,
+                verbose,
                 cli.json,
             )?;
         }
