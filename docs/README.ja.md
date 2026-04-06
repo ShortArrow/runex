@@ -112,8 +112,8 @@ keybind を設定するまでは、どのキーにも何も割り当てられま
 ```toml
 version = 1
 
-[keybind]
-trigger = "space"
+[keybind.trigger]
+default = "space"
 
 [[abbr]]
 key    = "ls"
@@ -162,10 +162,12 @@ runex version                            バージョンとビルドコミット
 `self_insert` でキーを「展開せずにスペース挿入」にバインドすることもできます：
 
 ```toml
-[keybind]
-trigger     = "space"
-self_insert = "shift-space"   # pwsh/nu: Shift+Space は展開せずにスペースを挿入
-# self_insert = "alt-space"   # bash/zsh を含む全シェル対応
+[keybind.trigger]
+default = "space"
+
+[keybind.self_insert]
+default = "shift-space"   # pwsh/nu: Shift+Space は展開せずにスペースを挿入
+# default = "alt-space"   # bash/zsh を含む全シェル対応
 ```
 
 | 値 | bash | zsh | pwsh | nu |

@@ -114,8 +114,8 @@ No keybindings are active until you configure them.
 ```toml
 version = 1
 
-[keybind]
-trigger = "space"
+[keybind.trigger]
+default = "space"
 
 [[abbr]]
 key    = "ls"
@@ -164,10 +164,12 @@ If you use `trigger = "space"`, there are a few practical ways to avoid expansio
 You can also bind a key to plain-space insertion using `self_insert`:
 
 ```toml
-[keybind]
-trigger     = "space"
-self_insert = "shift-space"   # pwsh/nu: Shift+Space inserts a space without expanding
-# self_insert = "alt-space"   # all shells including bash/zsh
+[keybind.trigger]
+default = "space"
+
+[keybind.self_insert]
+default = "shift-space"   # pwsh/nu: Shift+Space inserts a space without expanding
+# default = "alt-space"   # all shells including bash/zsh
 ```
 
 | Value | bash | zsh | pwsh | nu |
