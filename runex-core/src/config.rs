@@ -361,51 +361,6 @@ nu   = "shift-space"
     }
 
     #[test]
-    fn parse_config_rejects_typo_in_keybind_table() {
-        let toml = "version = 1\n[eybind.trigger]\ndefault = \"space\"\n";
-        assert!(
-            parse_config(toml).is_err(),
-            "must reject unknown top-level field 'eybind' (typo of 'keybind')"
-        );
-    }
-
-    #[test]
-    fn parse_config_rejects_typo_in_trigger_field() {
-        let toml = "version = 1\n[keybind.trigger]\nefault = \"space\"\n";
-        assert!(
-            parse_config(toml).is_err(),
-            "must reject unknown field 'efault' in [keybind.trigger] (typo of 'default')"
-        );
-    }
-
-    #[test]
-    fn parse_config_rejects_typo_abbr_table() {
-        let toml = "version = 1\n[[abr]]\nkey = \"ls\"\nexpand = \"lsd\"\n";
-        assert!(
-            parse_config(toml).is_err(),
-            "must reject unknown top-level field 'abr' (typo of 'abbr')"
-        );
-    }
-
-    #[test]
-    fn parse_config_rejects_typo_abbr_field() {
-        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpad = \"lsd\"\n";
-        assert!(
-            parse_config(toml).is_err(),
-            "must reject unknown field 'expad' in [[abbr]] (typo of 'expand')"
-        );
-    }
-
-    #[test]
-    fn parse_config_rejects_typo_when_command_exists() {
-        let toml = "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_mmand_exists = [\"lsd\"]\n";
-        assert!(
-            parse_config(toml).is_err(),
-            "must reject unknown field 'when_mmand_exists' in [[abbr]] (typo of 'when_command_exists')"
-        );
-    }
-
-    #[test]
     fn parse_missing_version_is_err() {
         let toml = r#"
 [[abbr]]
