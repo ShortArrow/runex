@@ -106,9 +106,16 @@ enum Commands {
         /// Print diagnostic output instead of the final expansion
         #[arg(long)]
         dry_run: bool,
+        /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
+        #[arg(long, value_name = "SHELL")]
+        shell: Option<String>,
     },
     /// List all abbreviations
-    List,
+    List {
+        /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
+        #[arg(long, value_name = "SHELL")]
+        shell: Option<String>,
+    },
     /// Check environment health
     Doctor {
         /// Skip shell alias conflict checks (avoids spawning pwsh/bash)
@@ -135,6 +142,9 @@ enum Commands {
         /// Show detailed reasoning
         #[arg(long)]
         why: bool,
+        /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
+        #[arg(long, value_name = "SHELL")]
+        shell: Option<String>,
     },
     /// Initialize runex: create config and add shell integration
     Init {
@@ -276,6 +286,19 @@ fn detect_shell() -> Option<Shell> {
     None
 }
 
+/// Resolve shell from optional `--shell` flag, falling back to `detect_shell()`.
+///
+/// Returns `None` when no shell could be determined (both flag absent and detection failed).
+fn resolve_shell(shell_flag: Option<&str>) -> Result<Option<Shell>, Box<dyn std::error::Error>> {
+    if let Some(s) = shell_flag {
+        let sh = s.parse::<Shell>().map_err(|e: runex_core::shell::ShellParseError| {
+            Box::<dyn std::error::Error>::from(e.to_string())
+        })?;
+        return Ok(Some(sh));
+    }
+    Ok(detect_shell())
+}
+
 /// Maximum byte length accepted from a single `prompt_confirm` read.
 /// A real y/N answer is at most a few bytes; anything beyond this limit
 /// is treated as "no" to prevent unbounded memory growth from piped input.
@@ -334,12 +357,12 @@ fn handle_version(json: bool) -> CmdResult {
     Ok(())
 }
 
-fn handle_list(config: &Config, json: bool) -> CmdResult {
+fn handle_list(config: &Config, shell: Option<Shell>, json: bool) -> CmdResult {
     if json {
         println!("{}", serde_json::to_string_pretty(&config.abbr)?);
     } else {
-        for (key, exp) in expand::list(config) {
-            println!("{}\t{}", sanitize_for_display(key), sanitize_for_display(exp));
+        for (key, exp) in expand::list(config, shell) {
+            println!("{}\t{}", sanitize_for_display(key), sanitize_for_display(&exp));
         }
     }
     Ok(())
@@ -348,6 +371,7 @@ fn handle_list(config: &Config, json: bool) -> CmdResult {
 fn handle_which(
     token: String,
     config: &Config,
+    shell: Shell,
     command_exists: &dyn Fn(&str) -> bool,
     json: bool,
     why: bool,
@@ -359,7 +383,7 @@ fn handle_which(
         );
         std::process::exit(1);
     }
-    let result = expand::which_abbr(config, &token, command_exists);
+    let result = expand::which_abbr(config, &token, shell, command_exists);
     if json {
         println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
     } else {
@@ -371,6 +395,7 @@ fn handle_which(
 fn handle_expand(
     token: String,
     config: &Config,
+    shell: Shell,
     command_exists: &dyn Fn(&str) -> bool,
     json: bool,
     dry_run: bool,
@@ -383,14 +408,14 @@ fn handle_expand(
         std::process::exit(1);
     }
     if dry_run {
-        let result = expand::which_abbr(config, &token, command_exists);
+        let result = expand::which_abbr(config, &token, shell, command_exists);
         if json {
             println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
         } else {
             print!("{}", format_dry_run_result(&token, &result));
         }
     } else {
-        let result = expand::expand(config, &token, command_exists);
+        let result = expand::expand(config, &token, shell, command_exists);
         if json {
             let v = match &result {
                 ExpandResult::Expanded(s) => serde_json::json!({
@@ -572,19 +597,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Version => handle_version(cli.json)?,
-        Commands::List => {
+        Commands::List { shell: shell_str } => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
-            handle_list(&config, cli.json)?;
+            let shell = resolve_shell(shell_str.as_deref())?;
+            handle_list(&config, shell, cli.json)?;
         }
-        Commands::Which { token, why } => {
+        Commands::Which { token, why, shell: shell_str } => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
-            handle_which(token, &config, &command_exists, cli.json, why)?;
+            let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
+            handle_which(token, &config, shell, &command_exists, cli.json, why)?;
         }
-        Commands::Expand { token, dry_run } => {
+        Commands::Expand { token, dry_run, shell: shell_str } => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let command_exists = make_command_exists(cli.path_prepend.as_deref());
-            handle_expand(token, &config, &command_exists, cli.json, dry_run)?;
+            let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
+            handle_expand(token, &config, shell, &command_exists, cli.json, dry_run)?;
         }
         Commands::Export { shell, bin } => {
             handle_export(shell, bin, cli.config.as_deref())?;

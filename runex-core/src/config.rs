@@ -94,12 +94,8 @@ fn validate_abbr_key(key: &str, n: usize) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Validate the `expand` field of an abbreviation rule.
-///
-/// Rejects values that are empty, whitespace-only, or exceed [`MAX_EXPAND_BYTES`].
-/// Also rejects values containing NUL bytes, ASCII control characters, or Unicode
-/// visual-deception characters — all of which would corrupt the expanded output.
-fn validate_abbr_expand(expand: &str, n: usize) -> Result<(), ConfigError> {
+/// Validate a single expand string value.
+fn validate_expand_value(expand: &str, n: usize) -> Result<(), ConfigError> {
     if expand.is_empty() {
         return Err(ConfigError::ExpandEmpty(n));
     }
@@ -117,6 +113,18 @@ fn validate_abbr_expand(expand: &str, n: usize) -> Result<(), ConfigError> {
     }
     if expand.chars().any(is_deceptive_unicode) {
         return Err(ConfigError::ExpandContainsDeceptiveUnicode(n));
+    }
+    Ok(())
+}
+
+/// Validate the `expand` field of an abbreviation rule (all shell variants).
+///
+/// Rejects values that are empty, whitespace-only, or exceed [`MAX_EXPAND_BYTES`].
+/// Also rejects values containing NUL bytes, ASCII control characters, or Unicode
+/// visual-deception characters — all of which would corrupt the expanded output.
+fn validate_abbr_expand(expand: &crate::model::PerShellString, n: usize) -> Result<(), ConfigError> {
+    for value in expand.all_values() {
+        validate_expand_value(value, n)?;
     }
     Ok(())
 }
@@ -170,11 +178,13 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
         validate_abbr_key(&abbr.key, n)?;
         validate_abbr_expand(&abbr.expand, n)?;
         if let Some(cmds) = &abbr.when_command_exists {
-            if cmds.len() > MAX_CMD_LIST_LEN {
-                return Err(ConfigError::TooManyCmds(n));
-            }
-            for cmd in cmds {
-                validate_cmd_entry(cmd, n)?;
+            for cmd_list in cmds.all_values() {
+                if cmd_list.len() > MAX_CMD_LIST_LEN {
+                    return Err(ConfigError::TooManyCmds(n));
+                }
+                for cmd in cmd_list {
+                    validate_cmd_entry(cmd, n)?;
+                }
             }
         }
     }
@@ -265,7 +275,7 @@ expand = "git commit -m"
         assert_eq!(config.version, 1);
         assert_eq!(config.abbr.len(), 1);
         assert_eq!(config.abbr[0].key, "gcm");
-        assert_eq!(config.abbr[0].expand, "git commit -m");
+        assert_eq!(config.abbr[0].expand, crate::model::PerShellString::All("git commit -m".into()));
     }
 
     #[test]
@@ -281,7 +291,7 @@ when_command_exists = ["lsd"]
         let config = parse_config(toml).unwrap();
         assert_eq!(
             config.abbr[0].when_command_exists,
-            Some(vec!["lsd".to_string()])
+            Some(crate::model::PerShellCmds::All(vec!["lsd".to_string()]))
         );
     }
 

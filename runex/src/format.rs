@@ -56,6 +56,9 @@ pub(crate) fn format_skip_reason(i: usize, reason: &expand::SkipReason, why: boo
                 parts.join(", ")
             )
         }
+        expand::SkipReason::NoShellEntry => {
+            format!("\n  rule #{} skipped: no expand entry for current shell", i + 1)
+        }
     }
 }
 
@@ -88,16 +91,22 @@ pub(crate) fn format_all_skipped_headline(
     let has_self_loop = skipped
         .iter()
         .any(|(_, r)| matches!(r, expand::SkipReason::SelfLoop));
-    match (has_condition_fail, has_self_loop) {
-        (true, true) => format!(
-            "{token}  [skipped: condition failed on some rules; others are self-loops]"
-        ),
-        (true, false) => {
+    let has_no_shell_entry = skipped
+        .iter()
+        .any(|(_, r)| matches!(r, expand::SkipReason::NoShellEntry));
+    match (has_condition_fail, has_self_loop, has_no_shell_entry) {
+        (true, _, _) => {
             let all_missing = collect_all_missing_commands(skipped);
-            format!("{token}  [skipped: {} not found]", all_missing.join(", "))
+            if all_missing.is_empty() {
+                format!("{token}  [skipped: condition failed]")
+            } else {
+                format!("{token}  [skipped: {} not found]", all_missing.join(", "))
+            }
         }
-        (false, true) => format!("{token}  [no-op: key and expansion are identical]"),
-        (false, false) => format!("{token}: no rule found"),
+        (false, true, false) => format!("{token}  [no-op: key and expansion are identical]"),
+        (false, false, true) => format!("{token}  [skipped: no entry for current shell]"),
+        (false, true, true) => format!("{token}  [skipped: self-loop or no entry for current shell]"),
+        (false, false, false) => format!("{token}: no rule found"),
     }
 }
 
@@ -204,6 +213,9 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
                             out.push_str(&format!("  {}: NOT FOUND\n", sanitize_for_display(cmd)));
                         }
                     }
+                    expand::SkipReason::NoShellEntry => {
+                        out.push_str(&format!("rule #{} skipped: no entry for current shell\n", i + 1));
+                    }
                 }
             }
             out.push_str(&format!(
@@ -241,6 +253,9 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
                         for cmd in missing_commands {
                             out.push_str(&format!("  {}: NOT FOUND\n", sanitize_for_display(cmd)));
                         }
+                    }
+                    expand::SkipReason::NoShellEntry => {
+                        out.push_str(&format!("rule #{} skipped: no entry for current shell\n", i + 1));
                     }
                 }
             }
@@ -327,6 +342,24 @@ mod tests {
         assert!(!s.contains('\x07'), "format_dry_run_result: BEL must be stripped: {s:?}");
     }
 
+    fn make_abbr(key: &str, exp: &str) -> runex_core::model::Abbr {
+        runex_core::model::Abbr {
+            key: key.into(),
+            expand: runex_core::model::PerShellString::All(exp.into()),
+            when_command_exists: None,
+        }
+    }
+
+    fn make_abbr_when(key: &str, exp: &str, cmds: Vec<&str>) -> runex_core::model::Abbr {
+        runex_core::model::Abbr {
+            key: key.into(),
+            expand: runex_core::model::PerShellString::All(exp.into()),
+            when_command_exists: Some(runex_core::model::PerShellCmds::All(
+                cmds.into_iter().map(String::from).collect(),
+            )),
+        }
+    }
+
     #[test]
     fn format_dry_run_no_match() {
         let config = runex_core::model::Config {
@@ -334,7 +367,7 @@ mod tests {
             keybind: runex_core::model::KeybindConfig::default(),
             abbr: vec![],
         };
-        let result = expand::which_abbr(&config, "xyz", |_| true);
+        let result = expand::which_abbr(&config, "xyz", runex_core::shell::Shell::Bash, |_| true);
         let out = format_dry_run_result("xyz", &result);
         assert!(out.contains("token: xyz"));
         assert!(out.contains("no rule matched"));
@@ -346,13 +379,9 @@ mod tests {
         let config = runex_core::model::Config {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
-            abbr: vec![runex_core::model::Abbr {
-                key: "gcm".into(),
-                expand: "git commit -m".into(),
-                when_command_exists: None,
-            }],
+            abbr: vec![make_abbr("gcm", "git commit -m")],
         };
-        let result = expand::which_abbr(&config, "gcm", |_| true);
+        let result = expand::which_abbr(&config, "gcm", runex_core::shell::Shell::Bash, |_| true);
         let out = format_dry_run_result("gcm", &result);
         assert!(out.contains("token: gcm"));
         assert!(out.contains("expanded  ->  git commit -m"));
@@ -364,13 +393,9 @@ mod tests {
         let config = runex_core::model::Config {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
-            abbr: vec![runex_core::model::Abbr {
-                key: "ls".into(),
-                expand: "lsd".into(),
-                when_command_exists: Some(vec!["lsd".into()]),
-            }],
+            abbr: vec![make_abbr_when("ls", "lsd", vec!["lsd"])],
         };
-        let result = expand::which_abbr(&config, "ls", |_| false);
+        let result = expand::which_abbr(&config, "ls", runex_core::shell::Shell::Bash, |_| false);
         let out = format_dry_run_result("ls", &result);
         assert!(out.contains("lsd: NOT FOUND"), "out: {out}");
         assert!(out.contains("pass-through"), "out: {out}");
@@ -382,19 +407,11 @@ mod tests {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
             abbr: vec![
-                runex_core::model::Abbr {
-                    key: "ls".into(),
-                    expand: "ls".into(),
-                    when_command_exists: None,
-                },
-                runex_core::model::Abbr {
-                    key: "ls".into(),
-                    expand: "lsd".into(),
-                    when_command_exists: None,
-                },
+                make_abbr("ls", "ls"),
+                make_abbr("ls", "lsd"),
             ],
         };
-        let result = expand::which_abbr(&config, "ls", |_| true);
+        let result = expand::which_abbr(&config, "ls", runex_core::shell::Shell::Bash, |_| true);
         let out = format_dry_run_result("ls", &result);
         assert!(out.contains("rule #1 skipped"), "out: {out}");
         assert!(out.contains("expanded  ->  lsd"), "out: {out}");

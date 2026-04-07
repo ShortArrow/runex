@@ -373,7 +373,7 @@ mod tests {
     fn test_abbr(key: &str) -> Abbr {
         Abbr {
             key: key.into(),
-            expand: format!("expand-{key}"),
+            expand: runex_core::model::PerShellString::All(format!("expand-{key}")),
             when_command_exists: None,
         }
     }

@@ -73,7 +73,9 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
                 detail_verbose: None,
             });
         }
-        if abbr.key == abbr.expand {
+        // Self-loop: check all expand variants for key == expand.
+        let self_loop = abbr.expand.all_values().iter().any(|&v| v == abbr.key);
+        if self_loop {
             checks.push(Check {
                 name: format!("abbr[{i}].self_loop"),
                 status: CheckStatus::Warn,
@@ -94,20 +96,35 @@ where
     F: Fn(&str) -> bool,
 {
     let mut checks = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for abbr in &config.abbr {
         if let Some(cmds) = &abbr.when_command_exists {
-            for cmd in cmds {
-                let exists = command_exists(cmd);
-                checks.push(Check {
-                    name: format!("command:{}", sanitize_for_display(cmd)),
-                    status: if exists { CheckStatus::Ok } else { CheckStatus::Warn },
-                    detail: if exists {
-                        format!("'{}' found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
-                    } else {
-                        format!("'{}' not found (required by '{}')", sanitize_for_display(cmd), sanitize_for_display(&abbr.key))
-                    },
-                    detail_verbose: None,
-                });
+            for cmd_list in cmds.all_values() {
+                for cmd in cmd_list {
+                    // Deduplicate checks for the same command name.
+                    if !seen.insert(cmd.clone()) {
+                        continue;
+                    }
+                    let exists = command_exists(cmd);
+                    checks.push(Check {
+                        name: format!("command:{}", sanitize_for_display(cmd)),
+                        status: if exists { CheckStatus::Ok } else { CheckStatus::Warn },
+                        detail: if exists {
+                            format!(
+                                "'{}' found (required by '{}')",
+                                sanitize_for_display(cmd),
+                                sanitize_for_display(&abbr.key)
+                            )
+                        } else {
+                            format!(
+                                "'{}' not found (required by '{}')",
+                                sanitize_for_display(cmd),
+                                sanitize_for_display(&abbr.key)
+                            )
+                        },
+                        detail_verbose: None,
+                    });
+                }
             }
         }
     }
@@ -168,13 +185,19 @@ mod tests {
     fn abbr_when(key: &str, exp: &str, cmds: Vec<&str>) -> Abbr {
         Abbr {
             key: key.into(),
-            expand: exp.into(),
-            when_command_exists: Some(cmds.into_iter().map(String::from).collect()),
+            expand: crate::model::PerShellString::All(exp.into()),
+            when_command_exists: Some(crate::model::PerShellCmds::All(
+                cmds.into_iter().map(String::from).collect(),
+            )),
         }
     }
 
     fn abbr(key: &str, exp: &str) -> Abbr {
-        Abbr { key: key.into(), expand: exp.into(), when_command_exists: None }
+        Abbr {
+            key: key.into(),
+            expand: crate::model::PerShellString::All(exp.into()),
+            when_command_exists: None,
+        }
     }
 
     mod diagnostics {
@@ -411,8 +434,8 @@ mod tests {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![crate::model::Abbr {
             key: "ls".into(),
-            expand: "lsd".into(),
-            when_command_exists: Some(vec!["cmd\x07inject".into()]),
+            expand: crate::model::PerShellString::All("lsd".into()),
+            when_command_exists: Some(crate::model::PerShellCmds::All(vec!["cmd\x07inject".into()])),
         }]);
         let result = diagnose(&path, Some(&cfg), None, |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.contains("command:"));
@@ -445,8 +468,8 @@ mod tests {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![crate::model::Abbr {
             key: "ls".into(),
-            expand: "lsd".into(),
-            when_command_exists: Some(vec!["cmd\x1b[2Jevil".into()]),
+            expand: crate::model::PerShellString::All("lsd".into()),
+            when_command_exists: Some(crate::model::PerShellCmds::All(vec!["cmd\x1b[2Jevil".into()])),
         }]);
         let result = diagnose(&path, Some(&cfg), None, |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.starts_with("command:"));
