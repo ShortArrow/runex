@@ -1,7 +1,11 @@
 use serde::Serialize;
 
+use std::cell::RefCell;
+use std::time::Instant;
+
 use crate::model::{Config, ExpandResult};
 use crate::shell::Shell;
+use crate::timings::{CommandExistsCall, Timings};
 
 /// A single skipped rule — part of the `which_abbr` trace.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -76,6 +80,44 @@ where
         return ExpandResult::Expanded(expansion.to_string());
     }
     ExpandResult::PassThrough(token.to_string())
+}
+
+/// Like [`expand`], but records timing data into `timings`.
+///
+/// Each `command_exists` call is individually timed, and the overall expand
+/// phase is recorded as a single phase entry.
+pub fn expand_timed<F>(
+    config: &Config,
+    token: &str,
+    shell: Shell,
+    command_exists: F,
+    timings: &mut Timings,
+) -> ExpandResult
+where
+    F: Fn(&str) -> bool,
+{
+    let calls: RefCell<Vec<CommandExistsCall>> = RefCell::new(Vec::new());
+    let timer = Instant::now();
+
+    let timed_exists = |cmd: &str| -> bool {
+        let t = Instant::now();
+        let found = command_exists(cmd);
+        calls.borrow_mut().push(CommandExistsCall {
+            command: cmd.to_string(),
+            found,
+            duration: t.elapsed(),
+        });
+        found
+    };
+
+    let result = expand(config, token, shell, timed_exists);
+    timings.record_phase("expand", timer.elapsed());
+
+    for call in calls.into_inner() {
+        timings.record_command_exists(&call.command, call.found, call.duration);
+    }
+
+    result
 }
 
 /// Look up a token and return why it expands (or doesn't).
@@ -442,6 +484,40 @@ mod tests {
                 ("7z", "7z.exe".to_string()),
                 ("pwsh-only", "pwsh-cmd".to_string()),
             ]
+        );
+    }
+
+    // ── expand_timed tests ──────────────────────────────────────────────
+
+    #[test]
+    fn expand_timed_same_result_as_expand() {
+        let c = cfg(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
+        let mut timings = crate::timings::Timings::new();
+        let result = expand_timed(&c, "ls", Shell::Bash, |_| true, &mut timings);
+        assert_eq!(result, ExpandResult::Expanded("lsd".into()));
+    }
+
+    #[test]
+    fn expand_timed_records_command_exists_calls() {
+        let c = cfg(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
+        let mut timings = crate::timings::Timings::new();
+        expand_timed(&c, "ls", Shell::Bash, |_| true, &mut timings);
+        let calls = timings.command_exists_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].command, "lsd");
+        assert!(calls[0].found);
+    }
+
+    #[test]
+    fn expand_timed_records_expand_phase() {
+        let c = cfg(vec![abbr("gcm", "git commit -m")]);
+        let mut timings = crate::timings::Timings::new();
+        expand_timed(&c, "gcm", Shell::Bash, |_| true, &mut timings);
+        let phases = timings.phases();
+        assert!(
+            phases.iter().any(|p| p.name == "expand"),
+            "must record an 'expand' phase, got: {:?}",
+            phases.iter().map(|p| &p.name).collect::<Vec<_>>()
         );
     }
 }

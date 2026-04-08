@@ -146,6 +146,14 @@ enum Commands {
         #[arg(long, value_name = "SHELL")]
         shell: Option<String>,
     },
+    /// Show per-phase timing breakdown of the expand flow
+    Timings {
+        /// Abbreviation key to time (if omitted, times all keys)
+        key: Option<String>,
+        /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
+        #[arg(long, value_name = "SHELL")]
+        shell: Option<String>,
+    },
     /// Initialize runex: create config and add shell integration
     Init {
         /// Skip confirmation prompts
@@ -484,6 +492,59 @@ fn handle_export(
     Ok(())
 }
 
+fn handle_timings(
+    key: Option<String>,
+    shell_str: Option<String>,
+    config_flag: Option<&Path>,
+    path_prepend: Option<&Path>,
+    json: bool,
+) -> CmdResult {
+    use runex_core::timings::{PhaseTimer, Timings};
+
+    let mut timings = Timings::new();
+
+    let t = PhaseTimer::start();
+    let (_config_path, config) = resolve_config(config_flag)?;
+    timings.record_phase("config_load", t.elapsed());
+
+    let t = PhaseTimer::start();
+    let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
+    timings.record_phase("shell_resolve", t.elapsed());
+
+    let command_exists = make_command_exists(path_prepend);
+
+    match key {
+        Some(k) => {
+            if k.len() > MAX_TOKEN_BYTES {
+                eprintln!(
+                    "error: key is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
+                    k.len()
+                );
+                std::process::exit(1);
+            }
+            expand::expand_timed(&config, &k, shell, &command_exists, &mut timings);
+        }
+        None => {
+            // Time each unique abbr key
+            let keys: Vec<String> = config.abbr.iter().map(|a| a.key.clone()).collect();
+            let unique_keys: Vec<String> = {
+                let mut seen = std::collections::HashSet::new();
+                keys.into_iter().filter(|k| seen.insert(k.clone())).collect()
+            };
+            for key in &unique_keys {
+                expand::expand_timed(&config, key, shell, &command_exists, &mut timings);
+            }
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&format::format_timings_json(&timings))?);
+    } else {
+        print!("{}", format::format_timings_table(&timings));
+    }
+    Ok(())
+}
+
 fn handle_doctor(
     config_flag: Option<&Path>,
     path_prepend: Option<&Path>,
@@ -623,6 +684,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cli.path_prepend.as_deref(),
                 no_shell_aliases,
                 verbose,
+                cli.json,
+            )?;
+        }
+        Commands::Timings { key, shell: shell_str } => {
+            handle_timings(
+                key,
+                shell_str,
+                cli.config.as_deref(),
+                cli.path_prepend.as_deref(),
                 cli.json,
             )?;
         }

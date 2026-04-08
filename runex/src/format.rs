@@ -276,6 +276,58 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
     out
 }
 
+pub(crate) fn format_duration(d: std::time::Duration) -> String {
+    let us = d.as_micros();
+    if us < 1_000 {
+        format!("{us}us")
+    } else if us < 1_000_000 {
+        format!("{:.2}ms", us as f64 / 1_000.0)
+    } else {
+        format!("{:.2}s", us as f64 / 1_000_000.0)
+    }
+}
+
+pub(crate) fn format_timings_table(timings: &runex_core::timings::Timings) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(" {:<28} {}\n", "Phase", "Duration"));
+    out.push_str(&format!(" {}\n", "─".repeat(38)));
+
+    for phase in timings.phases() {
+        out.push_str(&format!(" {:<28} {}\n", phase.name, format_duration(phase.duration)));
+    }
+    for call in timings.command_exists_calls() {
+        let label = format!("  command_exists: {}", call.command);
+        out.push_str(&format!(" {:<28} {}\n", label, format_duration(call.duration)));
+    }
+
+    out.push_str(&format!(" {}\n", "─".repeat(38)));
+    out.push_str(&format!(" {:<28} {}\n", "Total", format_duration(timings.total_duration())));
+    out
+}
+
+pub(crate) fn format_timings_json(timings: &runex_core::timings::Timings) -> serde_json::Value {
+    let phases: Vec<serde_json::Value> = timings.phases().iter().map(|p| {
+        serde_json::json!({
+            "name": p.name,
+            "duration_us": p.duration.as_micros() as u64,
+        })
+    }).collect();
+
+    let calls: Vec<serde_json::Value> = timings.command_exists_calls().iter().map(|c| {
+        serde_json::json!({
+            "command": c.command,
+            "found": c.found,
+            "duration_us": c.duration.as_micros() as u64,
+        })
+    }).collect();
+
+    serde_json::json!({
+        "phases": phases,
+        "command_exists_calls": calls,
+        "total_us": timings.total_duration().as_micros() as u64,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +467,51 @@ mod tests {
         let out = format_dry_run_result("ls", &result);
         assert!(out.contains("rule #1 skipped"), "out: {out}");
         assert!(out.contains("expanded  ->  lsd"), "out: {out}");
+    }
+
+    // ── timings formatting tests ────────────────────────────────────────
+
+    use runex_core::timings::Timings;
+    use std::time::Duration;
+
+    #[test]
+    fn format_duration_units() {
+        assert_eq!(format_duration(Duration::from_micros(500)), "500us");
+        assert_eq!(format_duration(Duration::from_micros(1500)), "1.50ms");
+        assert_eq!(format_duration(Duration::from_micros(1_500_000)), "1.50s");
+    }
+
+    #[test]
+    fn format_timings_table_shows_phases() {
+        let mut t = Timings::new();
+        t.record_phase("config_load", Duration::from_micros(1230));
+        t.record_phase("expand", Duration::from_micros(5670));
+        let out = format_timings_table(&t);
+        assert!(out.contains("config_load"), "out: {out}");
+        assert!(out.contains("expand"), "out: {out}");
+        assert!(out.contains("Total"), "out: {out}");
+    }
+
+    #[test]
+    fn format_timings_table_shows_command_exists_indented() {
+        let mut t = Timings::new();
+        t.record_phase("expand", Duration::from_micros(5670));
+        t.record_command_exists("git", true, Duration::from_micros(2340));
+        let out = format_timings_table(&t);
+        assert!(out.contains("  command_exists: git"), "cmd call must be indented: {out}");
+    }
+
+    #[test]
+    fn format_timings_json_structure() {
+        let mut t = Timings::new();
+        t.record_phase("config_load", Duration::from_micros(1230));
+        t.record_command_exists("git", true, Duration::from_micros(2340));
+        let v = format_timings_json(&t);
+        assert!(v.get("phases").unwrap().is_array());
+        assert!(v.get("command_exists_calls").unwrap().is_array());
+        assert!(v.get("total_us").unwrap().is_number());
+        let phase = &v["phases"][0];
+        assert_eq!(phase["name"], "config_load");
+        assert_eq!(phase["duration_us"], 1230);
     }
 }

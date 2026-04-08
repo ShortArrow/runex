@@ -259,4 +259,23 @@ no rule matched 'xyz'
 result: pass-through
 ```
 
+### `runex timings`
+
+Shows per-phase timing breakdown of the expand flow, similar to `starship timings`:
+
+```
+$ runex timings ls --shell bash
+ Phase                        Duration
+ ──────────────────────────────────────
+ config_load                  1.23ms
+ shell_resolve                0.01ms
+ expand                       5.67ms
+   command_exists: lsd         3.12ms
+   command_exists: ls          2.34ms
+ ──────────────────────────────────────
+ Total                        6.91ms
+```
+
+When `--token` is omitted, all abbreviation keys are timed. Use `--json` for machine-readable output.
+
 See also: [Commands — doctor](../README.md#commands), [Commands — which](../README.md#commands).
