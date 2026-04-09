@@ -143,6 +143,7 @@ runex export <shell>                     シェル連携スクリプトを生成
 runex export <shell> --bin <name>        スクリプト内のバイナリ名を変更
 runex timings <key>                      展開フローのフェーズ別所要時間を表示
 runex timings                            全ルールの所要時間を計測
+runex precache --shell <shell>           コマンド存在チェックを事前キャッシュ
 runex version                            バージョンとビルドコミットを表示
 ```
 

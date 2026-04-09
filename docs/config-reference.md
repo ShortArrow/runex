@@ -276,6 +276,29 @@ $ runex timings ls --shell bash
  Total                        6.91ms
 ```
 
-When `--token` is omitted, all abbreviation keys are timed. Use `--json` for machine-readable output.
+When the key argument is omitted, all abbreviation keys are timed. Use `--json` for machine-readable output.
+
+### `runex precache`
+
+Pre-computes `when_command_exists` checks at shell startup so that `runex expand`
+can skip the expensive `which` lookup (~9 ms → ~0 ms per command).
+
+```bash
+# The export script runs this automatically at shell startup:
+eval "$(runex precache --shell bash)"
+
+# Manual refresh (e.g. after installing a new tool):
+eval "$(runex precache --shell bash)"
+```
+
+The cache is stored in `RUNEX_CMD_CACHE_V1` and validated by a fingerprint
+derived from `PATH`, config file mtime, and shell name. If the fingerprint
+does not match (e.g. after a `PATH` change), `runex expand` silently falls
+back to live `which` lookups.
+
+Cache rules:
+- `true` entries are trusted (skip `which`)
+- `false` entries are re-checked live (catches newly installed commands)
+- Missing entries trigger a live `which` check
 
 See also: [Commands — doctor](../README.md#commands), [Commands — which](../README.md#commands).

@@ -97,6 +97,7 @@ runex export <shell>                     generate shell integration script
 runex export <shell> --bin <name>        use a custom binary name in the script
 runex timings <key>                      show per-phase timing breakdown of expand
 runex timings                            time all abbreviation rules
+runex precache --shell <shell>           pre-compute command existence cache
 runex version                            show version and build commit
 ```
 

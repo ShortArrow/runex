@@ -296,8 +296,9 @@ pub(crate) fn format_timings_table(timings: &runex_core::timings::Timings) -> St
         out.push_str(&format!(" {:<28} {}\n", phase.name, format_duration(phase.duration)));
     }
     for call in timings.command_exists_calls() {
-        let label = format!("  command_exists: {}", call.command);
-        out.push_str(&format!(" {:<28} {}\n", label, format_duration(call.duration)));
+        let tag = if call.cached { " [cached]" } else { "" };
+        let label = format!("  command_exists: {}{}", call.command, tag);
+        out.push_str(&format!(" {:<38} {}\n", label, format_duration(call.duration)));
     }
 
     out.push_str(&format!(" {}\n", "─".repeat(38)));
@@ -318,6 +319,7 @@ pub(crate) fn format_timings_json(timings: &runex_core::timings::Timings) -> ser
             "command": c.command,
             "found": c.found,
             "duration_us": c.duration.as_micros() as u64,
+            "cached": c.cached,
         })
     }).collect();
 
@@ -496,7 +498,7 @@ mod tests {
     fn format_timings_table_shows_command_exists_indented() {
         let mut t = Timings::new();
         t.record_phase("expand", Duration::from_micros(5670));
-        t.record_command_exists("git", true, Duration::from_micros(2340));
+        t.record_command_exists("git", true, Duration::from_micros(2340), false);
         let out = format_timings_table(&t);
         assert!(out.contains("  command_exists: git"), "cmd call must be indented: {out}");
     }
@@ -505,7 +507,7 @@ mod tests {
     fn format_timings_json_structure() {
         let mut t = Timings::new();
         t.record_phase("config_load", Duration::from_micros(1230));
-        t.record_command_exists("git", true, Duration::from_micros(2340));
+        t.record_command_exists("git", true, Duration::from_micros(2340), false);
         let v = format_timings_json(&t);
         assert!(v.get("phases").unwrap().is_array());
         assert!(v.get("command_exists_calls").unwrap().is_array());

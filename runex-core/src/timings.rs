@@ -13,6 +13,8 @@ pub struct CommandExistsCall {
     pub command: String,
     pub found: bool,
     pub duration: Duration,
+    /// Whether this result came from the precache hint layer.
+    pub cached: bool,
 }
 
 /// Collects timing data for expand phases and command_exists calls.
@@ -49,11 +51,12 @@ impl Timings {
         });
     }
 
-    pub fn record_command_exists(&mut self, command: &str, found: bool, duration: Duration) {
+    pub fn record_command_exists(&mut self, command: &str, found: bool, duration: Duration, cached: bool) {
         self.command_exists_calls.push(CommandExistsCall {
             command: command.to_string(),
             found,
             duration,
+            cached,
         });
     }
 
@@ -94,13 +97,15 @@ mod tests {
     #[test]
     fn timings_record_command_exists_call() {
         let mut t = Timings::new();
-        t.record_command_exists("git", true, Duration::from_micros(2340));
-        t.record_command_exists("lsd", false, Duration::from_micros(3120));
+        t.record_command_exists("git", true, Duration::from_micros(2340), false);
+        t.record_command_exists("lsd", false, Duration::from_micros(3120), true);
         assert_eq!(t.command_exists_calls().len(), 2);
         assert_eq!(t.command_exists_calls()[0].command, "git");
         assert!(t.command_exists_calls()[0].found);
+        assert!(!t.command_exists_calls()[0].cached);
         assert_eq!(t.command_exists_calls()[1].command, "lsd");
         assert!(!t.command_exists_calls()[1].found);
+        assert!(t.command_exists_calls()[1].cached);
     }
 
     #[test]

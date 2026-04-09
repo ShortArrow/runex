@@ -118,18 +118,21 @@ pub fn config_mtime(path: &Path) -> u64 {
 pub fn export_statement(shell: &str, cache_json: &str) -> String {
     match shell {
         "bash" | "zsh" => {
-            // Single-quote the JSON, escaping any embedded single quotes
             let escaped = cache_json.replace('\'', "'\\''");
             format!("export {}='{}'", CACHE_ENV_VAR, escaped)
         }
         "pwsh" => {
-            // Double-quote with backtick escaping for PowerShell
             let escaped = cache_json.replace('\'', "''");
             format!("$env:{}='{}'", CACHE_ENV_VAR, escaped)
         }
         "nu" => {
             let escaped = cache_json.replace('\'', "''");
             format!("$env.{} = '{}'", CACHE_ENV_VAR, escaped)
+        }
+        "clink" => {
+            // cmd.exe set command — no quotes around value for os.execute
+            let escaped = cache_json.replace('"', "\\\"");
+            format!("set {}={}", CACHE_ENV_VAR, escaped)
         }
         _ => {
             let escaped = cache_json.replace('\'', "'\\''");

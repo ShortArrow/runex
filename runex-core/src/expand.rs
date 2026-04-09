@@ -102,10 +102,14 @@ where
     let timed_exists = |cmd: &str| -> bool {
         let t = Instant::now();
         let found = command_exists(cmd);
+        let elapsed = t.elapsed();
         calls.borrow_mut().push(CommandExistsCall {
             command: cmd.to_string(),
             found,
-            duration: t.elapsed(),
+            duration: elapsed,
+            // Heuristic: if the lookup completed in under 100us, it was likely a cache hit.
+            // A real which::which() call takes ~9ms on typical systems.
+            cached: elapsed.as_micros() < 100,
         });
         found
     };
@@ -114,7 +118,7 @@ where
     timings.record_phase("expand", timer.elapsed());
 
     for call in calls.into_inner() {
-        timings.record_command_exists(&call.command, call.found, call.duration);
+        timings.record_command_exists(&call.command, call.found, call.duration, call.cached);
     }
 
     result
