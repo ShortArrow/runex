@@ -1,11 +1,19 @@
 # VHS Demo
 
-This directory contains a minimal `vhs` tape for recording a short `runex` CLI demo.
+This directory contains a `vhs` tape for recording the `runex` CLI demo GIF.
 
-Render it with:
+## Record with Docker (recommended)
+
+```bash
+bash docs/vhs/record.sh
+```
+
+Builds a Docker image with Rust + VHS, compiles runex inside the container, and outputs `docs/vhs/demo.gif`. Only Docker is required.
+
+## Record manually
+
+If you have `vhs` and `runex` installed:
 
 ```bash
 vhs docs/vhs/demo.tape
 ```
-
-The tape writes `docs/vhs/demo.gif`.
