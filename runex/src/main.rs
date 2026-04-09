@@ -146,6 +146,12 @@ enum Commands {
         #[arg(long, value_name = "SHELL")]
         shell: Option<String>,
     },
+    /// Pre-compute command existence cache for shell startup
+    Precache {
+        /// Target shell: bash, zsh, pwsh, clink, nu
+        #[arg(long, value_name = "SHELL")]
+        shell: String,
+    },
     /// Show per-phase timing breakdown of the expand flow
     Timings {
         /// Abbreviation key to time (if omitted, times all keys)
@@ -198,7 +204,14 @@ fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config
 }
 
 
-/// Build a `command_exists` closure.
+/// Compute the precache fingerprint for the current environment.
+fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> String {
+    let path_env = std::env::var("PATH").unwrap_or_default();
+    let mtime = runex_core::precache::config_mtime(config_path);
+    runex_core::precache::compute_fingerprint(&path_env, mtime, shell)
+}
+
+/// Build a `command_exists` closure with precache hint layer.
 ///
 /// When `path_prepend` is `Some(dir)`, files inside `dir` are checked first
 /// (bare name, and `.exe` on Windows). Falls through to `which::which`.
@@ -206,21 +219,69 @@ fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config
 /// Rejects any `cmd` containing `/`, `\`, or `:` because `when_command_exists`
 /// values must be bare command names, not filesystem paths. Accepting paths would
 /// allow directory traversal and absolute-path probing via `dir.join(cmd)`.
-fn make_command_exists(path_prepend: Option<&Path>) -> impl Fn(&str) -> bool + '_ {
+///
+/// ## Hint layer (precache)
+///
+/// If `RUNEX_CMD_CACHE_V1` env var contains a valid cache with matching fingerprint:
+/// - `cache[cmd] == true` → return true immediately (skip `which`)
+/// - `cache[cmd] == false` → re-check live (avoid stale false negatives after installs)
+/// - `cmd` not in cache → live check
+///
+/// Results are also cached in a `RefCell<HashMap>` per invocation to avoid
+/// repeated `which` calls within the same CLI run.
+fn make_command_exists<'a>(
+    path_prepend: Option<&'a Path>,
+    precache_fingerprint: Option<&str>,
+) -> impl Fn(&str) -> bool + 'a {
+    use runex_core::precache;
+
+    let hint = precache_fingerprint.and_then(precache::load_cache);
+    let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
+
     move |cmd: &str| -> bool {
         if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
             return false;
         }
-        if let Some(dir) = path_prepend {
-            if dir.join(cmd).is_file() {
-                return true;
-            }
-            #[cfg(windows)]
-            if dir.join(format!("{cmd}.exe")).is_file() {
-                return true;
+
+        // Per-invocation memoization (covers repeated checks within one run)
+        if let Some(&cached) = cache.borrow().get(cmd) {
+            return cached;
+        }
+
+        // Precache hint: trust true, re-check false
+        if let Some(ref h) = hint {
+            if let Some(&cached) = h.commands.get(cmd) {
+                if cached {
+                    cache.borrow_mut().insert(cmd.to_owned(), true);
+                    return true;
+                }
+                // cached == false → fall through to live check (may have been installed)
             }
         }
-        which::which(cmd).is_ok()
+
+        let exists = if let Some(dir) = path_prepend {
+            if dir.join(cmd).is_file() {
+                true
+            } else {
+                #[cfg(windows)]
+                {
+                    if dir.join(format!("{cmd}.exe")).is_file() {
+                        true
+                    } else {
+                        which::which(cmd).is_ok()
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    which::which(cmd).is_ok()
+                }
+            }
+        } else {
+            which::which(cmd).is_ok()
+        };
+
+        cache.borrow_mut().insert(cmd.to_owned(), exists);
+        exists
     }
 }
 
@@ -492,6 +553,30 @@ fn handle_export(
     Ok(())
 }
 
+fn handle_precache(
+    shell: String,
+    config_flag: Option<&Path>,
+    path_prepend: Option<&Path>,
+) -> CmdResult {
+    use runex_core::precache;
+
+    let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
+        Box::<dyn std::error::Error>::from(e.to_string())
+    })?;
+    let shell_name = format!("{s:?}").to_lowercase();
+
+    let (config_path, config) = resolve_config(config_flag)?;
+    let fp = compute_precache_fingerprint(&config_path, &shell_name);
+
+    // Use a plain (non-cached) command_exists for the precache build
+    let command_exists = make_command_exists(path_prepend, None);
+    let cache = precache::build_cache(&config, &fp, &command_exists);
+    let json = precache::cache_to_json(&cache);
+
+    println!("{}", precache::export_statement(&shell_name, &json));
+    Ok(())
+}
+
 fn handle_timings(
     key: Option<String>,
     shell_str: Option<String>,
@@ -504,14 +589,15 @@ fn handle_timings(
     let mut timings = Timings::new();
 
     let t = PhaseTimer::start();
-    let (_config_path, config) = resolve_config(config_flag)?;
+    let (config_path, config) = resolve_config(config_flag)?;
     timings.record_phase("config_load", t.elapsed());
 
     let t = PhaseTimer::start();
     let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
     timings.record_phase("shell_resolve", t.elapsed());
 
-    let command_exists = make_command_exists(path_prepend);
+    let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
+    let command_exists = make_command_exists(path_prepend, Some(&fp));
 
     match key {
         Some(k) => {
@@ -553,7 +639,8 @@ fn handle_doctor(
     json: bool,
 ) -> CmdResult {
     let (config_path, config, parse_error) = resolve_config_opt(config_flag);
-    let command_exists = make_command_exists(path_prepend);
+    // Doctor checks live command existence — no precache (intentional)
+    let command_exists = make_command_exists(path_prepend, None);
     let spinner = Spinner::start("Checking environment...");
     let mut result = doctor::diagnose(&config_path, config.as_ref(), parse_error.as_deref(), &command_exists);
     if !no_shell_aliases {
@@ -664,15 +751,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             handle_list(&config, shell, cli.json)?;
         }
         Commands::Which { token, why, shell: shell_str } => {
-            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
-            let command_exists = make_command_exists(cli.path_prepend.as_deref());
+            let (config_path, config) = resolve_config(cli.config.as_deref())?;
             let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
+            let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
+            let command_exists = make_command_exists(cli.path_prepend.as_deref(), Some(&fp));
             handle_which(token, &config, shell, &command_exists, cli.json, why)?;
         }
         Commands::Expand { token, dry_run, shell: shell_str } => {
-            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
-            let command_exists = make_command_exists(cli.path_prepend.as_deref());
+            let (config_path, config) = resolve_config(cli.config.as_deref())?;
             let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
+            let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
+            let command_exists = make_command_exists(cli.path_prepend.as_deref(), Some(&fp));
             handle_expand(token, &config, shell, &command_exists, cli.json, dry_run)?;
         }
         Commands::Export { shell, bin } => {
@@ -686,6 +775,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 verbose,
                 cli.json,
             )?;
+        }
+        Commands::Precache { shell } => {
+            handle_precache(shell, cli.config.as_deref(), cli.path_prepend.as_deref())?;
         }
         Commands::Timings { key, shell: shell_str } => {
             handle_timings(
@@ -719,7 +811,7 @@ mod tests {
     #[test]
     /// `cargo` is guaranteed to be on PATH in a Rust build environment.
     fn make_command_exists_no_prepend_uses_which() {
-        let exists = make_command_exists(None);
+        let exists = make_command_exists(None, None);
         assert!(exists("cargo"));
         assert!(!exists("__runex_fake_cmd_that_does_not_exist__"));
     }
@@ -729,7 +821,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fake_bin = dir.path().join("myfaketool");
         std::fs::write(&fake_bin, b"").unwrap();
-        let exists = make_command_exists(Some(dir.path()));
+        let exists = make_command_exists(Some(dir.path()), None);
         assert!(exists("myfaketool"));
         assert!(!exists("__runex_other_fake__"));
     }
