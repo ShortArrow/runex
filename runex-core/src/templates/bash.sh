@@ -1,4 +1,5 @@
 # runex shell integration for bash
+eval "$({BASH_BIN} precache --shell bash 2>/dev/null)"
 __runex_trim_trailing_spaces() {
     local s="$1"
     while [[ "$s" == *" " ]]; do

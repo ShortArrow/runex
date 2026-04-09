@@ -1,4 +1,5 @@
 # runex shell integration for PowerShell
+Invoke-Expression (& {PWSH_BIN} precache --shell pwsh 2>$null) -ErrorAction SilentlyContinue
 function __runex_trim_trailing_spaces {
     param([string]$text)
 

@@ -4,14 +4,9 @@ use std::str::FromStr;
 use crate::model::{Config, TriggerKey};
 use crate::sanitize::{double_quote_escape, is_nu_drop_char, is_unicode_line_separator, is_unsafe_for_display};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Shell {
-    Bash,
-    Zsh,
-    Pwsh,
-    Clink,
-    Nu,
-}
+// Shell is defined in model to avoid circular dependency; re-export it here
+// so callers that do `use runex_core::shell::Shell` still work.
+pub use crate::model::Shell;
 
 impl FromStr for Shell {
     type Err = ShellParseError;
@@ -858,7 +853,7 @@ mod tests {
             keybind: crate::model::KeybindConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "gcm".into(),
-                expand: "git commit -m".into(),
+                expand: crate::model::PerShellString::All("git commit -m".into()),
                 when_command_exists: None,
             }],
         };
@@ -913,7 +908,7 @@ mod tests {
             keybind: crate::model::KeybindConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "gcm".into(),
-                expand: "git commit -m".into(),
+                expand: crate::model::PerShellString::All("git commit -m".into()),
                 when_command_exists: None,
             }],
         };
@@ -1691,7 +1686,7 @@ mod tests {
             keybind: crate::model::KeybindConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "*".into(),
-                expand: "echo star".into(),
+                expand: crate::model::PerShellString::All("echo star".into()),
                 when_command_exists: None,
             }],
         };
@@ -1710,7 +1705,7 @@ mod tests {
             keybind: crate::model::KeybindConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "g?".into(),
-                expand: "git".into(),
+                expand: crate::model::PerShellString::All("git".into()),
                 when_command_exists: None,
             }],
         };
@@ -1728,7 +1723,7 @@ mod tests {
             keybind: crate::model::KeybindConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "g[cm]".into(),
-                expand: "git".into(),
+                expand: crate::model::PerShellString::All("git".into()),
                 when_command_exists: None,
             }],
         };
@@ -1746,7 +1741,7 @@ mod tests {
             keybind: crate::model::KeybindConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "*".into(),
-                expand: "echo star".into(),
+                expand: crate::model::PerShellString::All("echo star".into()),
                 when_command_exists: None,
             }],
         };
@@ -1764,7 +1759,7 @@ mod tests {
     fn pwsh_script_has_single_default_clause() {
         for abbr in [vec![], vec![crate::model::Abbr {
             key: "gcm".into(),
-            expand: "git commit -m".into(),
+            expand: crate::model::PerShellString::All("git commit -m".into()),
             when_command_exists: None,
         }]] {
             let s = export_script(Shell::Pwsh, "runex", Some(&Config {

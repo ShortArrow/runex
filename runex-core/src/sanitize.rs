@@ -98,6 +98,16 @@ pub fn sanitize_for_display(s: &str) -> String {
     s.chars().filter(|&c| !is_unsafe_for_display(c)).collect()
 }
 
+/// Strip characters unsafe for terminal display, preserving newlines and tabs.
+///
+/// Like [`sanitize_for_display`] but allows `\n`, `\r`, and `\t` so that
+/// multi-line messages (e.g. TOML parse errors) remain readable.
+pub fn sanitize_multiline_for_display(s: &str) -> String {
+    s.chars()
+        .filter(|&c| c == '\n' || c == '\r' || c == '\t' || !is_unsafe_for_display(c))
+        .collect()
+}
+
 /// Map a character to its double-quoted string escape sequence.
 ///
 /// Returns `Some(escaped)` for the five characters that need escaping inside a

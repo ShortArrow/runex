@@ -6,6 +6,10 @@ Override with the `RUNEX_CONFIG` environment variable or the `--config` flag.
 
 ---
 
+> **Note:** Unknown fields and table names are silently ignored. Typos like `[[abr]]` or `expad = "lsd"` will not produce an error — the misspelled entry is simply skipped. Use `runex doctor` to verify that your config loads correctly.
+
+---
+
 ## Top-level fields
 
 | Field | Type | Required | Description |
@@ -18,26 +22,32 @@ Override with the `RUNEX_CONFIG` environment variable or the `--config` flag.
 
 ## `[keybind]`
 
-Controls which key triggers expansion in each shell. All fields are optional.
+Controls which key triggers expansion in each shell. Both subtables are optional.
+
+`[keybind]` has two subtables:
+
+- `[keybind.trigger]` — the key that triggers abbreviation expansion
+- `[keybind.self_insert]` — a key that inserts a plain space without expanding (optional)
+
+Each subtable accepts the following fields:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `trigger` | string | — | Default trigger for all shells. |
-| `bash` | string | falls back to `trigger` | bash-specific override. |
-| `zsh` | string | falls back to `trigger` | zsh-specific override. |
-| `pwsh` | string | falls back to `trigger` | PowerShell-specific override. |
-| `nu` | string | falls back to `trigger` | Nushell-specific override. |
-| `self_insert` | string | — | Key to bind to plain-space insertion (bypasses expansion). |
+| `default` | string | — | Key for all shells not otherwise specified. |
+| `bash` | string | falls back to `default` | bash-specific override. |
+| `zsh` | string | falls back to `default` | zsh-specific override. |
+| `pwsh` | string | falls back to `default` | PowerShell-specific override. |
+| `nu` | string | falls back to `default` | Nushell-specific override. |
 
-Clink does not have a shell-specific field — it always uses `trigger`.
+Clink does not have a shell-specific field — it always uses `default`.
 
-If `trigger` and all shell-specific fields are omitted, **no key is bound**. The shell integration script is still generated; expansion is available via `runex expand --token <token>`.
+If `default` and all shell-specific fields are omitted, **no key is bound** for that subtable. The shell integration script is still generated; expansion is available via `runex expand --token <token>`.
 
-Shell-specific fields take precedence over `trigger`:
+Shell-specific fields take precedence over `default`:
 
 ```toml
-[keybind]
-trigger = "space"
+[keybind.trigger]
+default = "space"
 bash    = "alt-space"   # bash uses Alt+Space; other shells use Space
 ```
 
@@ -50,14 +60,16 @@ bash    = "alt-space"   # bash uses Alt+Space; other shells use Space
 | `"alt-space"` | Alt + Space |
 | `"shift-space"` | Shift + Space (pwsh and nu only) |
 
-### `self_insert`
+### `[keybind.self_insert]`
 
 Binds a key to plain-space insertion, bypassing expansion entirely. Useful when the trigger key has a modifier variant that would otherwise fall through to the expansion handler.
 
 ```toml
-[keybind]
-trigger     = "space"
-self_insert = "shift-space"   # Shift+Space inserts a space without expanding
+[keybind.trigger]
+default = "space"
+
+[keybind.self_insert]
+default = "shift-space"   # Shift+Space inserts a space without expanding
 ```
 
 Shell support for `self_insert`:
@@ -70,7 +82,7 @@ Shell support for `self_insert`:
 | nu | yes | yes |
 | clink | — | — |
 
-> **Note:** Setting `self_insert = "shift-space"` produces a warning from `runex doctor` because Shift+Space cannot be reliably detected in bash or zsh. Use `"alt-space"` for cross-shell support.
+> **Note:** Setting `self_insert.default = "shift-space"` (or `self_insert.bash`/`self_insert.zsh`) produces a warning from `runex doctor` because Shift+Space cannot be reliably detected in bash or zsh. Use `"alt-space"` for cross-shell support.
 
 ---
 
@@ -172,10 +184,13 @@ Entries must be bare command names (`lsd`, `bat`, `eza`). Path separators (`/`, 
 ```toml
 version = 1
 
-[keybind]
-trigger     = "space"
-bash        = "alt-space"
-self_insert = "shift-space"
+[keybind.trigger]
+default = "space"
+bash    = "alt-space"
+
+[keybind.self_insert]
+pwsh = "shift-space"
+nu   = "shift-space"
 
 # lsd as ls — only when lsd is installed
 [[abbr]]
@@ -243,5 +258,47 @@ token: xyz
 no rule matched 'xyz'
 result: pass-through
 ```
+
+### `runex timings`
+
+Shows per-phase timing breakdown of the expand flow, similar to `starship timings`:
+
+```
+$ runex timings ls --shell bash
+ Phase                        Duration
+ ──────────────────────────────────────
+ config_load                  1.23ms
+ shell_resolve                0.01ms
+ expand                       5.67ms
+   command_exists: lsd         3.12ms
+   command_exists: ls          2.34ms
+ ──────────────────────────────────────
+ Total                        6.91ms
+```
+
+When the key argument is omitted, all abbreviation keys are timed. Use `--json` for machine-readable output.
+
+### `runex precache`
+
+Pre-computes `when_command_exists` checks at shell startup so that `runex expand`
+can skip the expensive `which` lookup (~9 ms → ~0 ms per command).
+
+```bash
+# The export script runs this automatically at shell startup:
+eval "$(runex precache --shell bash)"
+
+# Manual refresh (e.g. after installing a new tool):
+eval "$(runex precache --shell bash)"
+```
+
+The cache is stored in `RUNEX_CMD_CACHE_V1` and validated by a fingerprint
+derived from `PATH`, config file mtime, and shell name. If the fingerprint
+does not match (e.g. after a `PATH` change), `runex expand` silently falls
+back to live `which` lookups.
+
+Cache rules:
+- `true` entries are trusted (skip `which`)
+- `false` entries are re-checked live (catches newly installed commands)
+- Missing entries trigger a live `which` check
 
 See also: [Commands — doctor](../README.md#commands), [Commands — which](../README.md#commands).

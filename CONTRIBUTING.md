@@ -99,14 +99,36 @@ Any value that originates from user-controlled data (config fields, command name
 
 ## Releasing
 
-### Merge develop → main
+### Branch workflow
 
-Version bumps and publishing happen on `main`. Before bumping, merge `develop`:
+All development happens on `develop`. Releases happen on `main`.
+
+```
+1. develop  : feature work, bug fixes, docs
+2. main     : merge develop → main, then bump version
+3. develop  : merge main back into develop (--no-ff)
+```
+
+Step-by-step:
 
 ```bash
+# 1. Merge develop into main
 git checkout main
 git merge develop
+
+# 2. Bump version on main (see below)
+# edit Cargo.toml files, then:
+git add runex-core/Cargo.toml runex/Cargo.toml Cargo.lock
+git commit -m "chore: bump version to X.Y.Z"
+
+# 3. Merge the bump back into develop (always --no-ff)
+git checkout develop
+git merge main --no-ff
 ```
+
+The `--no-ff` in step 3 preserves the merge commit so the branch history
+stays clear about which commits came from main (version bumps) vs develop
+(feature work).
 
 ### Version bump
 
@@ -116,7 +138,7 @@ Update the version in 3 places:
 2. `runex/Cargo.toml` — `version`
 3. `runex/Cargo.toml` — `runex-core = { version = "..." }` dependency
 
-All 3 must match. Run `cargo test` after bumping to verify the workspace builds cleanly.
+All 3 must match. Run `cargo check` to update `Cargo.lock`, then `cargo test --workspace` to verify.
 
 ### Versioning policy
 

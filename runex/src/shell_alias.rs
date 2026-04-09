@@ -259,6 +259,7 @@ where
             sanitize_for_display(token),
             sanitize_for_display(&definition)
         ),
+        detail_verbose: None,
     })
 }
 
@@ -323,6 +324,7 @@ where
         name: format!("shell:bash:key:{}", sanitize_for_display(token)),
         status: CheckStatus::Warn,
         detail: format!("conflicts with existing alias {}", sanitize_for_display(&detail)),
+        detail_verbose: None,
     })
 }
 
@@ -371,7 +373,7 @@ mod tests {
     fn test_abbr(key: &str) -> Abbr {
         Abbr {
             key: key.into(),
-            expand: format!("expand-{key}"),
+            expand: runex_core::model::PerShellString::All(format!("expand-{key}")),
             when_command_exists: None,
         }
     }

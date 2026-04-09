@@ -95,6 +95,9 @@ runex init                               設定を作成し、rc ファイルへ
 runex init -y                            確認プロンプトをスキップ
 runex export <shell>                     シェル連携スクリプトを生成
 runex export <shell> --bin <name>        スクリプト内のバイナリ名を変更
+runex timings <key>                      展開フローのフェーズ別所要時間を表示
+runex timings                            全ルールの所要時間を計測
+runex precache --shell <shell>           コマンド存在チェックを事前キャッシュ
 runex version                            バージョンとビルドコミットを表示
 ```
 
@@ -103,7 +106,7 @@ runex version                            バージョンとビルドコミット
 ```
 --config <path>      設定ファイルパスを上書き（RUNEX_CONFIG より優先）
 --path-prepend <dir> コマンド存在チェック用に DIR を PATH の先頭に追加
---json               JSON 形式で出力（対応: list, doctor, version）
+--json               JSON 形式で出力（対応: list, doctor, version, expand, which, timings）
 ```
 
 ### 6.3 設定ファイル

@@ -114,8 +114,8 @@ No keybindings are active until you configure them.
 ```toml
 version = 1
 
-[keybind]
-trigger = "space"
+[keybind.trigger]
+default = "space"
 
 [[abbr]]
 key    = "ls"
@@ -143,6 +143,9 @@ runex init                               create config and append shell integrat
 runex init -y                            same, skip confirmation prompts
 runex export <shell>                     generate shell integration script
 runex export <shell> --bin <name>        use a custom binary name in the script
+runex timings <key>                      show per-phase timing breakdown of expand
+runex timings                            time all abbreviation rules
+runex precache --shell <shell>           pre-compute command existence cache
 runex version                            show version and build commit
 ```
 
@@ -151,7 +154,7 @@ Global flags (available on every subcommand):
 ```
 --config <path>      override config file path
 --path-prepend <dir> prepend a directory to PATH for command existence checks
---json               JSON output (supported by: list, doctor, version, expand, which)
+--json               JSON output (supported by: list, doctor, version, expand, which, timings)
 ```
 
 ## Avoiding Expansion
@@ -164,10 +167,12 @@ If you use `trigger = "space"`, there are a few practical ways to avoid expansio
 You can also bind a key to plain-space insertion using `self_insert`:
 
 ```toml
-[keybind]
-trigger     = "space"
-self_insert = "shift-space"   # pwsh/nu: Shift+Space inserts a space without expanding
-# self_insert = "alt-space"   # all shells including bash/zsh
+[keybind.trigger]
+default = "space"
+
+[keybind.self_insert]
+default = "shift-space"   # pwsh/nu: Shift+Space inserts a space without expanding
+# default = "alt-space"   # all shells including bash/zsh
 ```
 
 | Value | bash | zsh | pwsh | nu |

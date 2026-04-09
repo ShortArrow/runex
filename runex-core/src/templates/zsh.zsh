@@ -1,4 +1,5 @@
 # runex shell integration for zsh
+eval "$({ZSH_BIN} precache --shell zsh 2>/dev/null)"
 function __runex_trim_trailing_spaces() {
     local s="$1"
     while [[ "$s" == *" " ]]; do

@@ -1,5 +1,12 @@
 -- runex shell integration for clink
 local RUNEX_BIN = {CLINK_BIN}
+-- Pre-compute command existence cache
+local precache_handle = io.popen(RUNEX_BIN .. " precache --shell clink 2>nul")
+if precache_handle then
+    local precache_line = precache_handle:read("*l")
+    precache_handle:close()
+    if precache_line then os.execute(precache_line) end
+end
 local RUNEX_KNOWN = {
 {CLINK_KNOWN_CASES}
 }

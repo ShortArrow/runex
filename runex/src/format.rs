@@ -12,12 +12,17 @@ pub(crate) fn format_check_tag(status: &CheckStatus) -> String {
     }
 }
 
-pub(crate) fn format_check_line(check: &Check) -> String {
+pub(crate) fn format_check_line(check: &Check, verbose: bool) -> String {
+    let detail = if verbose {
+        check.detail_verbose.as_deref().unwrap_or(&check.detail)
+    } else {
+        &check.detail
+    };
     format!(
         "{:>CHECK_TAG_WIDTH$}  {}: {}",
         format_check_tag(&check.status),
         check.name,
-        check.detail
+        detail
     )
 }
 
@@ -51,6 +56,9 @@ pub(crate) fn format_skip_reason(i: usize, reason: &expand::SkipReason, why: boo
                 parts.join(", ")
             )
         }
+        expand::SkipReason::NoShellEntry => {
+            format!("\n  rule #{} skipped: no expand entry for current shell", i + 1)
+        }
     }
 }
 
@@ -83,16 +91,22 @@ pub(crate) fn format_all_skipped_headline(
     let has_self_loop = skipped
         .iter()
         .any(|(_, r)| matches!(r, expand::SkipReason::SelfLoop));
-    match (has_condition_fail, has_self_loop) {
-        (true, true) => format!(
-            "{token}  [skipped: condition failed on some rules; others are self-loops]"
-        ),
-        (true, false) => {
+    let has_no_shell_entry = skipped
+        .iter()
+        .any(|(_, r)| matches!(r, expand::SkipReason::NoShellEntry));
+    match (has_condition_fail, has_self_loop, has_no_shell_entry) {
+        (true, _, _) => {
             let all_missing = collect_all_missing_commands(skipped);
-            format!("{token}  [skipped: {} not found]", all_missing.join(", "))
+            if all_missing.is_empty() {
+                format!("{token}  [skipped: condition failed]")
+            } else {
+                format!("{token}  [skipped: {} not found]", all_missing.join(", "))
+            }
         }
-        (false, true) => format!("{token}  [no-op: key and expansion are identical]"),
-        (false, false) => format!("{token}: no rule found"),
+        (false, true, false) => format!("{token}  [no-op: key and expansion are identical]"),
+        (false, false, true) => format!("{token}  [skipped: no entry for current shell]"),
+        (false, true, true) => format!("{token}  [skipped: self-loop or no entry for current shell]"),
+        (false, false, false) => format!("{token}: no rule found"),
     }
 }
 
@@ -199,6 +213,9 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
                             out.push_str(&format!("  {}: NOT FOUND\n", sanitize_for_display(cmd)));
                         }
                     }
+                    expand::SkipReason::NoShellEntry => {
+                        out.push_str(&format!("rule #{} skipped: no entry for current shell\n", i + 1));
+                    }
                 }
             }
             out.push_str(&format!(
@@ -237,6 +254,9 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
                             out.push_str(&format!("  {}: NOT FOUND\n", sanitize_for_display(cmd)));
                         }
                     }
+                    expand::SkipReason::NoShellEntry => {
+                        out.push_str(&format!("rule #{} skipped: no entry for current shell\n", i + 1));
+                    }
                 }
             }
             out.push_str(&format!(
@@ -256,6 +276,60 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
     out
 }
 
+pub(crate) fn format_duration(d: std::time::Duration) -> String {
+    let us = d.as_micros();
+    if us < 1_000 {
+        format!("{us}us")
+    } else if us < 1_000_000 {
+        format!("{:.2}ms", us as f64 / 1_000.0)
+    } else {
+        format!("{:.2}s", us as f64 / 1_000_000.0)
+    }
+}
+
+pub(crate) fn format_timings_table(timings: &runex_core::timings::Timings) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(" {:<28} {}\n", "Phase", "Duration"));
+    out.push_str(&format!(" {}\n", "─".repeat(38)));
+
+    for phase in timings.phases() {
+        out.push_str(&format!(" {:<28} {}\n", phase.name, format_duration(phase.duration)));
+    }
+    for call in timings.command_exists_calls() {
+        let tag = if call.cached { " [cached]" } else { "" };
+        let label = format!("  command_exists: {}{}", call.command, tag);
+        out.push_str(&format!(" {:<38} {}\n", label, format_duration(call.duration)));
+    }
+
+    out.push_str(&format!(" {}\n", "─".repeat(38)));
+    out.push_str(&format!(" {:<28} {}\n", "Total", format_duration(timings.total_duration())));
+    out
+}
+
+pub(crate) fn format_timings_json(timings: &runex_core::timings::Timings) -> serde_json::Value {
+    let phases: Vec<serde_json::Value> = timings.phases().iter().map(|p| {
+        serde_json::json!({
+            "name": p.name,
+            "duration_us": p.duration.as_micros() as u64,
+        })
+    }).collect();
+
+    let calls: Vec<serde_json::Value> = timings.command_exists_calls().iter().map(|c| {
+        serde_json::json!({
+            "command": c.command,
+            "found": c.found,
+            "duration_us": c.duration.as_micros() as u64,
+            "cached": c.cached,
+        })
+    }).collect();
+
+    serde_json::json!({
+        "phases": phases,
+        "command_exists_calls": calls,
+        "total_us": timings.total_duration().as_micros() as u64,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,9 +341,10 @@ mod tests {
             name: "config_file".into(),
             status: CheckStatus::Warn,
             detail: "detail".into(),
+            detail_verbose: None,
         };
 
-        let line = format_check_line(&check);
+        let line = format_check_line(&check, false);
         assert!(line.starts_with(&format!("[{ANSI_YELLOW}WARN{ANSI_RESET}]")));
         assert!(line.contains("config_file: detail"));
     }
@@ -321,6 +396,24 @@ mod tests {
         assert!(!s.contains('\x07'), "format_dry_run_result: BEL must be stripped: {s:?}");
     }
 
+    fn make_abbr(key: &str, exp: &str) -> runex_core::model::Abbr {
+        runex_core::model::Abbr {
+            key: key.into(),
+            expand: runex_core::model::PerShellString::All(exp.into()),
+            when_command_exists: None,
+        }
+    }
+
+    fn make_abbr_when(key: &str, exp: &str, cmds: Vec<&str>) -> runex_core::model::Abbr {
+        runex_core::model::Abbr {
+            key: key.into(),
+            expand: runex_core::model::PerShellString::All(exp.into()),
+            when_command_exists: Some(runex_core::model::PerShellCmds::All(
+                cmds.into_iter().map(String::from).collect(),
+            )),
+        }
+    }
+
     #[test]
     fn format_dry_run_no_match() {
         let config = runex_core::model::Config {
@@ -328,7 +421,7 @@ mod tests {
             keybind: runex_core::model::KeybindConfig::default(),
             abbr: vec![],
         };
-        let result = expand::which_abbr(&config, "xyz", |_| true);
+        let result = expand::which_abbr(&config, "xyz", runex_core::shell::Shell::Bash, |_| true);
         let out = format_dry_run_result("xyz", &result);
         assert!(out.contains("token: xyz"));
         assert!(out.contains("no rule matched"));
@@ -340,13 +433,9 @@ mod tests {
         let config = runex_core::model::Config {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
-            abbr: vec![runex_core::model::Abbr {
-                key: "gcm".into(),
-                expand: "git commit -m".into(),
-                when_command_exists: None,
-            }],
+            abbr: vec![make_abbr("gcm", "git commit -m")],
         };
-        let result = expand::which_abbr(&config, "gcm", |_| true);
+        let result = expand::which_abbr(&config, "gcm", runex_core::shell::Shell::Bash, |_| true);
         let out = format_dry_run_result("gcm", &result);
         assert!(out.contains("token: gcm"));
         assert!(out.contains("expanded  ->  git commit -m"));
@@ -358,13 +447,9 @@ mod tests {
         let config = runex_core::model::Config {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
-            abbr: vec![runex_core::model::Abbr {
-                key: "ls".into(),
-                expand: "lsd".into(),
-                when_command_exists: Some(vec!["lsd".into()]),
-            }],
+            abbr: vec![make_abbr_when("ls", "lsd", vec!["lsd"])],
         };
-        let result = expand::which_abbr(&config, "ls", |_| false);
+        let result = expand::which_abbr(&config, "ls", runex_core::shell::Shell::Bash, |_| false);
         let out = format_dry_run_result("ls", &result);
         assert!(out.contains("lsd: NOT FOUND"), "out: {out}");
         assert!(out.contains("pass-through"), "out: {out}");
@@ -376,21 +461,59 @@ mod tests {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
             abbr: vec![
-                runex_core::model::Abbr {
-                    key: "ls".into(),
-                    expand: "ls".into(),
-                    when_command_exists: None,
-                },
-                runex_core::model::Abbr {
-                    key: "ls".into(),
-                    expand: "lsd".into(),
-                    when_command_exists: None,
-                },
+                make_abbr("ls", "ls"),
+                make_abbr("ls", "lsd"),
             ],
         };
-        let result = expand::which_abbr(&config, "ls", |_| true);
+        let result = expand::which_abbr(&config, "ls", runex_core::shell::Shell::Bash, |_| true);
         let out = format_dry_run_result("ls", &result);
         assert!(out.contains("rule #1 skipped"), "out: {out}");
         assert!(out.contains("expanded  ->  lsd"), "out: {out}");
+    }
+
+    // ── timings formatting tests ────────────────────────────────────────
+
+    use runex_core::timings::Timings;
+    use std::time::Duration;
+
+    #[test]
+    fn format_duration_units() {
+        assert_eq!(format_duration(Duration::from_micros(500)), "500us");
+        assert_eq!(format_duration(Duration::from_micros(1500)), "1.50ms");
+        assert_eq!(format_duration(Duration::from_micros(1_500_000)), "1.50s");
+    }
+
+    #[test]
+    fn format_timings_table_shows_phases() {
+        let mut t = Timings::new();
+        t.record_phase("config_load", Duration::from_micros(1230));
+        t.record_phase("expand", Duration::from_micros(5670));
+        let out = format_timings_table(&t);
+        assert!(out.contains("config_load"), "out: {out}");
+        assert!(out.contains("expand"), "out: {out}");
+        assert!(out.contains("Total"), "out: {out}");
+    }
+
+    #[test]
+    fn format_timings_table_shows_command_exists_indented() {
+        let mut t = Timings::new();
+        t.record_phase("expand", Duration::from_micros(5670));
+        t.record_command_exists("git", true, Duration::from_micros(2340), false);
+        let out = format_timings_table(&t);
+        assert!(out.contains("  command_exists: git"), "cmd call must be indented: {out}");
+    }
+
+    #[test]
+    fn format_timings_json_structure() {
+        let mut t = Timings::new();
+        t.record_phase("config_load", Duration::from_micros(1230));
+        t.record_command_exists("git", true, Duration::from_micros(2340), false);
+        let v = format_timings_json(&t);
+        assert!(v.get("phases").unwrap().is_array());
+        assert!(v.get("command_exists_calls").unwrap().is_array());
+        assert!(v.get("total_us").unwrap().is_number());
+        let phase = &v["phases"][0];
+        assert_eq!(phase["name"], "config_load");
+        assert_eq!(phase["duration_us"], 1230);
     }
 }

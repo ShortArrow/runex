@@ -25,8 +25,8 @@ use std::time::Duration;
 
 pub(crate) const ANSI_RESET: &str = "\x1b[0m";
 pub(crate) const ANSI_GREEN: &str = "\x1b[32m";
-pub(crate) const ANSI_YELLOW: &str = "\x1b[33m";
 pub(crate) const ANSI_RED: &str = "\x1b[31m";
+pub(crate) const ANSI_YELLOW: &str = "\x1b[33m";
 pub(crate) const GIT_COMMIT: Option<&str> = option_env!("RUNEX_GIT_COMMIT");
 
 /// Column width for the check status tag in `doctor` output.
@@ -106,14 +106,24 @@ enum Commands {
         /// Print diagnostic output instead of the final expansion
         #[arg(long)]
         dry_run: bool,
+        /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
+        #[arg(long, value_name = "SHELL")]
+        shell: Option<String>,
     },
     /// List all abbreviations
-    List,
+    List {
+        /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
+        #[arg(long, value_name = "SHELL")]
+        shell: Option<String>,
+    },
     /// Check environment health
     Doctor {
         /// Skip shell alias conflict checks (avoids spawning pwsh/bash)
         #[arg(long)]
         no_shell_aliases: bool,
+        /// Show full error details (e.g. multi-line parse errors)
+        #[arg(long)]
+        verbose: bool,
     },
     /// Show build version information
     Version,
@@ -132,6 +142,23 @@ enum Commands {
         /// Show detailed reasoning
         #[arg(long)]
         why: bool,
+        /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
+        #[arg(long, value_name = "SHELL")]
+        shell: Option<String>,
+    },
+    /// Pre-compute command existence cache for shell startup
+    Precache {
+        /// Target shell: bash, zsh, pwsh, clink, nu
+        #[arg(long, value_name = "SHELL")]
+        shell: String,
+    },
+    /// Show per-phase timing breakdown of the expand flow
+    Timings {
+        /// Abbreviation key to time (if omitted, times all keys)
+        key: Option<String>,
+        /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
+        #[arg(long, value_name = "SHELL")]
+        shell: Option<String>,
     },
     /// Initialize runex: create config and add shell integration
     Init {
@@ -162,17 +189,29 @@ fn resolve_config(
 
 /// Load config, returning None on failure. Used by commands that degrade
 /// gracefully when config is absent (Doctor, Export).
-fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config>) {
+///
+/// Returns the config path, the parsed config (or None), and the error message if parsing failed.
+fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config>, Option<String>) {
     if let Some(path) = config_override {
-        return (path.to_path_buf(), load_config(path).ok());
+        let result = load_config(path);
+        let err = result.as_ref().err().map(|e| e.to_string());
+        return (path.to_path_buf(), result.ok(), err);
     }
     let path = default_config_path().unwrap_or_default();
-    let config = load_config(&path).ok();
-    (path, config)
+    let result = load_config(&path);
+    let err = result.as_ref().err().map(|e| e.to_string());
+    (path, result.ok(), err)
 }
 
 
-/// Build a `command_exists` closure.
+/// Compute the precache fingerprint for the current environment.
+fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> String {
+    let path_env = std::env::var("PATH").unwrap_or_default();
+    let mtime = runex_core::precache::config_mtime(config_path);
+    runex_core::precache::compute_fingerprint(&path_env, mtime, shell)
+}
+
+/// Build a `command_exists` closure with precache hint layer.
 ///
 /// When `path_prepend` is `Some(dir)`, files inside `dir` are checked first
 /// (bare name, and `.exe` on Windows). Falls through to `which::which`.
@@ -180,21 +219,69 @@ fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config
 /// Rejects any `cmd` containing `/`, `\`, or `:` because `when_command_exists`
 /// values must be bare command names, not filesystem paths. Accepting paths would
 /// allow directory traversal and absolute-path probing via `dir.join(cmd)`.
-fn make_command_exists(path_prepend: Option<&Path>) -> impl Fn(&str) -> bool + '_ {
+///
+/// ## Hint layer (precache)
+///
+/// If `RUNEX_CMD_CACHE_V1` env var contains a valid cache with matching fingerprint:
+/// - `cache[cmd] == true` → return true immediately (skip `which`)
+/// - `cache[cmd] == false` → re-check live (avoid stale false negatives after installs)
+/// - `cmd` not in cache → live check
+///
+/// Results are also cached in a `RefCell<HashMap>` per invocation to avoid
+/// repeated `which` calls within the same CLI run.
+fn make_command_exists<'a>(
+    path_prepend: Option<&'a Path>,
+    precache_fingerprint: Option<&str>,
+) -> impl Fn(&str) -> bool + 'a {
+    use runex_core::precache;
+
+    let hint = precache_fingerprint.and_then(precache::load_cache);
+    let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
+
     move |cmd: &str| -> bool {
         if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
             return false;
         }
-        if let Some(dir) = path_prepend {
-            if dir.join(cmd).is_file() {
-                return true;
-            }
-            #[cfg(windows)]
-            if dir.join(format!("{cmd}.exe")).is_file() {
-                return true;
+
+        // Per-invocation memoization (covers repeated checks within one run)
+        if let Some(&cached) = cache.borrow().get(cmd) {
+            return cached;
+        }
+
+        // Precache hint: trust true, re-check false
+        if let Some(ref h) = hint {
+            if let Some(&cached) = h.commands.get(cmd) {
+                if cached {
+                    cache.borrow_mut().insert(cmd.to_owned(), true);
+                    return true;
+                }
+                // cached == false → fall through to live check (may have been installed)
             }
         }
-        which::which(cmd).is_ok()
+
+        let exists = if let Some(dir) = path_prepend {
+            if dir.join(cmd).is_file() {
+                true
+            } else {
+                #[cfg(windows)]
+                {
+                    if dir.join(format!("{cmd}.exe")).is_file() {
+                        true
+                    } else {
+                        which::which(cmd).is_ok()
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    which::which(cmd).is_ok()
+                }
+            }
+        } else {
+            which::which(cmd).is_ok()
+        };
+
+        cache.borrow_mut().insert(cmd.to_owned(), exists);
+        exists
     }
 }
 
@@ -268,6 +355,19 @@ fn detect_shell() -> Option<Shell> {
     None
 }
 
+/// Resolve shell from optional `--shell` flag, falling back to `detect_shell()`.
+///
+/// Returns `None` when no shell could be determined (both flag absent and detection failed).
+fn resolve_shell(shell_flag: Option<&str>) -> Result<Option<Shell>, Box<dyn std::error::Error>> {
+    if let Some(s) = shell_flag {
+        let sh = s.parse::<Shell>().map_err(|e: runex_core::shell::ShellParseError| {
+            Box::<dyn std::error::Error>::from(e.to_string())
+        })?;
+        return Ok(Some(sh));
+    }
+    Ok(detect_shell())
+}
+
 /// Maximum byte length accepted from a single `prompt_confirm` read.
 /// A real y/N answer is at most a few bytes; anything beyond this limit
 /// is treated as "no" to prevent unbounded memory growth from piped input.
@@ -326,12 +426,12 @@ fn handle_version(json: bool) -> CmdResult {
     Ok(())
 }
 
-fn handle_list(config: &Config, json: bool) -> CmdResult {
+fn handle_list(config: &Config, shell: Option<Shell>, json: bool) -> CmdResult {
     if json {
         println!("{}", serde_json::to_string_pretty(&config.abbr)?);
     } else {
-        for (key, exp) in expand::list(config) {
-            println!("{}\t{}", sanitize_for_display(key), sanitize_for_display(exp));
+        for (key, exp) in expand::list(config, shell) {
+            println!("{}\t{}", sanitize_for_display(key), sanitize_for_display(&exp));
         }
     }
     Ok(())
@@ -340,6 +440,7 @@ fn handle_list(config: &Config, json: bool) -> CmdResult {
 fn handle_which(
     token: String,
     config: &Config,
+    shell: Shell,
     command_exists: &dyn Fn(&str) -> bool,
     json: bool,
     why: bool,
@@ -351,7 +452,7 @@ fn handle_which(
         );
         std::process::exit(1);
     }
-    let result = expand::which_abbr(config, &token, command_exists);
+    let result = expand::which_abbr(config, &token, shell, command_exists);
     if json {
         println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
     } else {
@@ -363,6 +464,7 @@ fn handle_which(
 fn handle_expand(
     token: String,
     config: &Config,
+    shell: Shell,
     command_exists: &dyn Fn(&str) -> bool,
     json: bool,
     dry_run: bool,
@@ -375,14 +477,14 @@ fn handle_expand(
         std::process::exit(1);
     }
     if dry_run {
-        let result = expand::which_abbr(config, &token, command_exists);
+        let result = expand::which_abbr(config, &token, shell, command_exists);
         if json {
             println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
         } else {
             print!("{}", format_dry_run_result(&token, &result));
         }
     } else {
-        let result = expand::expand(config, &token, command_exists);
+        let result = expand::expand(config, &token, shell, command_exists);
         if json {
             let v = match &result {
                 ExpandResult::Expanded(s) => serde_json::json!({
@@ -444,10 +546,88 @@ fn handle_export(
         let (_path, cfg) = resolve_config(config_flag)?;
         Some(cfg)
     } else {
-        let (_path, cfg) = resolve_config_opt(None);
+        let (_path, cfg, _err) = resolve_config_opt(None);
         cfg
     };
     print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
+    Ok(())
+}
+
+fn handle_precache(
+    shell: String,
+    config_flag: Option<&Path>,
+    path_prepend: Option<&Path>,
+) -> CmdResult {
+    use runex_core::precache;
+
+    let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
+        Box::<dyn std::error::Error>::from(e.to_string())
+    })?;
+    let shell_name = format!("{s:?}").to_lowercase();
+
+    let (config_path, config) = resolve_config(config_flag)?;
+    let fp = compute_precache_fingerprint(&config_path, &shell_name);
+
+    // Use a plain (non-cached) command_exists for the precache build
+    let command_exists = make_command_exists(path_prepend, None);
+    let cache = precache::build_cache(&config, &fp, &command_exists);
+    let json = precache::cache_to_json(&cache);
+
+    println!("{}", precache::export_statement(&shell_name, &json));
+    Ok(())
+}
+
+fn handle_timings(
+    key: Option<String>,
+    shell_str: Option<String>,
+    config_flag: Option<&Path>,
+    path_prepend: Option<&Path>,
+    json: bool,
+) -> CmdResult {
+    use runex_core::timings::{PhaseTimer, Timings};
+
+    let mut timings = Timings::new();
+
+    let t = PhaseTimer::start();
+    let (config_path, config) = resolve_config(config_flag)?;
+    timings.record_phase("config_load", t.elapsed());
+
+    let t = PhaseTimer::start();
+    let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
+    timings.record_phase("shell_resolve", t.elapsed());
+
+    let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
+    let command_exists = make_command_exists(path_prepend, Some(&fp));
+
+    match key {
+        Some(k) => {
+            if k.len() > MAX_TOKEN_BYTES {
+                eprintln!(
+                    "error: key is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
+                    k.len()
+                );
+                std::process::exit(1);
+            }
+            expand::expand_timed(&config, &k, shell, &command_exists, &mut timings);
+        }
+        None => {
+            // Time each unique abbr key
+            let keys: Vec<String> = config.abbr.iter().map(|a| a.key.clone()).collect();
+            let unique_keys: Vec<String> = {
+                let mut seen = std::collections::HashSet::new();
+                keys.into_iter().filter(|k| seen.insert(k.clone())).collect()
+            };
+            for key in &unique_keys {
+                expand::expand_timed(&config, key, shell, &command_exists, &mut timings);
+            }
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&format::format_timings_json(&timings))?);
+    } else {
+        print!("{}", format::format_timings_table(&timings));
+    }
     Ok(())
 }
 
@@ -455,12 +635,14 @@ fn handle_doctor(
     config_flag: Option<&Path>,
     path_prepend: Option<&Path>,
     no_shell_aliases: bool,
+    verbose: bool,
     json: bool,
 ) -> CmdResult {
-    let (config_path, config) = resolve_config_opt(config_flag);
-    let command_exists = make_command_exists(path_prepend);
+    let (config_path, config, parse_error) = resolve_config_opt(config_flag);
+    // Doctor checks live command existence — no precache (intentional)
+    let command_exists = make_command_exists(path_prepend, None);
     let spinner = Spinner::start("Checking environment...");
-    let mut result = doctor::diagnose(&config_path, config.as_ref(), &command_exists);
+    let mut result = doctor::diagnose(&config_path, config.as_ref(), parse_error.as_deref(), &command_exists);
     if !no_shell_aliases {
         add_shell_alias_conflicts(&mut result, config.as_ref());
     }
@@ -470,7 +652,7 @@ fn handle_doctor(
         println!("{}", serde_json::to_string_pretty(&result.checks)?);
     } else {
         for check in &result.checks {
-            println!("{}", format_check_line(check));
+            println!("{}", format_check_line(check, verbose));
         }
     }
 
@@ -563,28 +745,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Version => handle_version(cli.json)?,
-        Commands::List => {
+        Commands::List { shell: shell_str } => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
-            handle_list(&config, cli.json)?;
+            let shell = resolve_shell(shell_str.as_deref())?;
+            handle_list(&config, shell, cli.json)?;
         }
-        Commands::Which { token, why } => {
-            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
-            let command_exists = make_command_exists(cli.path_prepend.as_deref());
-            handle_which(token, &config, &command_exists, cli.json, why)?;
+        Commands::Which { token, why, shell: shell_str } => {
+            let (config_path, config) = resolve_config(cli.config.as_deref())?;
+            let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
+            let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
+            let command_exists = make_command_exists(cli.path_prepend.as_deref(), Some(&fp));
+            handle_which(token, &config, shell, &command_exists, cli.json, why)?;
         }
-        Commands::Expand { token, dry_run } => {
-            let (_config_path, config) = resolve_config(cli.config.as_deref())?;
-            let command_exists = make_command_exists(cli.path_prepend.as_deref());
-            handle_expand(token, &config, &command_exists, cli.json, dry_run)?;
+        Commands::Expand { token, dry_run, shell: shell_str } => {
+            let (config_path, config) = resolve_config(cli.config.as_deref())?;
+            let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
+            let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
+            let command_exists = make_command_exists(cli.path_prepend.as_deref(), Some(&fp));
+            handle_expand(token, &config, shell, &command_exists, cli.json, dry_run)?;
         }
         Commands::Export { shell, bin } => {
             handle_export(shell, bin, cli.config.as_deref())?;
         }
-        Commands::Doctor { no_shell_aliases } => {
+        Commands::Doctor { no_shell_aliases, verbose } => {
             handle_doctor(
                 cli.config.as_deref(),
                 cli.path_prepend.as_deref(),
                 no_shell_aliases,
+                verbose,
+                cli.json,
+            )?;
+        }
+        Commands::Precache { shell } => {
+            handle_precache(shell, cli.config.as_deref(), cli.path_prepend.as_deref())?;
+        }
+        Commands::Timings { key, shell: shell_str } => {
+            handle_timings(
+                key,
+                shell_str,
+                cli.config.as_deref(),
+                cli.path_prepend.as_deref(),
                 cli.json,
             )?;
         }
@@ -611,7 +811,7 @@ mod tests {
     #[test]
     /// `cargo` is guaranteed to be on PATH in a Rust build environment.
     fn make_command_exists_no_prepend_uses_which() {
-        let exists = make_command_exists(None);
+        let exists = make_command_exists(None, None);
         assert!(exists("cargo"));
         assert!(!exists("__runex_fake_cmd_that_does_not_exist__"));
     }
@@ -621,7 +821,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fake_bin = dir.path().join("myfaketool");
         std::fs::write(&fake_bin, b"").unwrap();
-        let exists = make_command_exists(Some(dir.path()));
+        let exists = make_command_exists(Some(dir.path()), None);
         assert!(exists("myfaketool"));
         assert!(!exists("__runex_other_fake__"));
     }

@@ -95,6 +95,9 @@ runex init                               create config and append shell integrat
 runex init -y                            same, skip confirmation prompts
 runex export <shell>                     generate shell integration script
 runex export <shell> --bin <name>        use a custom binary name in the script
+runex timings <key>                      show per-phase timing breakdown of expand
+runex timings                            time all abbreviation rules
+runex precache --shell <shell>           pre-compute command existence cache
 runex version                            show version and build commit
 ```
 
@@ -103,7 +106,7 @@ Global flags (accepted by every subcommand):
 ```
 --config <path>      override config file path (overrides RUNEX_CONFIG)
 --path-prepend <dir> prepend directory to PATH for command existence checks
---json               JSON output (supported by: list, doctor, version)
+--json               JSON output (supported by: list, doctor, version, expand, which, timings)
 ```
 
 ### 6.3 Config File
