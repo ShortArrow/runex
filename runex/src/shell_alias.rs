@@ -630,6 +630,7 @@ mod tests {
     /// A malicious or misbehaving shell binary on PATH must not cause alias
     /// loading to hang or exhaust memory. These tests cover both the per-process
     /// timeout and the maximum output size guard.
+    #[cfg(unix)]
     mod subprocess {
         use super::*;
 
