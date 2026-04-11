@@ -62,9 +62,9 @@ Or set up manually for each shell:
 
 ### bash
 
-Requires bash 4.0 or later. macOS ships bash 3.2; install a newer version via Homebrew (`brew install bash`) and set it as your shell.
+Requires bash 4.0 or later. macOS ships bash 3.2; install a newer version via Homebrew (`brew install bash`).
 
-`~/.bashrc`:
+Add to `~/.bashrc`:
 
 ```bash
 eval "$(runex export bash)"
@@ -72,7 +72,7 @@ eval "$(runex export bash)"
 
 ### zsh
 
-`~/.zshrc`:
+Add to `~/.zshrc`:
 
 ```zsh
 eval "$(runex export zsh)"
@@ -80,7 +80,7 @@ eval "$(runex export zsh)"
 
 ### PowerShell
 
-`$PROFILE`:
+Add to `$PROFILE`:
 
 ```powershell
 Invoke-Expression (& runex export pwsh | Out-String)
@@ -88,16 +88,21 @@ Invoke-Expression (& runex export pwsh | Out-String)
 
 ### Nushell
 
-Add to `env.nu` (typically `~/.config/nushell/env.nu`):
+Add to `~/.config/nushell/config.nu`:
+
+```nu
+source ~/.config/nushell/runex.nu
+```
+
+Then generate the script (re-run after config changes):
 
 ```nu
 runex export nu | save --force ~/.config/nushell/runex.nu
-source ~/.config/nushell/runex.nu
 ```
 
 ### cmd (Clink)
 
-Shell integration must be added manually. Save the script to Clink's script directory:
+Add to Clink's script directory (re-run after config changes):
 
 ```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua
