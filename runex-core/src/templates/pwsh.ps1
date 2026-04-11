@@ -112,6 +112,46 @@ function __runex_expand_space {
     }
 }
 
+# Paste detection via PSReadLine internal key queue.
+#
+# When a clipboard paste is processed, PSReadLine enqueues all the pasted
+# characters at once — so when our Spacebar handler fires on the first space
+# inside a paste, there are still unread keys waiting in _queuedKeys. Manual
+# typing goes through the same queue but one key at a time, so the count is 0.
+#
+# We access _queuedKeys via reflection. If the probe fails (PSReadLine API
+# change, etc.) we fall back to 0 and expansion runs as normal — we never
+# crash the handler.
+$Script:__runex_psrl_singleton_field = $null
+$Script:__runex_psrl_queued_keys_field = $null
+
+try {
+    $__runex_psrl_type = [Microsoft.PowerShell.PSConsoleReadLine]
+    $__runex_bf = [System.Reflection.BindingFlags]'NonPublic,Static,Instance'
+    $Script:__runex_psrl_singleton_field  = $__runex_psrl_type.GetField('_singleton',  $__runex_bf)
+    $Script:__runex_psrl_queued_keys_field = $__runex_psrl_type.GetField('_queuedKeys', $__runex_bf)
+} catch {
+    # PSReadLine internals changed — fields stay null and we fall back gracefully.
+}
+
+function __runex_queued_key_count {
+    if ($null -eq $Script:__runex_psrl_singleton_field -or
+        $null -eq $Script:__runex_psrl_queued_keys_field) {
+        return 0
+    }
+    try {
+        $inst = $Script:__runex_psrl_singleton_field.GetValue($null)
+        if ($null -eq $inst) { return 0 }
+        $q = $Script:__runex_psrl_queued_keys_field.GetValue($inst)
+        if ($null -eq $q) { return 0 }
+        [System.Threading.Monitor]::Enter($q)
+        try { return $q.Count }
+        finally { [System.Threading.Monitor]::Exit($q) }
+    } catch {
+        return 0
+    }
+}
+
 if (-not (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue)) {
     Import-Module PSReadLine -ErrorAction SilentlyContinue
 }
@@ -126,6 +166,15 @@ function __runex_register_expand_handler {
         Chord = $chord
         ScriptBlock = {
             param($key, $arg)
+
+            # Paste guard: if PSReadLine still has queued keys when the handler
+            # fires, we're in the middle of a multi-character paste. Just
+            # insert the space and skip expansion.
+            if ((__runex_queued_key_count) -gt 0) {
+                [Microsoft.PowerShell.PSConsoleReadLine]::Insert(' ')
+                return
+            }
+
             $line = $null
             $cursor = $null
             [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
