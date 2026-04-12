@@ -91,6 +91,10 @@ runex which <token>                      マッチするルールを表示
 runex which <token> --why                スキップ理由を含む全トレースを表示
 runex doctor                             設定と環境をチェック
 runex doctor --no-shell-aliases          alias 競合チェックをスキップ（シェル起動なし）
+runex doctor --strict                    不明な設定フィールドも警告
+runex add <key> <expand>                 略語ルールを設定に追加
+runex add <key> <expand> --when <cmd>    when_command_exists 付きで追加
+runex remove <key>                       略語ルールを設定から削除
 runex init                               設定を作成し、rc ファイルへシェル連携を追記
 runex init -y                            確認プロンプトをスキップ
 runex export <shell>                     シェル連携スクリプトを生成

@@ -62,9 +62,9 @@ Or set up manually for each shell:
 
 ### bash
 
-Requires bash 4.0 or later. macOS ships bash 3.2; install a newer version via Homebrew (`brew install bash`) and set it as your shell.
+Requires bash 4.0 or later. macOS ships bash 3.2; install a newer version via Homebrew (`brew install bash`).
 
-`~/.bashrc`:
+Add to `~/.bashrc`:
 
 ```bash
 eval "$(runex export bash)"
@@ -72,7 +72,7 @@ eval "$(runex export bash)"
 
 ### zsh
 
-`~/.zshrc`:
+Add to `~/.zshrc`:
 
 ```zsh
 eval "$(runex export zsh)"
@@ -80,7 +80,7 @@ eval "$(runex export zsh)"
 
 ### PowerShell
 
-`$PROFILE`:
+Add to `$PROFILE`:
 
 ```powershell
 Invoke-Expression (& runex export pwsh | Out-String)
@@ -88,16 +88,21 @@ Invoke-Expression (& runex export pwsh | Out-String)
 
 ### Nushell
 
-Add to `env.nu` (typically `~/.config/nushell/env.nu`):
+Add to `~/.config/nushell/config.nu`:
+
+```nu
+source ~/.config/nushell/runex.nu
+```
+
+Then generate the script (re-run after config changes):
 
 ```nu
 runex export nu | save --force ~/.config/nushell/runex.nu
-source ~/.config/nushell/runex.nu
 ```
 
 ### cmd (Clink)
 
-Shell integration must be added manually. Save the script to Clink's script directory:
+Add to Clink's script directory (re-run after config changes):
 
 ```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua
@@ -125,6 +130,10 @@ when_command_exists = ["lsd"]
 [[abbr]]
 key    = "gcm"
 expand = "git commit -m"
+
+[[abbr]]
+key    = "gcam"
+expand = "git commit -am '{}'"   # {} = cursor stays here after expansion
 ```
 
 See [docs/config-reference.md](docs/config-reference.md) for the full reference, including evaluation order, fallback chains, and all accepted fields.
@@ -139,6 +148,10 @@ runex which <token>                      show which rule matches
 runex which <token> --why                show full match trace with skip reasons
 runex doctor                             check config and environment
 runex doctor --no-shell-aliases          skip alias conflict checks
+runex doctor --strict                    also warn about unknown config fields
+runex add <key> <expand>                 add an abbreviation rule to config
+runex add <key> <expand> --when <cmd>    add with when_command_exists condition
+runex remove <key>                       remove an abbreviation rule from config
 runex init                               create config and append shell integration
 runex init -y                            same, skip confirmation prompts
 runex export <shell>                     generate shell integration script

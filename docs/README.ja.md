@@ -62,7 +62,7 @@ Appended integration to ~/.bashrc
 
 bash 4.0 以降が必要です。macOS には bash 3.2 が同梱されています。Homebrew で新しいバージョンをインストールしてください（`brew install bash`）。
 
-`~/.bashrc`:
+`~/.bashrc` に追加：
 
 ```bash
 eval "$(runex export bash)"
@@ -70,7 +70,7 @@ eval "$(runex export bash)"
 
 ### zsh
 
-`~/.zshrc`:
+`~/.zshrc` に追加：
 
 ```zsh
 eval "$(runex export zsh)"
@@ -78,7 +78,7 @@ eval "$(runex export zsh)"
 
 ### PowerShell
 
-`$PROFILE`:
+`$PROFILE` に追加：
 
 ```powershell
 Invoke-Expression (& runex export pwsh | Out-String)
@@ -86,16 +86,21 @@ Invoke-Expression (& runex export pwsh | Out-String)
 
 ### Nushell
 
-`env.nu`（多くの環境では `~/.config/nushell/env.nu`）に追加：
+`~/.config/nushell/config.nu` に追加：
+
+```nu
+source ~/.config/nushell/runex.nu
+```
+
+スクリプトを生成（設定変更時に再実行）：
 
 ```nu
 runex export nu | save --force ~/.config/nushell/runex.nu
-source ~/.config/nushell/runex.nu
 ```
 
 ### cmd (Clink)
 
-シェル連携は手動で追加する必要があります。Clink のスクリプトディレクトリに保存してください：
+Clink のスクリプトディレクトリに追加（設定変更時に再実行）：
 
 ```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua
@@ -123,6 +128,10 @@ when_command_exists = ["lsd"]
 [[abbr]]
 key    = "gcm"
 expand = "git commit -m"
+
+[[abbr]]
+key    = "gcam"
+expand = "git commit -am '{}'"   # {} = 展開後ここにカーソルが残る
 ```
 
 全フィールド・評価順・フォールバックチェーンの詳細は [docs/config-reference.md](config-reference.md) を参照してください。
@@ -137,6 +146,10 @@ runex which <token>                      マッチするルールを表示
 runex which <token> --why                スキップ理由を含む全トレースを表示
 runex doctor                             設定と環境をチェック
 runex doctor --no-shell-aliases          alias 競合チェックをスキップ
+runex doctor --strict                    不明な設定フィールドも警告
+runex add <key> <expand>                 略語ルールを設定に追加
+runex add <key> <expand> --when <cmd>    when_command_exists 付きで追加
+runex remove <key>                       略語ルールを設定から削除
 runex init                               設定ファイルを作成し、シェル連携を追記
 runex init -y                            確認プロンプトをスキップ
 runex export <shell>                     シェル連携スクリプトを生成

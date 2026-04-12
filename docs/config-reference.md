@@ -147,6 +147,18 @@ $ runex --path-prepend /tmp/fake-bins which ls
 
 `expand` is inserted verbatim as shell-native text. Runex does not re-escape or reinterpret it. Shell quoting and special characters are passed through as-is.
 
+### Cursor placeholder
+
+Use `{}` in the expansion text to control where the cursor lands after expansion:
+
+```toml
+[[abbr]]
+key    = "gcam"
+expand = "git commit -am '{}'"
+```
+
+When `gcam` is expanded, the cursor will be placed between the quotes instead of at the end. If `{}` is absent, the cursor goes to the end of the expansion (default behaviour).
+
 ### Field limits and rejected characters
 
 Runex validates each field at config load time and rejects invalid values with a clear error.
@@ -300,5 +312,32 @@ Cache rules:
 - `true` entries are trusted (skip `which`)
 - `false` entries are re-checked live (catches newly installed commands)
 - Missing entries trigger a live `which` check
+
+### `runex doctor --strict`
+
+Warns about unknown fields in the config file. Useful for catching typos:
+
+```
+$ runex doctor --strict
+[OK]    config_file: found: ~/.config/runex/config.toml
+[OK]    config_parse: config loaded successfully
+[WARN]  strict.unknown_field.abr: unknown top-level field 'abr' (did you mean 'abbr'?)
+[WARN]  strict.unknown_field.abbr[1].expad: unknown field 'expad' in abbr[1] (did you mean 'expand'?)
+```
+
+### `runex add` / `runex remove`
+
+Edit abbreviation rules from the command line without opening the config file:
+
+```bash
+# Add a rule
+runex add gcm "git commit -m"
+
+# Add with when_command_exists condition
+runex add ls lsd --when lsd
+
+# Remove a rule
+runex remove gcm
+```
 
 See also: [Commands — doctor](../README.md#commands), [Commands — which](../README.md#commands).

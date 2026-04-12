@@ -52,10 +52,18 @@
                     if not $command_pos {
                         commandline edit --insert ' '
                     } else {
-                        let expanded = ({NU_BIN} expand --token=($token) | complete | get stdout | str trim --right)
+                        let raw = ({NU_BIN} expand --token=($token) | complete | get stdout | str trim --right)
+                        # Split on unit separator for cursor placeholder
+                        let parts = ($raw | split row (char --unicode '001f'))
+                        let expanded = ($parts | first)
+                        let cursor_off = if ($parts | length) > 1 { ($parts | get 1 | into int) } else { null }
                         if $expanded != $token {
                             commandline edit --replace ($prefix + $expanded + $right)
-                            commandline set-cursor (($prefix | str length) + ($expanded | str length))
+                            if $cursor_off != null {
+                                commandline set-cursor (($prefix | str length) + $cursor_off)
+                            } else {
+                                commandline set-cursor (($prefix | str length) + ($expanded | str length))
+                            }
                         }
                         commandline edit --insert ' '
                     }

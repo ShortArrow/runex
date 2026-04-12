@@ -124,6 +124,9 @@ enum Commands {
         /// Show full error details (e.g. multi-line parse errors)
         #[arg(long)]
         verbose: bool,
+        /// Warn about unknown fields in config (catches typos like [[abr]])
+        #[arg(long)]
+        strict: bool,
     },
     /// Show build version information
     Version,
@@ -159,6 +162,21 @@ enum Commands {
         /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
         #[arg(long, value_name = "SHELL")]
         shell: Option<String>,
+    },
+    /// Add an abbreviation rule to the config file
+    Add {
+        /// Abbreviation key (e.g. "gcm")
+        key: String,
+        /// Expansion text (e.g. "git commit -m")
+        expand: String,
+        /// Only expand when these commands exist on PATH
+        #[arg(long, value_name = "CMD", num_args = 1..)]
+        when: Option<Vec<String>>,
+    },
+    /// Remove an abbreviation rule from the config file
+    Remove {
+        /// Abbreviation key to remove
+        key: String,
     },
     /// Initialize runex: create config and add shell integration
     Init {
@@ -487,7 +505,7 @@ fn handle_expand(
         let result = expand::expand(config, &token, shell, command_exists);
         if json {
             let v = match &result {
-                ExpandResult::Expanded(s) => serde_json::json!({
+                ExpandResult::Expanded { text: s, .. } => serde_json::json!({
                     "result": "expanded",
                     "token": token,
                     "expansion": s,
@@ -500,7 +518,14 @@ fn handle_expand(
             println!("{}", serde_json::to_string_pretty(&v)?);
         } else {
             match result {
-                ExpandResult::Expanded(s) => print!("{s}"),
+                ExpandResult::Expanded { text, cursor_offset } => {
+                    if let Some(offset) = cursor_offset {
+                        // Output text + unit separator + cursor offset for shell templates
+                        print!("{text}\x1f{offset}");
+                    } else {
+                        print!("{text}");
+                    }
+                }
                 ExpandResult::PassThrough(s) => print!("{s}"),
             }
         }
@@ -636,6 +661,7 @@ fn handle_doctor(
     path_prepend: Option<&Path>,
     no_shell_aliases: bool,
     verbose: bool,
+    strict: bool,
     json: bool,
 ) -> CmdResult {
     let (config_path, config, parse_error) = resolve_config_opt(config_flag);
@@ -645,6 +671,12 @@ fn handle_doctor(
     let mut result = doctor::diagnose(&config_path, config.as_ref(), parse_error.as_deref(), &command_exists);
     if !no_shell_aliases {
         add_shell_alias_conflicts(&mut result, config.as_ref());
+    }
+    if strict {
+        // Read config source for raw TOML field checking
+        if let Ok(source) = std::fs::read_to_string(&config_path) {
+            result.checks.extend(doctor::check_unknown_fields(&source));
+        }
     }
     spinner.stop();
 
@@ -767,12 +799,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Export { shell, bin } => {
             handle_export(shell, bin, cli.config.as_deref())?;
         }
-        Commands::Doctor { no_shell_aliases, verbose } => {
+        Commands::Doctor { no_shell_aliases, verbose, strict } => {
             handle_doctor(
                 cli.config.as_deref(),
                 cli.path_prepend.as_deref(),
                 no_shell_aliases,
                 verbose,
+                strict,
                 cli.json,
             )?;
         }
@@ -795,6 +828,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 default_config_path()?
             };
             handle_init(config_path, yes)?;
+        }
+        Commands::Add { key, expand, when } => {
+            let config_path = if let Some(p) = cli.config.as_deref() {
+                p.to_path_buf()
+            } else {
+                default_config_path()?
+            };
+            runex_core::config::append_abbr_to_file(
+                &config_path,
+                &key,
+                &expand,
+                when.as_deref(),
+            )?;
+            println!("Added: {} -> {}", sanitize_for_display(&key), sanitize_for_display(&expand));
+        }
+        Commands::Remove { key } => {
+            let config_path = if let Some(p) = cli.config.as_deref() {
+                p.to_path_buf()
+            } else {
+                default_config_path()?
+            };
+            let removed = runex_core::config::remove_abbr_from_file(&config_path, &key)?;
+            if removed > 0 {
+                println!("Removed {} rule(s) for '{}'", removed, sanitize_for_display(&key));
+            } else {
+                println!("No rule found for '{}'", sanitize_for_display(&key));
+            }
         }
     }
 
@@ -957,11 +1017,11 @@ mod tests {
     /// - Device files (`/dev/zero`, `/dev/urandom`): report len=0, `read_to_string()`
     ///   fills memory unboundedly.
     /// The function must check `metadata().is_file()` before attempting to read.
+    #[cfg(unix)]
     mod rc_file_non_regular {
         use super::*;
 
     #[test]
-    #[cfg(unix)]
     fn read_rc_content_rejects_named_pipe() {
         use std::ffi::CString;
         let dir = tempfile::tempdir().unwrap();

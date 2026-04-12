@@ -78,10 +78,23 @@ __runex_expand() {
         local expanded
         trap - DEBUG
         PROMPT_COMMAND=
-        expanded=$({BASH_BIN} expand --token="$token" 2>/dev/null)
+        local raw
+        raw=$({BASH_BIN} expand --token="$token" 2>/dev/null)
+        # Split on \x1f: text\x1fcursor_offset (or just text if no placeholder)
+        if [[ "$raw" == *$'\x1f'* ]]; then
+            expanded="${raw%%$'\x1f'*}"
+            local cursor_offset="${raw#*$'\x1f'}"
+        else
+            expanded="$raw"
+            local cursor_offset=""
+        fi
         if [ "$expanded" != "$token" ]; then
             READLINE_LINE="${prefix}${expanded}${suffix}"
-            READLINE_POINT=$((token_start + ${#expanded}))
+            if [ -n "$cursor_offset" ]; then
+                READLINE_POINT=$((token_start + cursor_offset))
+            else
+                READLINE_POINT=$((token_start + ${#expanded}))
+            fi
         fi
     fi
 

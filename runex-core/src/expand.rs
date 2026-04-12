@@ -77,9 +77,24 @@ where
                 continue; // no when_command_exists entry for this shell → skip
             }
         }
-        return ExpandResult::Expanded(expansion.to_string());
+        let text = expansion.to_string();
+        let (text, cursor_offset) = extract_cursor_placeholder(&text);
+        return ExpandResult::Expanded { text, cursor_offset };
     }
     ExpandResult::PassThrough(token.to_string())
+}
+
+/// Extract cursor placeholder `{}` from expansion text.
+/// Returns the text with `{}` removed and the byte offset where it was.
+fn extract_cursor_placeholder(text: &str) -> (String, Option<usize>) {
+    if let Some(pos) = text.find(crate::model::CURSOR_PLACEHOLDER) {
+        let mut result = String::with_capacity(text.len() - 2);
+        result.push_str(&text[..pos]);
+        result.push_str(&text[pos + 2..]);
+        (result, Some(pos))
+    } else {
+        (text.to_string(), None)
+    }
 }
 
 /// Like [`expand`], but records timing data into `timings`.
@@ -274,7 +289,7 @@ mod tests {
         let c = cfg(vec![abbr("gcm", "git commit -m")]);
         assert_eq!(
             expand(&c, "gcm", Shell::Bash, |_| true),
-            ExpandResult::Expanded("git commit -m".into())
+            ExpandResult::Expanded { text: "git commit -m".into(), cursor_offset: None }
         );
     }
 
@@ -292,7 +307,7 @@ mod tests {
         let c = cfg(vec![abbr("gcm", "git commit -m"), abbr("gp", "git push")]);
         assert_eq!(
             expand(&c, "gp", Shell::Bash, |_| true),
-            ExpandResult::Expanded("git push".into())
+            ExpandResult::Expanded { text: "git push".into(), cursor_offset: None }
         );
     }
 
@@ -310,7 +325,7 @@ mod tests {
         let c = cfg(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
         assert_eq!(
             expand(&c, "ls", Shell::Bash, |_| true),
-            ExpandResult::Expanded("lsd".into())
+            ExpandResult::Expanded { text: "lsd".into(), cursor_offset: None }
         );
     }
 
@@ -328,7 +343,7 @@ mod tests {
         let c = cfg(vec![abbr("ls", "ls"), abbr("ls", "lsd")]);
         assert_eq!(
             expand(&c, "ls", Shell::Bash, |_| true),
-            ExpandResult::Expanded("lsd".into())
+            ExpandResult::Expanded { text: "lsd".into(), cursor_offset: None }
         );
     }
 
@@ -337,7 +352,7 @@ mod tests {
         let c = cfg(vec![abbr_when("ls", "lsd", vec!["lsd"]), abbr("ls", "ls2")]);
         assert_eq!(
             expand(&c, "ls", Shell::Bash, |_| false),
-            ExpandResult::Expanded("ls2".into())
+            ExpandResult::Expanded { text: "ls2".into(), cursor_offset: None }
         );
     }
 
@@ -407,11 +422,11 @@ mod tests {
         )]);
         assert_eq!(
             expand(&c, "7z", Shell::Pwsh, |_| true),
-            ExpandResult::Expanded("7z.exe".into())
+            ExpandResult::Expanded { text: "7z.exe".into(), cursor_offset: None }
         );
         assert_eq!(
             expand(&c, "7z", Shell::Bash, |_| true),
-            ExpandResult::Expanded("7zip".into())
+            ExpandResult::Expanded { text: "7zip".into(), cursor_offset: None }
         );
     }
 
@@ -433,7 +448,7 @@ mod tests {
         // pwsh has an entry → expands
         assert_eq!(
             expand(&c, "7z", Shell::Pwsh, |_| true),
-            ExpandResult::Expanded("7z.exe".into())
+            ExpandResult::Expanded { text: "7z.exe".into(), cursor_offset: None }
         );
     }
 
@@ -498,7 +513,7 @@ mod tests {
         let c = cfg(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
         let mut timings = crate::timings::Timings::new();
         let result = expand_timed(&c, "ls", Shell::Bash, |_| true, &mut timings);
-        assert_eq!(result, ExpandResult::Expanded("lsd".into()));
+        assert_eq!(result, ExpandResult::Expanded { text: "lsd".into(), cursor_offset: None });
     }
 
     #[test]
@@ -523,5 +538,51 @@ mod tests {
             "must record an 'expand' phase, got: {:?}",
             phases.iter().map(|p| &p.name).collect::<Vec<_>>()
         );
+    }
+
+    // ── cursor placeholder tests ────────────────────────────────────────
+
+    #[test]
+    fn expand_with_cursor_placeholder() {
+        let c = cfg(vec![abbr("gcam", "git commit -am '{}'")] );
+        let result = expand(&c, "gcam", Shell::Bash, |_| true);
+        assert_eq!(
+            result,
+            ExpandResult::Expanded {
+                text: "git commit -am ''".into(),
+                cursor_offset: Some(16), // position between the quotes
+            }
+        );
+    }
+
+    #[test]
+    fn expand_without_cursor_placeholder() {
+        let c = cfg(vec![abbr("gcm", "git commit -m")]);
+        let result = expand(&c, "gcm", Shell::Bash, |_| true);
+        assert_eq!(
+            result,
+            ExpandResult::Expanded { text: "git commit -m".into(), cursor_offset: None }
+        );
+    }
+
+    #[test]
+    fn extract_cursor_placeholder_found() {
+        let (text, offset) = extract_cursor_placeholder("git commit -am '{}'");
+        assert_eq!(text, "git commit -am ''");
+        assert_eq!(offset, Some(16));
+    }
+
+    #[test]
+    fn extract_cursor_placeholder_not_found() {
+        let (text, offset) = extract_cursor_placeholder("git commit -m");
+        assert_eq!(text, "git commit -m");
+        assert_eq!(offset, None);
+    }
+
+    #[test]
+    fn extract_cursor_placeholder_at_end() {
+        let (text, offset) = extract_cursor_placeholder("echo {}");
+        assert_eq!(text, "echo ");
+        assert_eq!(offset, Some(5));
     }
 }
