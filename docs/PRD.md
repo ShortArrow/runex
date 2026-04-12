@@ -91,6 +91,10 @@ runex which <token>                      show which rule matches
 runex which <token> --why                show full match trace with skip reasons
 runex doctor                             check config and environment
 runex doctor --no-shell-aliases          skip alias conflict checks (avoids spawning shells)
+runex doctor --strict                    also warn about unknown config fields
+runex add <key> <expand>                 add an abbreviation rule to config
+runex add <key> <expand> --when <cmd>    add with when_command_exists condition
+runex remove <key>                       remove an abbreviation rule from config
 runex init                               create config and append shell integration to rc file
 runex init -y                            same, skip confirmation prompts
 runex export <shell>                     generate shell integration script
