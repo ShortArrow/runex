@@ -282,6 +282,38 @@ pub fn check_unknown_fields(config_source: &str) -> Vec<Check> {
     checks
 }
 
+/// Check for unreachable duplicate rules (strict mode).
+///
+/// A rule is unreachable if an earlier rule with the same key has no
+/// `when_command_exists` condition — it will always match first, making
+/// all later rules with that key dead code.
+pub fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
+    let mut checks = Vec::new();
+    // Track keys where an unconditional rule has been seen.
+    let mut unconditional_keys: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+
+    for (i, abbr) in config.abbr.iter().enumerate() {
+        if let Some(&first_rule) = unconditional_keys.get(abbr.key.as_str()) {
+            // A previous unconditional rule already matches this key.
+            checks.push(Check {
+                name: format!("strict.unreachable.abbr[{}]", i),
+                status: CheckStatus::Warn,
+                detail: format!(
+                    "rule #{} ('{}') is unreachable — rule #{} has the same key with no condition and always matches first",
+                    i + 1,
+                    sanitize_for_display(&abbr.key),
+                    first_rule + 1,
+                ),
+                detail_verbose: None,
+            });
+        } else if abbr.when_command_exists.is_none() {
+            // This is an unconditional rule — record it.
+            unconditional_keys.insert(&abbr.key, i);
+        }
+    }
+    checks
+}
+
 /// Run environment diagnostics.
 ///
 /// `config` is `None` when config loading failed (parse error, etc.).
@@ -690,6 +722,50 @@ trigerr = "space"
         assert_eq!(levenshtein("abc", "abd"), 1);
         assert_eq!(levenshtein("abr", "abbr"), 1);
         assert_eq!(levenshtein("expad", "expand"), 1);
+    }
+
+    #[test]
+    fn check_duplicate_key_without_condition() {
+        let cfg = test_config(vec![
+            abbr("gcm", "git commit -m"),
+            abbr("gcm", "git checkout main"),
+        ]);
+        let checks = check_unreachable_duplicates(&cfg);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].detail.contains("gcm"), "must mention the key: {:?}", checks[0].detail);
+        assert!(checks[0].detail.contains("unreachable"), "must say unreachable: {:?}", checks[0].detail);
+    }
+
+    #[test]
+    fn check_duplicate_key_with_condition_is_ok() {
+        let cfg = test_config(vec![
+            abbr_when("ls", "lsd", vec!["lsd"]),
+            abbr("ls", "ls --color=auto"),
+        ]);
+        let checks = check_unreachable_duplicates(&cfg);
+        assert!(checks.is_empty(), "fallback chain should not warn: {:?}", checks);
+    }
+
+    #[test]
+    fn check_duplicate_key_condition_then_no_condition_is_ok() {
+        let cfg = test_config(vec![
+            abbr_when("ls", "lsd", vec!["lsd"]),
+            abbr_when("ls", "eza", vec!["eza"]),
+            abbr("ls", "ls --color=auto"),
+        ]);
+        let checks = check_unreachable_duplicates(&cfg);
+        assert!(checks.is_empty(), "all-conditional + one fallback should not warn: {:?}", checks);
+    }
+
+    #[test]
+    fn check_no_condition_blocks_later_rules() {
+        let cfg = test_config(vec![
+            abbr("gcm", "git commit -m"),       // unconditional — always matches
+            abbr_when("gcm", "git cm", vec!["git"]),  // unreachable
+        ]);
+        let checks = check_unreachable_duplicates(&cfg);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].detail.contains("#2"), "must mention the rule number: {:?}", checks[0].detail);
     }
 
     } // mod strict

@@ -677,6 +677,10 @@ fn handle_doctor(
         if let Ok(source) = std::fs::read_to_string(&config_path) {
             result.checks.extend(doctor::check_unknown_fields(&source));
         }
+        // Check for unreachable duplicate rules
+        if let Some(cfg) = config.as_ref() {
+            result.checks.extend(doctor::check_unreachable_duplicates(cfg));
+        }
     }
     spinner.stop();
 
