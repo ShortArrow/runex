@@ -12,6 +12,19 @@ pub const CACHE_ENV_VAR: &str = "RUNEX_CMD_CACHE_V1";
 /// Current cache format version.
 const CACHE_VERSION: u32 = 1;
 
+/// Maximum byte length of the raw JSON env var value. Prevents memory/CPU DoS
+/// from a maliciously large `RUNEX_CMD_CACHE_V1`. 256 KiB is generous for any
+/// realistic config (10 000 rules × ~25 bytes/entry ≈ 250 KB).
+const MAX_CACHE_BYTES: usize = 256 * 1024;
+
+/// Maximum number of entries in the `commands` map. Mirrors `MAX_ABBR_RULES`
+/// in config validation — a cache should never have more entries than there
+/// are abbreviation rules.
+const MAX_CACHE_COMMANDS: usize = 10_000;
+
+/// Expected length of a fingerprint hex string (16 hex chars from u64).
+const FINGERPRINT_LEN: usize = 16;
+
 /// Serialized command existence cache.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CmdCache {
@@ -79,9 +92,25 @@ pub fn cache_to_json(cache: &CmdCache) -> String {
 }
 
 /// Parse a cache from JSON, returning None on any failure.
+///
+/// Rejects inputs that are too large, have too many command entries, use an
+/// unexpected version, or have a malformed fingerprint. This is a
+/// defense-in-depth measure — the cache is untrusted input from an
+/// environment variable.
 pub fn parse_cache(json: &str) -> Option<CmdCache> {
+    if json.len() > MAX_CACHE_BYTES {
+        return None;
+    }
     let cache: CmdCache = serde_json::from_str(json).ok()?;
     if cache.v != CACHE_VERSION {
+        return None;
+    }
+    if cache.fingerprint.len() != FINGERPRINT_LEN
+        || !cache.fingerprint.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    if cache.commands.len() > MAX_CACHE_COMMANDS {
         return None;
     }
     Some(cache)
@@ -212,8 +241,41 @@ mod tests {
 
     #[test]
     fn parse_wrong_version_returns_none() {
-        let json = r#"{"v":99,"fingerprint":"abc","commands":{}}"#;
+        let json = r#"{"v":99,"fingerprint":"0123456789abcdef","commands":{}}"#;
         assert!(parse_cache(json).is_none());
+    }
+
+    #[test]
+    fn parse_rejects_oversized_json() {
+        // Just over MAX_CACHE_BYTES
+        let huge = format!(
+            r#"{{"v":1,"fingerprint":"0123456789abcdef","commands":{{"{}":true}}}}"#,
+            "a".repeat(MAX_CACHE_BYTES)
+        );
+        assert!(parse_cache(&huge).is_none());
+    }
+
+    #[test]
+    fn parse_rejects_bad_fingerprint_format() {
+        // Too short
+        let json = r#"{"v":1,"fingerprint":"abc","commands":{}}"#;
+        assert!(parse_cache(json).is_none());
+
+        // Right length but non-hex
+        let json = r#"{"v":1,"fingerprint":"zzzzzzzzzzzzzzzz","commands":{}}"#;
+        assert!(parse_cache(json).is_none());
+    }
+
+    #[test]
+    fn parse_rejects_too_many_commands() {
+        let mut cmds = String::from("{");
+        for i in 0..=MAX_CACHE_COMMANDS {
+            if i > 0 { cmds.push(','); }
+            cmds.push_str(&format!(r#""cmd{i}":true"#));
+        }
+        cmds.push('}');
+        let json = format!(r#"{{"v":1,"fingerprint":"0123456789abcdef","commands":{cmds}}}"#);
+        assert!(parse_cache(&json).is_none());
     }
 
     #[test]
