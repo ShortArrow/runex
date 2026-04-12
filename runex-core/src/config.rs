@@ -253,6 +253,88 @@ pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     parse_config(&content)
 }
 
+/// Append an abbreviation rule to a config file.
+///
+/// Appends a `[[abbr]]` block at the end of the file, preserving existing
+/// content and formatting. Validates the new rule before appending.
+pub fn append_abbr_to_file(
+    path: &std::path::Path,
+    key: &str,
+    expand: &str,
+    when_command_exists: Option<&[String]>,
+) -> Result<(), ConfigError> {
+    let n = 0; // validation uses 1-indexed rule numbers, but we use 0 for "new rule"
+    validate_abbr_key(key, n)?;
+    validate_expand_value(expand, n)?;
+    if let Some(cmds) = when_command_exists {
+        for cmd in cmds {
+            validate_cmd_entry(cmd, n)?;
+        }
+    }
+
+    let mut block = String::from("\n[[abbr]]\n");
+    block.push_str(&format!("key = {}\n", toml_quote(key)));
+    block.push_str(&format!("expand = {}\n", toml_quote(expand)));
+    if let Some(cmds) = when_command_exists {
+        let quoted: Vec<String> = cmds.iter().map(|c| toml_quote(c)).collect();
+        block.push_str(&format!("when_command_exists = [{}]\n", quoted.join(", ")));
+    }
+
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(ConfigError::Io)?;
+    file.write_all(block.as_bytes()).map_err(ConfigError::Io)?;
+    Ok(())
+}
+
+/// Remove all abbreviation rules with the given key from a config file.
+///
+/// Uses `toml_edit` to parse and edit the file while preserving formatting.
+/// Returns the number of rules removed.
+pub fn remove_abbr_from_file(path: &std::path::Path, key: &str) -> Result<usize, ConfigError> {
+    let content = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
+    let mut doc = content.parse::<toml_edit::DocumentMut>().map_err(|_| {
+        // Re-parse with toml to get a proper ConfigError::Parse
+        let _ = toml::from_str::<crate::model::Config>(&content);
+        ConfigError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "failed to parse config as editable TOML"))
+    })?;
+
+    let removed = if let Some(toml_edit::Item::ArrayOfTables(arr)) = doc.get_mut("abbr") {
+        let before = arr.len();
+        let mut i = 0;
+        while i < arr.len() {
+            let matches = arr.get(i)
+                .and_then(|t| t.get("key"))
+                .and_then(|v| v.as_str())
+                .map(|k| k == key)
+                .unwrap_or(false);
+            if matches {
+                arr.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        before - arr.len()
+    } else {
+        0
+    };
+
+    if removed > 0 {
+        std::fs::write(path, doc.to_string()).map_err(ConfigError::Io)?;
+    }
+    Ok(removed)
+}
+
+/// Quote a string value for TOML output.
+fn toml_quote(s: &str) -> String {
+    // Use basic string with escaping for control chars
+    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{}\"", escaped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -960,4 +1042,102 @@ expand = "git commit -m"
     }
 
     } // mod expand_validation
+
+    mod add_remove {
+        use super::*;
+
+    #[test]
+    fn append_abbr_creates_valid_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "version = 1\n").unwrap();
+
+        append_abbr_to_file(&path, "gcm", "git commit -m", None).unwrap();
+
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.abbr.len(), 1);
+        assert_eq!(config.abbr[0].key, "gcm");
+    }
+
+    #[test]
+    fn append_abbr_with_when_command_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "version = 1\n").unwrap();
+
+        let cmds = vec!["lsd".to_string()];
+        append_abbr_to_file(&path, "ls", "lsd", Some(&cmds)).unwrap();
+
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.abbr[0].key, "ls");
+        assert!(config.abbr[0].when_command_exists.is_some());
+    }
+
+    #[test]
+    fn append_abbr_preserves_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, r#"version = 1
+
+[[abbr]]
+key = "gp"
+expand = "git push"
+"#).unwrap();
+
+        append_abbr_to_file(&path, "gcm", "git commit -m", None).unwrap();
+
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.abbr.len(), 2);
+        assert_eq!(config.abbr[0].key, "gp");
+        assert_eq!(config.abbr[1].key, "gcm");
+    }
+
+    #[test]
+    fn append_abbr_rejects_invalid_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "version = 1\n").unwrap();
+
+        assert!(append_abbr_to_file(&path, "", "git commit", None).is_err());
+    }
+
+    #[test]
+    fn remove_abbr_deletes_matching_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, r#"version = 1
+
+[[abbr]]
+key = "gcm"
+expand = "git commit -m"
+
+[[abbr]]
+key = "gp"
+expand = "git push"
+"#).unwrap();
+
+        let removed = remove_abbr_from_file(&path, "gcm").unwrap();
+        assert_eq!(removed, 1);
+
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.abbr.len(), 1);
+        assert_eq!(config.abbr[0].key, "gp");
+    }
+
+    #[test]
+    fn remove_abbr_returns_zero_for_missing_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, r#"version = 1
+
+[[abbr]]
+key = "gcm"
+expand = "git commit -m"
+"#).unwrap();
+
+        let removed = remove_abbr_from_file(&path, "xyz").unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    } // mod add_remove
 }

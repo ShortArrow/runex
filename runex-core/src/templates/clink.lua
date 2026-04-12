@@ -71,7 +71,14 @@ local function runex_expand_token(token)
     if expanded == "" then
         return token
     end
-    return expanded
+    -- Split on unit separator (\x1f) for cursor placeholder
+    local sep = expanded:find("\x1f")
+    if sep then
+        local text = expanded:sub(1, sep - 1)
+        local cursor_offset = tonumber(expanded:sub(sep + 1))
+        return text, cursor_offset
+    end
+    return expanded, nil
 end
 
 function runex_expand(rl_buffer, line_state)
@@ -93,12 +100,15 @@ function runex_expand(rl_buffer, line_state)
         local token_start = cursor - #token
         local prefix = line:sub(1, token_start - 1)
         if runex_is_command_position(prefix) and RUNEX_KNOWN[token] then
-            local expanded = runex_expand_token(token)
+            local expanded, cursor_offset = runex_expand_token(token)
             if expanded ~= token then
                 rl_buffer:beginundogroup()
                 rl_buffer:remove(token_start, cursor)
                 rl_buffer:setcursor(token_start)
                 rl_buffer:insert(expanded)
+                if cursor_offset then
+                    rl_buffer:setcursor(token_start + cursor_offset)
+                end
                 rl_buffer:endundogroup()
             end
         end

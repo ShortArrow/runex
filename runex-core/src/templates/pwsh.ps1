@@ -94,15 +94,29 @@ function __runex_expand_space {
         }
     }
 
-    $expanded = & {PWSH_BIN} expand "--token=$($candidate.Token)" 2>$null
-    if ($expanded -and $expanded -ne $candidate.Token) {
-        $line = $line.Substring(0, $candidate.TokenStart) + $expanded + $right
-        $cursor = $candidate.TokenStart + $expanded.Length
+    $raw = & {PWSH_BIN} expand "--token=$($candidate.Token)" 2>$null
+    if (-not $raw -or $raw -eq $candidate.Token) {
         return @{
-            Action = 'replace'
+            Action = 'insert'
             Line = $line.Substring(0, $cursor) + ' ' + $line.Substring($cursor)
             Cursor = $cursor + 1
         }
+    }
+    # Split on unit separator for cursor placeholder
+    $parts = $raw -split "`u{001f}", 2
+    $expanded = $parts[0]
+    $cursorOffset = if ($parts.Length -gt 1) { [int]$parts[1] } else { $null }
+
+    $line = $line.Substring(0, $candidate.TokenStart) + $expanded + $right
+    if ($null -ne $cursorOffset) {
+        $cursor = $candidate.TokenStart + $cursorOffset
+    } else {
+        $cursor = $candidate.TokenStart + $expanded.Length
+    }
+    return @{
+        Action = 'replace'
+        Line = $line.Substring(0, $cursor) + ' ' + $line.Substring($cursor)
+        Cursor = $cursor + 1
     }
 
     return @{

@@ -148,6 +148,140 @@ fn check_keybind(config: &Config) -> Vec<Check> {
     checks
 }
 
+/// Levenshtein distance between two strings (for "did you mean?" suggestions).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        curr[0] = i;
+        for j in 1..=b.len() {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// Find the closest match from `candidates` for `name` (Levenshtein distance ≤ 2).
+fn suggest_similar(name: &str, candidates: &[&str]) -> Option<String> {
+    candidates
+        .iter()
+        .filter_map(|&c| {
+            let d = levenshtein(name, c);
+            if d <= 2 && d > 0 { Some((c, d)) } else { None }
+        })
+        .min_by_key(|&(_, d)| d)
+        .map(|(c, _)| c.to_string())
+}
+
+/// Known top-level TOML keys in config.
+const KNOWN_TOP_LEVEL_KEYS: &[&str] = &["version", "keybind", "abbr"];
+
+/// Known keys inside an `[[abbr]]` table.
+const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists"];
+
+/// Known keys inside `[keybind]`.
+const KNOWN_KEYBIND_KEYS: &[&str] = &["trigger", "self_insert"];
+
+/// Known keys inside a keybind subtable (e.g. `[keybind.trigger]`).
+const KNOWN_KEYBIND_SUB_KEYS: &[&str] = &["default", "bash", "zsh", "pwsh", "nu"];
+
+/// Check for unknown fields in the raw TOML source (strict mode).
+///
+/// Parses the config as a raw TOML table and compares keys against whitelists.
+/// Returns Warn checks for each unknown field, with "did you mean?" suggestions.
+pub fn check_unknown_fields(config_source: &str) -> Vec<Check> {
+    let table: toml::Table = match config_source.parse() {
+        Ok(t) => t,
+        Err(_) => return vec![], // parse errors are caught by check_config_parse
+    };
+
+    let mut checks = Vec::new();
+
+    // Top-level keys
+    for key in table.keys() {
+        if !KNOWN_TOP_LEVEL_KEYS.contains(&key.as_str()) {
+            let suggestion = suggest_similar(key, KNOWN_TOP_LEVEL_KEYS);
+            let detail = match suggestion {
+                Some(s) => format!("unknown top-level field '{}' (did you mean '{}'?)", sanitize_for_display(key), s),
+                None => format!("unknown top-level field '{}'", sanitize_for_display(key)),
+            };
+            checks.push(Check {
+                name: format!("strict.unknown_field.{}", sanitize_for_display(key)),
+                status: CheckStatus::Warn,
+                detail,
+                detail_verbose: None,
+            });
+        }
+    }
+
+    // [keybind] subtable keys
+    if let Some(toml::Value::Table(kb)) = table.get("keybind") {
+        for key in kb.keys() {
+            if !KNOWN_KEYBIND_KEYS.contains(&key.as_str()) {
+                let suggestion = suggest_similar(key, KNOWN_KEYBIND_KEYS);
+                let detail = match suggestion {
+                    Some(s) => format!("unknown keybind field '{}' (did you mean '{}'?)", sanitize_for_display(key), s),
+                    None => format!("unknown keybind field '{}'", sanitize_for_display(key)),
+                };
+                checks.push(Check {
+                    name: format!("strict.unknown_field.keybind.{}", sanitize_for_display(key)),
+                    status: CheckStatus::Warn,
+                    detail,
+                    detail_verbose: None,
+                });
+            } else if let Some(toml::Value::Table(sub)) = kb.get(key) {
+                // Check keybind subtable keys (e.g. [keybind.trigger])
+                for sub_key in sub.keys() {
+                    if !KNOWN_KEYBIND_SUB_KEYS.contains(&sub_key.as_str()) {
+                        let suggestion = suggest_similar(sub_key, KNOWN_KEYBIND_SUB_KEYS);
+                        let detail = match suggestion {
+                            Some(s) => format!("unknown keybind.{} field '{}' (did you mean '{}'?)", key, sanitize_for_display(sub_key), s),
+                            None => format!("unknown keybind.{} field '{}'", key, sanitize_for_display(sub_key)),
+                        };
+                        checks.push(Check {
+                            name: format!("strict.unknown_field.keybind.{}.{}", key, sanitize_for_display(sub_key)),
+                            status: CheckStatus::Warn,
+                            detail,
+                            detail_verbose: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // [[abbr]] entries
+    if let Some(toml::Value::Array(abbrs)) = table.get("abbr") {
+        for (i, entry) in abbrs.iter().enumerate() {
+            if let toml::Value::Table(abbr_table) = entry {
+                for key in abbr_table.keys() {
+                    if !KNOWN_ABBR_KEYS.contains(&key.as_str()) {
+                        let suggestion = suggest_similar(key, KNOWN_ABBR_KEYS);
+                        let detail = match suggestion {
+                            Some(s) => format!(
+                                "unknown field '{}' in abbr[{}] (did you mean '{}'?)",
+                                sanitize_for_display(key), i + 1, s
+                            ),
+                            None => format!("unknown field '{}' in abbr[{}]", sanitize_for_display(key), i + 1),
+                        };
+                        checks.push(Check {
+                            name: format!("strict.unknown_field.abbr[{}].{}", i, sanitize_for_display(key)),
+                            status: CheckStatus::Warn,
+                            detail,
+                            detail_verbose: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    checks
+}
+
 /// Run environment diagnostics.
 ///
 /// `config` is `None` when config loading failed (parse error, etc.).
@@ -481,4 +615,82 @@ mod tests {
     }
 
     } // mod sanitization
+
+    mod strict {
+        use super::*;
+
+    #[test]
+    fn check_unknown_top_level_field() {
+        let toml = r#"
+version = 1
+abr = "typo"
+"#;
+        let checks = check_unknown_fields(toml);
+        assert!(
+            checks.iter().any(|c| c.detail.contains("abr") && c.detail.contains("did you mean 'abbr'")),
+            "must detect 'abr' typo: {:?}", checks
+        );
+    }
+
+    #[test]
+    fn check_unknown_abbr_field() {
+        let toml = r#"
+version = 1
+[[abbr]]
+key = "gcm"
+expad = "git commit -m"
+"#;
+        let checks = check_unknown_fields(toml);
+        assert!(
+            checks.iter().any(|c| c.detail.contains("expad") && c.detail.contains("did you mean 'expand'")),
+            "must detect 'expad' typo: {:?}", checks
+        );
+    }
+
+    #[test]
+    fn check_no_warnings_for_valid_config() {
+        let toml = r#"
+version = 1
+[keybind.trigger]
+default = "space"
+[[abbr]]
+key = "gcm"
+expand = "git commit -m"
+when_command_exists = ["git"]
+"#;
+        let checks = check_unknown_fields(toml);
+        assert!(checks.is_empty(), "valid config must produce no warnings: {:?}", checks);
+    }
+
+    #[test]
+    fn check_unknown_keybind_field() {
+        let toml = r#"
+version = 1
+[keybind]
+trigerr = "space"
+"#;
+        let checks = check_unknown_fields(toml);
+        assert!(
+            checks.iter().any(|c| c.detail.contains("trigerr") && c.detail.contains("did you mean 'trigger'")),
+            "must detect 'trigerr' typo: {:?}", checks
+        );
+    }
+
+    #[test]
+    fn suggest_similar_field_name() {
+        assert_eq!(suggest_similar("abr", KNOWN_TOP_LEVEL_KEYS), Some("abbr".to_string()));
+        assert_eq!(suggest_similar("expad", KNOWN_ABBR_KEYS), Some("expand".to_string()));
+        assert_eq!(suggest_similar("xyz_completely_different", KNOWN_TOP_LEVEL_KEYS), None);
+    }
+
+    #[test]
+    fn levenshtein_basic() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("abc", "abc"), 0);
+        assert_eq!(levenshtein("abc", "abd"), 1);
+        assert_eq!(levenshtein("abr", "abbr"), 1);
+        assert_eq!(levenshtein("expad", "expand"), 1);
+    }
+
+    } // mod strict
 }

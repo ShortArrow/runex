@@ -622,7 +622,7 @@ mod tests {
         );
         assert!(s.contains("bind -x"), "bash script must use bind");
         assert!(s.contains(r#"bind -r "\x20""#), "bash script must remove the space binding before rebinding");
-        assert!(s.contains("expanded=$('runex' expand"), "bash script must quote the executable");
+        assert!(s.contains("raw=$('runex' expand"), "bash script must quote the executable");
         assert!(s.contains("READLINE_LINE"), "bash script must use READLINE_LINE");
         assert!(s.contains("READLINE_POINT"), "bash script must inspect the cursor");
         assert!(!s.contains("{BASH_BIND_LINES}"), "bash script must resolve bind lines");
@@ -650,7 +650,7 @@ mod tests {
             !s.contains("Set-PSReadLineKeyHandler -Chord 'Tab' -Function Complete"),
             "pwsh script must not clobber the user's Tab binding"
         );
-        assert!(s.contains("$expanded = & 'runex' expand"), "pwsh script must quote the executable");
+        assert!(s.contains("$raw = & 'runex' expand"), "pwsh script must quote the executable");
         assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
         assert!(s.contains("EditMode"), "pwsh script must handle PSReadLine edit mode");
         assert!(s.contains("__runex_is_command_position"), "pwsh script must detect command position");
@@ -710,7 +710,7 @@ mod tests {
         assert!(s.contains("__runex_expand_buffer"), "zsh script must expose a testable helper");
         assert!(s.contains("LBUFFER"), "zsh script must inspect the text before the cursor");
         assert!(s.contains("RBUFFER"), "zsh script must inspect the text after the cursor");
-        assert!(s.contains("expanded=$('runex' expand"), "zsh script must quote the executable");
+        assert!(s.contains("raw=$('runex' expand"), "zsh script must quote the executable");
     }
 
     #[test]

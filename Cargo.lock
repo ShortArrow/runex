@@ -468,6 +468,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+ "toml_edit",
  "which",
 ]
 

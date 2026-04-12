@@ -65,10 +65,25 @@ function __runex_expand_buffer() {
             LBUFFER+=" "
             return
         fi
-        local expanded
-        expanded=$({ZSH_BIN} expand --token="$token" 2>/dev/null)
+        local raw
+        raw=$({ZSH_BIN} expand --token="$token" 2>/dev/null)
+        local expanded cursor_offset
+        if [[ "$raw" == *$'\x1f'* ]]; then
+            expanded="${raw%%$'\x1f'*}"
+            cursor_offset="${raw#*$'\x1f'}"
+        else
+            expanded="$raw"
+            cursor_offset=""
+        fi
         if [[ "$expanded" != "$token" ]]; then
             LBUFFER="${prefix}${expanded}"
+            if [[ -n "$cursor_offset" ]]; then
+                # LBUFFER length determines cursor; set it to prefix + offset
+                local full="${prefix}${expanded} "
+                LBUFFER="${full:0:$((${#prefix} + cursor_offset))}"
+                RBUFFER="${full:$((${#prefix} + cursor_offset))}"
+                return
+            fi
         fi
     fi
 

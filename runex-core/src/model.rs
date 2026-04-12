@@ -172,9 +172,15 @@ pub struct Config {
 /// Result of an expand operation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExpandResult {
-    Expanded(String),
+    /// Token was expanded. `cursor_offset` is the byte position within `text`
+    /// where the cursor should be placed (from the `{}` placeholder).
+    /// `None` means cursor goes to end of expansion (default).
+    Expanded { text: String, cursor_offset: Option<usize> },
     PassThrough(String),
 }
+
+/// Cursor placeholder marker in expansion text.
+pub const CURSOR_PLACEHOLDER: &str = "{}";
 
 #[cfg(test)]
 mod tests {
@@ -336,9 +342,9 @@ pwsh = "shift-space"
 
     #[test]
     fn expand_result_variants() {
-        let expanded = ExpandResult::Expanded("git commit -m".into());
+        let expanded = ExpandResult::Expanded { text: "git commit -m".into(), cursor_offset: None };
         let pass = ExpandResult::PassThrough("unknown".into());
-        assert_eq!(expanded, ExpandResult::Expanded("git commit -m".into()));
+        assert_eq!(expanded, ExpandResult::Expanded { text: "git commit -m".into(), cursor_offset: None });
         assert_eq!(pass, ExpandResult::PassThrough("unknown".into()));
     }
 }
