@@ -1,11 +1,32 @@
 -- runex shell integration for clink
 local RUNEX_BIN = {CLINK_BIN}
--- Pre-compute command existence cache
-local precache_handle = io.popen(RUNEX_BIN .. " precache --shell clink 2>nul")
-if precache_handle then
-    local precache_line = precache_handle:read("*l")
-    precache_handle:close()
-    if precache_line then os.execute(precache_line) end
+-- Pre-compute command existence cache using shell-native command detection
+local precache_cmds_handle = io.popen(RUNEX_BIN .. " precache --shell clink --list-commands 2>nul")
+local precache_cmds = precache_cmds_handle and precache_cmds_handle:read("*l") or nil
+if precache_cmds_handle then precache_cmds_handle:close() end
+
+if precache_cmds and #precache_cmds > 0 then
+    local resolved = {}
+    for cmd in precache_cmds:gmatch("[^,]+") do
+        local check = io.popen("where " .. cmd .. " 2>nul")
+        local found = check and check:read("*l") ~= nil
+        if check then check:close() end
+        table.insert(resolved, cmd .. "=" .. (found and "1" or "0"))
+    end
+    local resolved_str = table.concat(resolved, ",")
+    local precache_handle = io.popen(RUNEX_BIN .. " precache --shell clink --resolved " .. resolved_str .. " 2>nul")
+    if precache_handle then
+        local precache_line = precache_handle:read("*l")
+        precache_handle:close()
+        if precache_line then os.execute(precache_line) end
+    end
+else
+    local precache_handle = io.popen(RUNEX_BIN .. " precache --shell clink 2>nul")
+    if precache_handle then
+        local precache_line = precache_handle:read("*l")
+        precache_handle:close()
+        if precache_line then os.execute(precache_line) end
+    end
 end
 local RUNEX_KNOWN = {
 {CLINK_KNOWN_CASES}

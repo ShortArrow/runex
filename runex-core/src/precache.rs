@@ -214,12 +214,13 @@ pub fn export_statement(shell: &str, cache_json: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Abbr, Config, KeybindConfig, PerShellCmds, PerShellString};
+    use crate::model::{Abbr, Config, KeybindConfig, PrecacheConfig, PerShellCmds, PerShellString};
 
     fn test_config(abbrs: Vec<Abbr>) -> Config {
         Config {
             version: 1,
             keybind: KeybindConfig::default(),
+            precache: PrecacheConfig::default(),
             abbr: abbrs,
         }
     }

@@ -177,7 +177,7 @@ fn suggest_similar(name: &str, candidates: &[&str]) -> Option<String> {
 }
 
 /// Known top-level TOML keys in config.
-const KNOWN_TOP_LEVEL_KEYS: &[&str] = &["version", "keybind", "abbr"];
+const KNOWN_TOP_LEVEL_KEYS: &[&str] = &["version", "keybind", "precache", "abbr"];
 
 /// Known keys inside an `[[abbr]]` table.
 const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists"];
@@ -187,6 +187,9 @@ const KNOWN_KEYBIND_KEYS: &[&str] = &["trigger", "self_insert"];
 
 /// Known keys inside a keybind subtable (e.g. `[keybind.trigger]`).
 const KNOWN_KEYBIND_SUB_KEYS: &[&str] = &["default", "bash", "zsh", "pwsh", "nu"];
+
+/// Known keys inside `[precache]`.
+const KNOWN_PRECACHE_KEYS: &[&str] = &["path_only"];
 
 /// Check for unknown fields in the raw TOML source (strict mode).
 ///
@@ -249,6 +252,25 @@ pub fn check_unknown_fields(config_source: &str) -> Vec<Check> {
                         });
                     }
                 }
+            }
+        }
+    }
+
+    // [precache] keys
+    if let Some(toml::Value::Table(pc)) = table.get("precache") {
+        for key in pc.keys() {
+            if !KNOWN_PRECACHE_KEYS.contains(&key.as_str()) {
+                let suggestion = suggest_similar(key, KNOWN_PRECACHE_KEYS);
+                let detail = match suggestion {
+                    Some(s) => format!("unknown precache field '{}' (did you mean '{}'?)", sanitize_for_display(key), s),
+                    None => format!("unknown precache field '{}'", sanitize_for_display(key)),
+                };
+                checks.push(Check {
+                    name: format!("strict.unknown_field.precache.{}", sanitize_for_display(key)),
+                    status: CheckStatus::Warn,
+                    detail,
+                    detail_verbose: None,
+                });
             }
         }
     }
@@ -344,6 +366,7 @@ mod tests {
         Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: abbrs,
         }
     }
@@ -498,6 +521,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
@@ -519,6 +543,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
@@ -540,6 +565,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
@@ -561,6 +587,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);

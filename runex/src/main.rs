@@ -600,10 +600,14 @@ fn handle_precache(
 
     let (config_path, config) = resolve_config(config_flag)?;
 
-    // Mode 1: print comma-separated list of commands to check externally
+    // Mode 1: print comma-separated list of commands to check externally.
+    // When path_only is true, output nothing so the shell template falls
+    // back to which-based precache.
     if list_commands {
-        let cmds = precache::collect_unique_commands(&config);
-        print!("{}", cmds.join(","));
+        if !config.precache.path_only {
+            let cmds = precache::collect_unique_commands(&config);
+            print!("{}", cmds.join(","));
+        }
         return Ok(());
     }
 

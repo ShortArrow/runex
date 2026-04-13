@@ -159,12 +159,25 @@ pub struct Abbr {
     pub when_command_exists: Option<PerShellCmds>,
 }
 
+/// Precache configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub struct PrecacheConfig {
+    /// When true, only check PATH binaries (via which). Faster but misses
+    /// shell builtins, aliases, functions, and cmdlets.
+    /// When false (default), use shell-native detection (Get-Command,
+    /// command -v, etc.) for full coverage.
+    #[serde(default)]
+    pub path_only: bool,
+}
+
 /// Top-level configuration.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Config {
     pub version: u32,
     #[serde(default)]
     pub keybind: KeybindConfig,
+    #[serde(default)]
+    pub precache: PrecacheConfig,
     #[serde(default)]
     pub abbr: Vec<Abbr>,
 }
@@ -290,6 +303,7 @@ mod tests {
         let c = Config {
             version: 1,
             keybind: KeybindConfig::default(),
+            precache: PrecacheConfig::default(),
             abbr: vec![],
         };
         assert_eq!(c.version, 1);
