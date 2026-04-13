@@ -86,6 +86,47 @@ where
     }
 }
 
+/// Parse a `"cmd1=1,cmd2=0,..."` string into a `HashMap<String, bool>`.
+///
+/// Unknown entries (not `0` or `1`) are treated as `false`.
+pub fn parse_resolved(resolved: &str) -> HashMap<String, bool> {
+    let mut map = HashMap::new();
+    for entry in resolved.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        if let Some((cmd, val)) = entry.split_once('=') {
+            map.insert(cmd.to_string(), val == "1");
+        }
+    }
+    map
+}
+
+/// Build a cache from externally resolved command existence results.
+///
+/// Used when the calling shell (e.g. PowerShell) checks command existence
+/// via `Get-Command` instead of `which::which()`. Only commands referenced
+/// in the config's `when_command_exists` are included.
+pub fn build_cache_from_resolved(
+    config: &Config,
+    fingerprint: &str,
+    resolved_str: &str,
+) -> CmdCache {
+    let resolved = parse_resolved(resolved_str);
+    let cmds = collect_unique_commands(config);
+    let mut commands = HashMap::new();
+    for cmd in cmds {
+        let exists = resolved.get(&cmd).copied().unwrap_or(false);
+        commands.insert(cmd, exists);
+    }
+    CmdCache {
+        v: CACHE_VERSION,
+        fingerprint: fingerprint.to_string(),
+        commands,
+    }
+}
+
 /// Serialize a cache to JSON.
 pub fn cache_to_json(cache: &CmdCache) -> String {
     serde_json::to_string(cache).unwrap_or_default()
@@ -306,5 +347,33 @@ mod tests {
     fn export_statement_pwsh() {
         let stmt = export_statement("pwsh", r#"{"v":1}"#);
         assert!(stmt.starts_with("$env:RUNEX_CMD_CACHE_V1="));
+    }
+
+    #[test]
+    fn parse_resolved_basic() {
+        let map = parse_resolved("lsd=1,bat=0,git=1");
+        assert_eq!(map.get("lsd"), Some(&true));
+        assert_eq!(map.get("bat"), Some(&false));
+        assert_eq!(map.get("git"), Some(&true));
+    }
+
+    #[test]
+    fn parse_resolved_empty() {
+        let map = parse_resolved("");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn build_cache_from_resolved_uses_config_commands() {
+        let config = test_config(vec![
+            abbr_when("ls", "lsd", vec!["lsd"]),
+            abbr_when("7z", "7zip", vec!["7z"]),
+        ]);
+        let fp = compute_fingerprint("/usr/bin", 100, "pwsh");
+        let cache = build_cache_from_resolved(&config, &fp, "lsd=1,7z=0,extra=1");
+        assert_eq!(cache.commands.get("lsd"), Some(&true));
+        assert_eq!(cache.commands.get("7z"), Some(&false));
+        // "extra" is not in config, so not in cache
+        assert_eq!(cache.commands.get("extra"), None);
     }
 }

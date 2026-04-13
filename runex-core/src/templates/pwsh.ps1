@@ -1,5 +1,15 @@
 # runex shell integration for PowerShell
-Invoke-Expression (& {PWSH_BIN} precache --shell pwsh 2>$null) -ErrorAction SilentlyContinue
+# Pre-compute command existence cache using Get-Command (detects cmdlets, functions, aliases, and binaries)
+$__runex_cmds = & {PWSH_BIN} precache --shell pwsh --list-commands 2>$null
+if ($__runex_cmds) {
+    $__runex_resolved = ($__runex_cmds -split ',' | ForEach-Object {
+        "$_=$(if(Get-Command $_ -ErrorAction SilentlyContinue){1}else{0})"
+    }) -join ','
+    Invoke-Expression (& {PWSH_BIN} precache --shell pwsh --resolved $__runex_resolved 2>$null) -ErrorAction SilentlyContinue
+} else {
+    Invoke-Expression (& {PWSH_BIN} precache --shell pwsh 2>$null) -ErrorAction SilentlyContinue
+}
+Remove-Variable __runex_cmds, __runex_resolved -ErrorAction SilentlyContinue
 function __runex_trim_trailing_spaces {
     param([string]$text)
 
