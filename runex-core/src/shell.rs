@@ -483,6 +483,7 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
         .replace("{PWSH_REGISTER_LINES}", &pwsh_register_lines(trigger))
         .replace("{PWSH_SELF_INSERT_LINES}", &pwsh_self_insert_lines(self_insert))
         .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
+        .replace("{NU_BIN}", &nu_quote_string(bin))
         .replace("{NU_BINDINGS}", &nu_bindings(trigger, bin))
         .replace("{NU_SELF_INSERT_BINDINGS}", &nu_self_insert_lines(self_insert))
 }
@@ -1000,7 +1001,20 @@ mod tests {
     #[test]
     fn bin_with_special_chars_is_safe_in_nu() {
         let s = export_script(Shell::Nu, "runex; echo INJECTED", None);
-        assert!(!s.contains("echo INJECTED"), "nu: bin value must be quoted");
+        // The bin value must appear only inside double quotes, never as a
+        // naked command. `^"..."` runs the quoted external command literally.
+        assert!(
+            !s.contains("; echo INJECTED") || s.contains(r#"^"runex; echo INJECTED""#),
+            "nu: bin value must be quoted; got:\n{s}"
+        );
+        // Paranoia: ensure no unquoted `echo INJECTED` appears at start of a line.
+        for line in s.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                !trimmed.starts_with("echo INJECTED"),
+                "nu: unquoted injection detected: {line}"
+            );
+        }
     }
 
     /// In Nu, quoting a command name as `"runex"` makes it a string, not a command.
