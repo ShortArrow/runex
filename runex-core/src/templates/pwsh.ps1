@@ -1,19 +1,59 @@
 # runex shell integration for PowerShell
-# Pre-compute command existence cache using Get-Command (detects cmdlets, functions, aliases, and binaries)
+
+$__runex_resolve_commands = {
+    param([string]$cmdsStr)
+
+    function find_imported_commands {
+        param([string[]]$names)
+        $found = @{}
+        $prev = $PSModuleAutoLoadingPreference
+        $PSModuleAutoLoadingPreference = 'None'
+        try {
+            Get-Command -Name $names `
+                -ListImported `
+                -CommandType Alias,Function,Filter,Cmdlet,ExternalScript `
+                -ErrorAction Ignore |
+                ForEach-Object { $found[$_.Name] = $true }
+        }
+        finally {
+            $PSModuleAutoLoadingPreference = $prev
+        }
+        return $found
+    }
+
+    function path_contains_executable {
+        param([string]$name)
+        $pathext = @(($env:PATHEXT -split ';') | Where-Object { $_ })
+        if ($pathext.Count -eq 0) { $pathext = @('') }
+        foreach ($dir in ($env:PATH -split [System.IO.Path]::PathSeparator)) {
+            if (-not $dir) { continue }
+            foreach ($ext in $pathext) {
+                if ([System.IO.File]::Exists([System.IO.Path]::Combine($dir, "$name$ext"))) {
+                    return $true
+                }
+            }
+        }
+        return $false
+    }
+
+    $names = $cmdsStr -split ','
+    $found = find_imported_commands $names
+    foreach ($name in $names) {
+        if (-not $found[$name] -and (path_contains_executable $name)) {
+            $found[$name] = $true
+        }
+    }
+    return (($names | ForEach-Object { "$_=$(if($found[$_]){1}else{0})" }) -join ',')
+}
+
 $__runex_cmds = & {PWSH_BIN} precache --shell pwsh --list-commands 2>$null
 if ($__runex_cmds) {
-    # Check all commands in a single Get-Command call to minimize side effects
-    $__runex_found = @{}
-    Get-Command ($__runex_cmds -split ',') -ErrorAction SilentlyContinue |
-        ForEach-Object { $__runex_found[$_.Name] = $true }
-    $__runex_resolved = ($__runex_cmds -split ',' | ForEach-Object {
-        "$_=$(if($__runex_found[$_]){1}else{0})"
-    }) -join ','
+    $__runex_resolved = & $__runex_resolve_commands $__runex_cmds
     Invoke-Expression (& {PWSH_BIN} precache --shell pwsh --resolved $__runex_resolved 2>$null) -ErrorAction SilentlyContinue
 } else {
     Invoke-Expression (& {PWSH_BIN} precache --shell pwsh 2>$null) -ErrorAction SilentlyContinue
 }
-Remove-Variable __runex_cmds, __runex_resolved, __runex_found -ErrorAction SilentlyContinue
+Remove-Variable __runex_cmds, __runex_resolved, __runex_resolve_commands -ErrorAction SilentlyContinue
 function __runex_trim_trailing_spaces {
     param([string]$text)
 
