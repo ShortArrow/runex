@@ -195,6 +195,64 @@ const KNOWN_PRECACHE_KEYS: &[&str] = &["path_only"];
 ///
 /// Parses the config as a raw TOML table and compares keys against whitelists.
 /// Returns Warn checks for each unknown field, with "did you mean?" suggestions.
+/// Check for rules rejected by per-field validation.
+///
+/// Unlike `check_config_parse`, which surfaces only the first `ConfigError`
+/// from `parse_config`, this walks every rule and reports *all* validation
+/// failures with field-path diagnostics (e.g. `abbr[3].expand.pwsh`).
+///
+/// Config loading still stops at the first error — these warnings are
+/// observability only, not a lenient-load mode.
+pub fn check_rejected_rules(config_source: &str) -> Vec<Check> {
+    // If deserialization fails (syntax / unsupported version), check_config_parse
+    // already reports it. Emit nothing here.
+    let Ok(config) = crate::config::parse_config_lenient(config_source) else {
+        return vec![];
+    };
+    let issues = crate::config::collect_validation_issues(&config);
+    if issues.is_empty() {
+        return vec![];
+    }
+
+    let mut checks = Vec::with_capacity(issues.len() + 1);
+
+    // Summary check first, so the reader sees the semantics before the details.
+    checks.push(Check {
+        name: "config_rejected_rules".into(),
+        status: CheckStatus::Warn,
+        detail: format!(
+            "{} invalid abbr field(s) found; config loading still stops at the first one",
+            issues.len()
+        ),
+        detail_verbose: None,
+    });
+
+    for issue in issues {
+        let check = match &issue {
+            crate::config::ValidationIssue::Config { .. } => Check {
+                name: "config_validation".into(),
+                status: CheckStatus::Warn,
+                detail: format!("config rejected: {}", issue.reason_text()),
+                detail_verbose: None,
+            },
+            crate::config::ValidationIssue::Rule { rule_index, field_path, .. } => {
+                let safe_path = sanitize_for_display(field_path);
+                Check {
+                    name: format!("config_validation.abbr[{rule_index}].{safe_path}"),
+                    status: CheckStatus::Warn,
+                    detail: format!(
+                        "rule #{rule_index} field '{safe_path}' rejected: {}",
+                        issue.reason_text(),
+                    ),
+                    detail_verbose: None,
+                }
+            }
+        };
+        checks.push(check);
+    }
+    checks
+}
+
 pub fn check_unknown_fields(config_source: &str) -> Vec<Check> {
     let table: toml::Table = match config_source.parse() {
         Ok(t) => t,
@@ -796,4 +854,104 @@ trigerr = "space"
     }
 
     } // mod strict
+
+    mod rejected_rules {
+        use super::*;
+
+        #[test]
+        fn check_rejected_rules_empty_for_valid_config() {
+            let toml = r#"
+version = 1
+[[abbr]]
+key = "gcm"
+expand = "git commit -m"
+"#;
+            assert!(check_rejected_rules(toml).is_empty());
+        }
+
+        #[test]
+        fn check_rejected_rules_emits_summary_check_first() {
+            let toml = r#"
+version = 1
+[[abbr]]
+key = ""
+expand = "x"
+[[abbr]]
+key = "ls"
+expand = ""
+"#;
+            let checks = check_rejected_rules(toml);
+            assert!(!checks.is_empty());
+            assert_eq!(checks[0].name, "config_rejected_rules");
+            assert!(checks[0].detail.contains("2 invalid"), "summary count: {:?}", checks[0].detail);
+            // Remaining are per-field warns, sorted by rule order.
+            assert!(checks[1].name.starts_with("config_validation.abbr[1]."));
+            assert!(checks[2].name.starts_with("config_validation.abbr[2]."));
+        }
+
+        #[test]
+        fn check_rejected_rules_warns_for_each_bad_rule() {
+            let toml = r#"
+version = 1
+[[abbr]]
+key = ""
+expand = "something"
+[[abbr]]
+key = "lsa"
+expand = ""
+[[abbr]]
+key = "valid"
+expand = "echo ok"
+when_command_exists = ["good", "bad&inject"]
+"#;
+            let checks = check_rejected_rules(toml);
+            // 1 summary + 3 per-field = 4
+            assert_eq!(checks.len(), 4, "expected 1 summary + 3 warns: {checks:?}");
+            assert_eq!(checks[1].name, "config_validation.abbr[1].key");
+            assert_eq!(checks[2].name, "config_validation.abbr[2].expand");
+            assert_eq!(checks[3].name, "config_validation.abbr[3].when_command_exists[2]");
+        }
+
+        #[test]
+        fn check_rejected_rules_does_not_leak_raw_values() {
+            // Key contains a BEL control character. The check must not echo it.
+            let toml = "
+version = 1
+[[abbr]]
+key = \"gc\\u0007m\"
+expand = \"x\"
+";
+            let checks = check_rejected_rules(toml);
+            assert!(!checks.is_empty());
+            for check in &checks {
+                assert!(
+                    !check.detail.contains('\x07'),
+                    "raw BEL must not appear in detail: {:?}",
+                    check.detail
+                );
+                assert!(
+                    !check.name.contains('\x07'),
+                    "raw BEL must not appear in name: {:?}",
+                    check.name
+                );
+            }
+        }
+
+        #[test]
+        fn check_rejected_rules_skips_when_deserialization_fails() {
+            // Invalid TOML syntax — check_config_parse handles this.
+            let toml = "this is = not [ valid toml";
+            assert!(check_rejected_rules(toml).is_empty());
+        }
+
+        #[test]
+        fn check_rejected_rules_skips_when_unsupported_version() {
+            let toml = r#"version = 99
+[[abbr]]
+key = ""
+expand = "x"
+"#;
+            assert!(check_rejected_rules(toml).is_empty());
+        }
+    } // mod rejected_rules
 }

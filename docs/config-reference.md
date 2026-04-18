@@ -113,8 +113,26 @@ Each `[[abbr]]` entry defines one abbreviation rule.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `key` | string | yes | The short token to match. |
-| `expand` | string | yes | The full text to expand into. |
-| `when_command_exists` | array of strings | no | Only expand if **all** listed commands are resolvable by the shell's precache detector (see [`[precache]`](#precache)). |
+| `expand` | string or per-shell table | yes | The full text to expand into. See [per-shell form](#per-shell-form) below. |
+| `when_command_exists` | array of strings or per-shell table | no | Only expand if **all** listed commands are resolvable by the shell's precache detector (see [`[precache]`](#precache)). |
+
+#### Per-shell form
+
+Both `expand` and `when_command_exists` accept either a flat value (applied to every shell) or a per-shell table. The table fields are `default`, `bash`, `zsh`, `pwsh`, and `nu` — any missing shell falls back to `default`. Clink always uses `default`.
+
+```toml
+# Flat (shared across shells)
+[[abbr]]
+key    = "gcm"
+expand = "git commit -m"
+when_command_exists = ["git"]
+
+# Per-shell (different expansions / conditions per shell)
+[[abbr]]
+key = "rm"
+expand = { default = "rm -i", pwsh = "Remove-Item" }
+when_command_exists = { default = ["rm"], pwsh = ["Remove-Item"] }
+```
 
 ### Evaluation order
 
@@ -344,9 +362,25 @@ Cache rules:
 
 When `[precache] path_only = false` (the default), the shell integration emitted by `runex export <shell>` calls runex twice during startup: first to list the commands referenced by `when_command_exists`, then again to emit the final cache after the shell has resolved each command with its native detector. Users normally never invoke these helper modes directly.
 
+### `runex doctor` — rejected rule diagnostics
+
+When a rule fails per-field validation, `parse_config` returns the first error it encounters, which is the message shown in `config_parse`. `doctor` always also lists **every** rejected rule with its field path so you can see what else needs fixing:
+
+```
+$ runex doctor
+[OK]    config_file: found: ~/.config/runex/config.toml
+[ERROR] config_parse: failed to load config: abbr rule #1: key is empty (...)
+[WARN]  config_rejected_rules: 3 invalid abbr field(s) found; config loading still stops at the first one
+[WARN]  config_validation.abbr[1].key: rule #1 field 'key' rejected: key is empty
+[WARN]  config_validation.abbr[2].expand: rule #2 field 'expand' rejected: expand is empty
+[WARN]  config_validation.abbr[3].when_command_exists[1]: rule #3 field 'when_command_exists[1]' rejected: when_command_exists entry contains a shell metacharacter or glob pattern
+```
+
+Array indices and rule numbers in the field path are 1-based. The field path is a logical path — it mirrors the in-memory shape (e.g. `expand.pwsh`, `when_command_exists.default[2]`), not literal TOML syntax.
+
 ### `runex doctor --strict`
 
-Warns about unknown fields in the config file. Useful for catching typos:
+Warns about unknown fields in the config file and unreachable duplicate rules. Useful for catching typos:
 
 ```
 $ runex doctor --strict

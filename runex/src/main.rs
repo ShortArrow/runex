@@ -700,11 +700,18 @@ fn handle_doctor(
     if !no_shell_aliases {
         add_shell_alias_conflicts(&mut result, config.as_ref());
     }
+    // Read config source once (O_NOFOLLOW, size-capped) and share across checks.
+    let source = runex_core::config::read_config_source(&config_path).ok();
+
+    // Always: report every rule rejected by per-field validation so users know
+    // *all* the invalid fields, not just the first one that tripped parse_config.
+    if let Some(src) = source.as_deref() {
+        result.checks.extend(doctor::check_rejected_rules(src));
+    }
+
     if strict {
-        // Read config source for raw TOML field checking. Use the safe reader
-        // (O_NOFOLLOW, size cap, regular-file check) rather than plain read_to_string.
-        if let Ok(source) = runex_core::config::read_config_source(&config_path) {
-            result.checks.extend(doctor::check_unknown_fields(&source));
+        if let Some(src) = source.as_deref() {
+            result.checks.extend(doctor::check_unknown_fields(src));
         }
         // Check for unreachable duplicate rules
         if let Some(cfg) = config.as_ref() {
