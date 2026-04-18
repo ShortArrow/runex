@@ -13,7 +13,7 @@ runex is a cross-shell abbreviation engine that expands short tokens into full c
 - Cross-shell support (bash / zsh / pwsh / cmd / nushell)
 - Real-time expansion (customizable trigger key)
 - Single config file shared across shells
-- Conditional rules (`when_command_exists`)
+- Conditional rules (`when_command_exists`) — recognizes shell cmdlets, aliases, and user-defined functions, not just PATH binaries (behavior varies by shell; see [config-reference](docs/config-reference.md#precache))
 - Fast and lightweight (Rust core)
 
 ## Concept
@@ -36,6 +36,8 @@ Or with `mise`:
 ```bash
 mise use -g cargo:runex
 ```
+
+Or grab a pre-built binary — each [GitHub release](https://github.com/ShortArrow/runex/releases) ships binaries for Windows (x86_64), macOS (x86_64 / aarch64), Linux (x86_64 / aarch64), and Termux/Android (aarch64).
 
 If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
 
@@ -86,6 +88,8 @@ Add to `$PROFILE`:
 Invoke-Expression (& runex export pwsh | Out-String)
 ```
 
+Pasted text is inserted without mid-paste expansion (runex detects the paste via PSReadLine's key queue and skips the space handler).
+
 ### Nushell
 
 Add to `~/.config/nushell/config.nu`:
@@ -94,7 +98,7 @@ Add to `~/.config/nushell/config.nu`:
 source ~/.config/nushell/runex.nu
 ```
 
-Then generate the script (re-run after config changes):
+Then generate the script (re-run after config changes or after upgrading runex):
 
 ```nu
 runex export nu | save --force ~/.config/nushell/runex.nu
@@ -102,7 +106,7 @@ runex export nu | save --force ~/.config/nushell/runex.nu
 
 ### cmd (Clink)
 
-Add to Clink's script directory (re-run after config changes):
+Add to Clink's script directory (re-run after config changes or after upgrading runex):
 
 ```cmd
 runex export clink > %LOCALAPPDATA%\clink\runex.lua

@@ -77,7 +77,7 @@ shell adapters
 
 - トークン → 展開（最初に通過したルールを採用）
 - 自己ループガード: `key == expand` → ルールをスキップして評価継続
-- `when_command_exists`: リスト中のコマンドがひとつでもなければスキップして継続
+- `when_command_exists`: リスト中のコマンドがひとつでも precache detector（shell-native / PATH-only）で解決できなければスキップして継続
 - fallback: 未定義トークンはそのまま通過
 - 同一 key の複数ルール: フォールバックチェーンとして順番に評価
 
@@ -121,9 +121,12 @@ runex version                            バージョンとビルドコミット
 ```toml
 version = 1
 
-[keybind]
-trigger = "space"        # 全シェル共通のデフォルトトリガ
-bash    = "alt-space"    # シェル個別の上書き（省略可）
+[keybind.trigger]
+default = "space"       # 全シェル共通のデフォルトトリガ
+bash    = "alt-space"   # シェル個別の上書き（省略可）
+
+[precache]
+path_only = false       # false (既定): shell-native 検出、true: PATH バイナリのみ
 
 [[abbr]]
 key    = "ls"

@@ -77,7 +77,7 @@ shell adapters
 
 - Token → expansion (first passing rule wins)
 - Self-loop guard: `key == expand` → skip rule, continue evaluation
-- `when_command_exists`: skip rule if any listed command is absent from PATH; continue evaluation
+- `when_command_exists`: skip rule if any listed command cannot be resolved by the precache detector (shell-native or PATH-only); continue evaluation
 - Fallback: pass through undefined tokens unchanged
 - Multiple rules with the same key: evaluated in order as a fallback chain
 
@@ -121,9 +121,12 @@ Override: `RUNEX_CONFIG` env var or `--config` flag.
 ```toml
 version = 1
 
-[keybind]
-trigger = "space"        # default trigger for all shells
-bash    = "alt-space"    # shell-specific override (optional)
+[keybind.trigger]
+default = "space"       # default trigger for all shells
+bash    = "alt-space"   # shell-specific override (optional)
+
+[precache]
+path_only = false       # false (default): shell-native detection; true: PATH binaries only
 
 [[abbr]]
 key    = "ls"

@@ -155,3 +155,34 @@ RUNEX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) cargo publish -p runex
 ```
 
 `runex-core` must be published before `runex`.
+
+### GitHub binary release workflow
+
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds runex for every supported platform and attaches the binaries to the GitHub release for that tag. This is independent of the crates.io publish step above — users who prefer not to compile from source can download a pre-built binary.
+
+| Target                         | OS runner       | Archive |
+|--------------------------------|-----------------|---------|
+| x86_64-pc-windows-msvc         | windows-latest  | zip     |
+| x86_64-unknown-linux-gnu       | ubuntu-latest   | tar.gz  |
+| aarch64-unknown-linux-gnu      | ubuntu-latest   | tar.gz  |
+| x86_64-apple-darwin            | macos-latest    | tar.gz  |
+| aarch64-apple-darwin           | macos-latest    | tar.gz  |
+| aarch64-linux-android (Termux) | ubuntu-latest   | tar.gz  |
+
+Workflow hardening:
+
+- Top-level `permissions: contents: read`. Only the `release` job gets `contents: write` to publish the release; build jobs cannot mutate the repo.
+- `actions/checkout` on build jobs uses `persist-credentials: false` so the checkout token is not left on disk for malicious build code to exfiltrate.
+- All third-party actions are pinned to commit SHAs.
+- Only `GITHUB_TOKEN` is used — no external secrets, no automatic `cargo publish`.
+
+To cut a release after bumping version on `main`:
+
+```bash
+git checkout main
+git pull
+git tag -a vX.Y.Z <bump-commit> -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+The workflow takes about 10 minutes end-to-end (parallel builds across runners, plus the aggregation `release` job).
