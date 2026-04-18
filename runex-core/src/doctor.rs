@@ -177,7 +177,7 @@ fn suggest_similar(name: &str, candidates: &[&str]) -> Option<String> {
 }
 
 /// Known top-level TOML keys in config.
-const KNOWN_TOP_LEVEL_KEYS: &[&str] = &["version", "keybind", "abbr"];
+const KNOWN_TOP_LEVEL_KEYS: &[&str] = &["version", "keybind", "precache", "abbr"];
 
 /// Known keys inside an `[[abbr]]` table.
 const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists"];
@@ -187,6 +187,9 @@ const KNOWN_KEYBIND_KEYS: &[&str] = &["trigger", "self_insert"];
 
 /// Known keys inside a keybind subtable (e.g. `[keybind.trigger]`).
 const KNOWN_KEYBIND_SUB_KEYS: &[&str] = &["default", "bash", "zsh", "pwsh", "nu"];
+
+/// Known keys inside `[precache]`.
+const KNOWN_PRECACHE_KEYS: &[&str] = &["path_only"];
 
 /// Check for unknown fields in the raw TOML source (strict mode).
 ///
@@ -253,6 +256,25 @@ pub fn check_unknown_fields(config_source: &str) -> Vec<Check> {
         }
     }
 
+    // [precache] keys
+    if let Some(toml::Value::Table(pc)) = table.get("precache") {
+        for key in pc.keys() {
+            if !KNOWN_PRECACHE_KEYS.contains(&key.as_str()) {
+                let suggestion = suggest_similar(key, KNOWN_PRECACHE_KEYS);
+                let detail = match suggestion {
+                    Some(s) => format!("unknown precache field '{}' (did you mean '{}'?)", sanitize_for_display(key), s),
+                    None => format!("unknown precache field '{}'", sanitize_for_display(key)),
+                };
+                checks.push(Check {
+                    name: format!("strict.unknown_field.precache.{}", sanitize_for_display(key)),
+                    status: CheckStatus::Warn,
+                    detail,
+                    detail_verbose: None,
+                });
+            }
+        }
+    }
+
     // [[abbr]] entries
     if let Some(toml::Value::Array(abbrs)) = table.get("abbr") {
         for (i, entry) in abbrs.iter().enumerate() {
@@ -279,6 +301,38 @@ pub fn check_unknown_fields(config_source: &str) -> Vec<Check> {
         }
     }
 
+    checks
+}
+
+/// Check for unreachable duplicate rules (strict mode).
+///
+/// A rule is unreachable if an earlier rule with the same key has no
+/// `when_command_exists` condition — it will always match first, making
+/// all later rules with that key dead code.
+pub fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
+    let mut checks = Vec::new();
+    // Track keys where an unconditional rule has been seen.
+    let mut unconditional_keys: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+
+    for (i, abbr) in config.abbr.iter().enumerate() {
+        if let Some(&first_rule) = unconditional_keys.get(abbr.key.as_str()) {
+            // A previous unconditional rule already matches this key.
+            checks.push(Check {
+                name: format!("strict.unreachable.abbr[{}]", i),
+                status: CheckStatus::Warn,
+                detail: format!(
+                    "rule #{} ('{}') is unreachable — rule #{} has the same key with no condition and always matches first",
+                    i + 1,
+                    sanitize_for_display(&abbr.key),
+                    first_rule + 1,
+                ),
+                detail_verbose: None,
+            });
+        } else if abbr.when_command_exists.is_none() {
+            // This is an unconditional rule — record it.
+            unconditional_keys.insert(&abbr.key, i);
+        }
+    }
     checks
 }
 
@@ -312,6 +366,7 @@ mod tests {
         Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: abbrs,
         }
     }
@@ -466,6 +521,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
@@ -487,6 +543,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
@@ -508,6 +565,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
@@ -529,6 +587,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, |_| true);
@@ -690,6 +749,50 @@ trigerr = "space"
         assert_eq!(levenshtein("abc", "abd"), 1);
         assert_eq!(levenshtein("abr", "abbr"), 1);
         assert_eq!(levenshtein("expad", "expand"), 1);
+    }
+
+    #[test]
+    fn check_duplicate_key_without_condition() {
+        let cfg = test_config(vec![
+            abbr("gcm", "git commit -m"),
+            abbr("gcm", "git checkout main"),
+        ]);
+        let checks = check_unreachable_duplicates(&cfg);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].detail.contains("gcm"), "must mention the key: {:?}", checks[0].detail);
+        assert!(checks[0].detail.contains("unreachable"), "must say unreachable: {:?}", checks[0].detail);
+    }
+
+    #[test]
+    fn check_duplicate_key_with_condition_is_ok() {
+        let cfg = test_config(vec![
+            abbr_when("ls", "lsd", vec!["lsd"]),
+            abbr("ls", "ls --color=auto"),
+        ]);
+        let checks = check_unreachable_duplicates(&cfg);
+        assert!(checks.is_empty(), "fallback chain should not warn: {:?}", checks);
+    }
+
+    #[test]
+    fn check_duplicate_key_condition_then_no_condition_is_ok() {
+        let cfg = test_config(vec![
+            abbr_when("ls", "lsd", vec!["lsd"]),
+            abbr_when("ls", "eza", vec!["eza"]),
+            abbr("ls", "ls --color=auto"),
+        ]);
+        let checks = check_unreachable_duplicates(&cfg);
+        assert!(checks.is_empty(), "all-conditional + one fallback should not warn: {:?}", checks);
+    }
+
+    #[test]
+    fn check_no_condition_blocks_later_rules() {
+        let cfg = test_config(vec![
+            abbr("gcm", "git commit -m"),       // unconditional — always matches
+            abbr_when("gcm", "git cm", vec!["git"]),  // unreachable
+        ]);
+        let checks = check_unreachable_duplicates(&cfg);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].detail.contains("#2"), "must mention the rule number: {:?}", checks[0].detail);
     }
 
     } // mod strict

@@ -1,5 +1,19 @@
 # runex shell integration for zsh
-eval "$({ZSH_BIN} precache --shell zsh 2>/dev/null)"
+__runex_cmds=$({ZSH_BIN} precache --shell zsh --list-commands 2>/dev/null)
+if [[ -n "$__runex_cmds" ]]; then
+    __runex_resolved=""
+    for __runex_c in ${(s:,:)__runex_cmds}; do
+        if (( $+commands[$__runex_c] )) || whence -w "$__runex_c" >/dev/null 2>&1; then
+            __runex_resolved="${__runex_resolved:+$__runex_resolved,}${__runex_c}=1"
+        else
+            __runex_resolved="${__runex_resolved:+$__runex_resolved,}${__runex_c}=0"
+        fi
+    done
+    eval "$({ZSH_BIN} precache --shell zsh --resolved "$__runex_resolved" 2>/dev/null)"
+    unset __runex_cmds __runex_c __runex_resolved
+else
+    eval "$({ZSH_BIN} precache --shell zsh 2>/dev/null)"
+fi
 function __runex_trim_trailing_spaces() {
     local s="$1"
     while [[ "$s" == *" " ]]; do

@@ -252,6 +252,7 @@ mod tests {
         Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: abbrs,
         }
     }

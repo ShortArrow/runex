@@ -1,5 +1,20 @@
 # runex shell integration for bash
-eval "$({BASH_BIN} precache --shell bash 2>/dev/null)"
+__runex_cmds=$({BASH_BIN} precache --shell bash --list-commands 2>/dev/null)
+if [ -n "$__runex_cmds" ]; then
+    __runex_resolved=""
+    IFS=',' read -ra __runex_arr <<< "$__runex_cmds"
+    for __runex_c in "${__runex_arr[@]}"; do
+        if command -v "$__runex_c" >/dev/null 2>&1; then
+            __runex_resolved="${__runex_resolved:+$__runex_resolved,}${__runex_c}=1"
+        else
+            __runex_resolved="${__runex_resolved:+$__runex_resolved,}${__runex_c}=0"
+        fi
+    done
+    eval "$({BASH_BIN} precache --shell bash --resolved "$__runex_resolved" 2>/dev/null)"
+    unset __runex_cmds __runex_arr __runex_c __runex_resolved
+else
+    eval "$({BASH_BIN} precache --shell bash 2>/dev/null)"
+fi
 __runex_trim_trailing_spaces() {
     local s="$1"
     while [[ "$s" == *" " ]]; do

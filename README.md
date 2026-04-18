@@ -229,6 +229,10 @@ Later:
 - **rune x** (like 7z's "x" for extract)
 - **rune +x** (like chmod's "+x" execute)
 
+## Acknowledgements
+
+runex is inspired by [fish shell's abbreviation system](https://fishshell.com/docs/current/cmds/abbr.html) and [zsh-abbr](https://github.com/olets/zsh-abbr). The idea of real-time token expansion originated there — runex brings it to every shell with a single config file.
+
 ## License
 
 MIT

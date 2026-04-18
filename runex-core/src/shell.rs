@@ -483,6 +483,7 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
         .replace("{PWSH_REGISTER_LINES}", &pwsh_register_lines(trigger))
         .replace("{PWSH_SELF_INSERT_LINES}", &pwsh_self_insert_lines(self_insert))
         .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
+        .replace("{NU_BIN}", &nu_quote_string(bin))
         .replace("{NU_BINDINGS}", &nu_bindings(trigger, bin))
         .replace("{NU_SELF_INSERT_BINDINGS}", &nu_self_insert_lines(self_insert))
 }
@@ -592,6 +593,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         for shell in [Shell::Bash, Shell::Zsh, Shell::Pwsh, Shell::Clink, Shell::Nu] {
@@ -617,6 +619,7 @@ mod tests {
                     },
                     ..crate::model::KeybindConfig::default()
                 },
+                precache: crate::model::PrecacheConfig::default(),
                 abbr: vec![],
             }),
         );
@@ -642,6 +645,7 @@ mod tests {
                     },
                     ..crate::model::KeybindConfig::default()
                 },
+                precache: crate::model::PrecacheConfig::default(),
                 abbr: vec![],
             }),
         );
@@ -671,6 +675,7 @@ mod tests {
                     },
                     ..crate::model::KeybindConfig::default()
                 },
+                precache: crate::model::PrecacheConfig::default(),
                 abbr: vec![],
             }),
         );
@@ -702,6 +707,7 @@ mod tests {
                     },
                     ..crate::model::KeybindConfig::default()
                 },
+                precache: crate::model::PrecacheConfig::default(),
                 abbr: vec![],
             }),
         );
@@ -727,6 +733,7 @@ mod tests {
                     },
                     ..crate::model::KeybindConfig::default()
                 },
+                precache: crate::model::PrecacheConfig::default(),
                 abbr: vec![],
             }),
         );
@@ -750,6 +757,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Clink, "runex", Some(&config));
@@ -773,6 +781,7 @@ mod tests {
                     },
                     ..crate::model::KeybindConfig::default()
                 },
+                precache: crate::model::PrecacheConfig::default(),
                 abbr: vec![],
             }),
         );
@@ -791,6 +800,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
@@ -809,6 +819,7 @@ mod tests {
                 trigger: crate::model::PerShellKey { default: Some(TriggerKey::Space), ..Default::default() },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
 
@@ -837,6 +848,7 @@ mod tests {
                 trigger: crate::model::PerShellKey { default: Some(TriggerKey::Space), ..Default::default() },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
@@ -851,6 +863,7 @@ mod tests {
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "gcm".into(),
                 expand: crate::model::PerShellString::All("git commit -m".into()),
@@ -872,6 +885,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
@@ -892,6 +906,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
@@ -906,6 +921,7 @@ mod tests {
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "gcm".into(),
                 expand: crate::model::PerShellString::All("git commit -m".into()),
@@ -921,6 +937,7 @@ mod tests {
         let s = export_script(Shell::Bash, "runex", Some(&Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         }));
         assert!(!s.contains("bind -x"), "bash script should not bind keys by default");
@@ -929,6 +946,7 @@ mod tests {
         let s = export_script(Shell::Pwsh, "runex", Some(&Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         }));
         assert!(
@@ -943,6 +961,7 @@ mod tests {
         let s = export_script(Shell::Clink, "runex", Some(&Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         }));
         assert!(
@@ -982,7 +1001,20 @@ mod tests {
     #[test]
     fn bin_with_special_chars_is_safe_in_nu() {
         let s = export_script(Shell::Nu, "runex; echo INJECTED", None);
-        assert!(!s.contains("echo INJECTED"), "nu: bin value must be quoted");
+        // The bin value must appear only inside double quotes, never as a
+        // naked command. `^"..."` runs the quoted external command literally.
+        assert!(
+            !s.contains("; echo INJECTED") || s.contains(r#"^"runex; echo INJECTED""#),
+            "nu: bin value must be quoted; got:\n{s}"
+        );
+        // Paranoia: ensure no unquoted `echo INJECTED` appears at start of a line.
+        for line in s.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                !trimmed.starts_with("echo INJECTED"),
+                "nu: unquoted injection detected: {line}"
+            );
+        }
     }
 
     /// In Nu, quoting a command name as `"runex"` makes it a string, not a command.
@@ -998,6 +1030,7 @@ mod tests {
                 trigger: crate::model::PerShellKey { default: Some(TriggerKey::Space), ..Default::default() },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
@@ -1017,6 +1050,7 @@ mod tests {
                 trigger: crate::model::PerShellKey { default: Some(TriggerKey::Space), ..Default::default() },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "my\"app", Some(&config));
@@ -1035,6 +1069,7 @@ mod tests {
                 trigger: crate::model::PerShellKey { default: Some(TriggerKey::Space), ..Default::default() },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
@@ -1081,6 +1116,7 @@ mod tests {
                 trigger: crate::model::PerShellKey { default: Some(TriggerKey::Space), ..Default::default() },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
@@ -1107,6 +1143,7 @@ mod tests {
                 trigger: crate::model::PerShellKey { default: Some(TriggerKey::Space), ..Default::default() },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "runex\nsource /tmp/evil.nu\n", Some(&config));
@@ -1247,6 +1284,7 @@ mod tests {
         let s = export_script(Shell::Clink, "run\"ex", Some(&Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         }));
         assert!(
@@ -1260,6 +1298,7 @@ mod tests {
         let s = export_script(Shell::Clink, "run\"ex", Some(&Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         }));
         assert!(
@@ -1374,6 +1413,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
@@ -1394,6 +1434,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
@@ -1414,6 +1455,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
@@ -1434,6 +1476,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
@@ -1454,6 +1497,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
@@ -1474,6 +1518,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
@@ -1494,6 +1539,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
@@ -1514,6 +1560,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
@@ -1534,6 +1581,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Zsh, "runex", Some(&config));
@@ -1554,6 +1602,7 @@ mod tests {
                 },
                 ..crate::model::KeybindConfig::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let s = export_script(Shell::Zsh, "runex", Some(&config));
@@ -1575,6 +1624,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         // bash-specific override (AltSpace) takes precedence over default (Space)
@@ -1596,6 +1646,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         // nu has no shell-specific override, must use default (Tab)
@@ -1615,6 +1666,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         // Clink only uses trigger.default, not bash/zsh/pwsh/nu
@@ -1684,6 +1736,7 @@ mod tests {
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "*".into(),
                 expand: crate::model::PerShellString::All("echo star".into()),
@@ -1703,6 +1756,7 @@ mod tests {
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "g?".into(),
                 expand: crate::model::PerShellString::All("git".into()),
@@ -1721,6 +1775,7 @@ mod tests {
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "g[cm]".into(),
                 expand: crate::model::PerShellString::All("git".into()),
@@ -1739,6 +1794,7 @@ mod tests {
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
             abbr: vec![crate::model::Abbr {
                 key: "*".into(),
                 expand: crate::model::PerShellString::All("echo star".into()),
@@ -1765,6 +1821,7 @@ mod tests {
             let s = export_script(Shell::Pwsh, "runex", Some(&Config {
                 version: 1,
                 keybind: crate::model::KeybindConfig::default(),
+            precache: crate::model::PrecacheConfig::default(),
                 abbr,
             }));
             let default_count = s.matches("default {").count();

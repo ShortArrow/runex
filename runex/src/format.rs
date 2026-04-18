@@ -419,6 +419,7 @@ mod tests {
         let config = runex_core::model::Config {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
+            precache: runex_core::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = expand::which_abbr(&config, "xyz", runex_core::shell::Shell::Bash, |_| true);
@@ -433,6 +434,7 @@ mod tests {
         let config = runex_core::model::Config {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
+            precache: runex_core::model::PrecacheConfig::default(),
             abbr: vec![make_abbr("gcm", "git commit -m")],
         };
         let result = expand::which_abbr(&config, "gcm", runex_core::shell::Shell::Bash, |_| true);
@@ -447,6 +449,7 @@ mod tests {
         let config = runex_core::model::Config {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
+            precache: runex_core::model::PrecacheConfig::default(),
             abbr: vec![make_abbr_when("ls", "lsd", vec!["lsd"])],
         };
         let result = expand::which_abbr(&config, "ls", runex_core::shell::Shell::Bash, |_| false);
@@ -460,6 +463,7 @@ mod tests {
         let config = runex_core::model::Config {
             version: 1,
             keybind: runex_core::model::KeybindConfig::default(),
+            precache: runex_core::model::PrecacheConfig::default(),
             abbr: vec![
                 make_abbr("ls", "ls"),
                 make_abbr("ls", "lsd"),

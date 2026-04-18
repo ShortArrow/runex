@@ -56,6 +56,8 @@ pub enum ConfigError {
     CmdContainsDeceptiveUnicode(usize),
     #[error("abbr rule #{0}: when_command_exists entry contains a path separator ('/', '\\\\', or ':'); only bare command names are allowed")]
     CmdContainsPathSeparator(usize),
+    #[error("abbr rule #{0}: when_command_exists entry contains a shell metacharacter or glob pattern; only bare command names are allowed")]
+    CmdContainsMetacharacter(usize),
     #[error("abbr rule #{0}: when_command_exists has too many entries (max {MAX_CMD_LIST_LEN})")]
     TooManyCmds(usize),
     #[error("unsupported config version {0}; only version 1 is supported")]
@@ -158,6 +160,26 @@ fn validate_cmd_entry(cmd: &str, n: usize) -> Result<(), ConfigError> {
     if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
         return Err(ConfigError::CmdContainsPathSeparator(n));
     }
+    // Reject shell metacharacters, cmd.exe metacharacters, glob patterns, and
+    // the `,`/`=` delimiters used by the precache resolved protocol.
+    // Only bare alphanumeric command names (plus `-`, `_`, `.`, `+`) are allowed.
+    const METACHARS: &[char] = &[
+        // POSIX shell
+        '&', '|', ';', '<', '>', '`', '$', '(', ')', '{', '}', '\'', '"',
+        // cmd.exe
+        '%', '^',
+        // Whitespace that breaks shell/cmd tokenization
+        ' ', '\t',
+        // Glob patterns (matched by Get-Command -Name in pwsh)
+        '*', '?', '[', ']',
+        // Precache resolved protocol delimiters
+        ',', '=',
+        // Other risky punctuation in some shells
+        '!', '#', '~',
+    ];
+    if cmd.chars().any(|c| METACHARS.contains(&c)) {
+        return Err(ConfigError::CmdContainsMetacharacter(n));
+    }
     Ok(())
 }
 
@@ -226,6 +248,17 @@ pub(crate) fn xdg_config_home() -> Option<PathBuf> {
 /// (device nodes, FIFOs) can bypass the size guard by reporting `len() == 0`, so they
 /// are rejected via `is_file()` immediately after open.
 pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
+    let content = read_config_source(path)?;
+    parse_config(&content)
+}
+
+/// Read a config file into a string with the same safety guarantees as [`load_config`]:
+/// single fd for metadata+read (no TOCTOU), rejects symlinks at final path component on
+/// Unix, rejects non-regular files (FIFO / device nodes), and enforces the 10 MB size cap.
+///
+/// Use this when you need the raw TOML source (e.g. for `doctor --strict` unknown-field
+/// detection). For normal config loading, call `load_config` which parses the result.
+pub fn read_config_source(path: &std::path::Path) -> Result<String, ConfigError> {
     use std::io::Read;
     #[cfg(unix)]
     let mut file = {
@@ -250,13 +283,86 @@ pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     }
     let mut content = String::new();
     file.read_to_string(&mut content)?;
-    parse_config(&content)
+    Ok(content)
+}
+
+/// Open a config file for append/write, rejecting symlinks at the final path
+/// component on Unix. Prevents an attacker who controls the config directory
+/// from redirecting writes to a sensitive file via a swapped symlink.
+#[cfg(unix)]
+fn open_config_for_append_safely(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_config_for_append_safely(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    // Windows has no portable O_NOFOLLOW equivalent at open() time; rely on
+    // NTFS permissions at the config dir level.
+    std::fs::OpenOptions::new().create(true).append(true).open(path)
+}
+
+/// Atomically replace a config file: write to a sibling temp file then rename.
+/// On Unix the temp file is created with O_NOFOLLOW so a pre-existing symlink
+/// at the temp path cannot redirect the write.
+fn atomically_write_config(path: &std::path::Path, contents: &str) -> Result<(), ConfigError> {
+    use std::io::Write;
+    let parent = path.parent().ok_or_else(|| {
+        ConfigError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "config path has no parent directory",
+        ))
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| {
+            ConfigError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "config path has no file name",
+            ))
+        })?;
+    let tmp = parent.join(format!(".{file_name}.runex.tmp"));
+
+    // Best-effort cleanup of a stale temp file from a previous crash.
+    let _ = std::fs::remove_file(&tmp);
+
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&tmp)
+            .map_err(ConfigError::Io)?
+    };
+    #[cfg(not(unix))]
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&tmp)
+        .map_err(ConfigError::Io)?;
+
+    file.write_all(contents.as_bytes()).map_err(ConfigError::Io)?;
+    file.sync_all().map_err(ConfigError::Io)?;
+    drop(file);
+
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        ConfigError::Io(e)
+    })
 }
 
 /// Append an abbreviation rule to a config file.
 ///
 /// Appends a `[[abbr]]` block at the end of the file, preserving existing
-/// content and formatting. Validates the new rule before appending.
+/// content and formatting. Validates the new rule before appending. Rejects
+/// symlinks at the final path component on Unix.
 pub fn append_abbr_to_file(
     path: &std::path::Path,
     key: &str,
@@ -281,11 +387,7 @@ pub fn append_abbr_to_file(
     }
 
     use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(ConfigError::Io)?;
+    let mut file = open_config_for_append_safely(path).map_err(ConfigError::Io)?;
     file.write_all(block.as_bytes()).map_err(ConfigError::Io)?;
     Ok(())
 }
@@ -293,12 +395,11 @@ pub fn append_abbr_to_file(
 /// Remove all abbreviation rules with the given key from a config file.
 ///
 /// Uses `toml_edit` to parse and edit the file while preserving formatting.
-/// Returns the number of rules removed.
+/// Writes atomically via a sibling temp file + rename. Returns the number of
+/// rules removed.
 pub fn remove_abbr_from_file(path: &std::path::Path, key: &str) -> Result<usize, ConfigError> {
-    let content = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
+    let content = read_config_source(path)?;
     let mut doc = content.parse::<toml_edit::DocumentMut>().map_err(|_| {
-        // Re-parse with toml to get a proper ConfigError::Parse
-        let _ = toml::from_str::<crate::model::Config>(&content);
         ConfigError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "failed to parse config as editable TOML"))
     })?;
 
@@ -323,7 +424,7 @@ pub fn remove_abbr_from_file(path: &std::path::Path, key: &str) -> Result<usize,
     };
 
     if removed > 0 {
-        std::fs::write(path, doc.to_string()).map_err(ConfigError::Io)?;
+        atomically_write_config(path, &doc.to_string())?;
     }
     Ok(removed)
 }
@@ -911,6 +1012,31 @@ expand = "git commit -m"
             parse_config(toml).is_err(),
             "must reject when_command_exists entry containing colon"
         );
+    }
+
+    /// Shell/cmd metacharacters could be injected into shell-side precache
+    /// detection loops (e.g. clink's `io.popen("where " .. cmd)`) and allow
+    /// arbitrary command execution at shell startup.
+    #[test]
+    fn parse_config_rejects_shell_metacharacters_in_when_command_exists() {
+        let bad_entries = [
+            "a&b", "a|b", "a;b", "a<b", "a>b", "a`b", "a$b",
+            "a(b", "a)b", "a{b", "a}b", "a\"b", "a'b",
+            "a%b", "a^b",  // cmd.exe
+            "a b", "a\tb",  // whitespace breaks tokenization
+            "a*b", "a?b", "a[b", "a]b",  // glob
+            "a,b", "a=b",  // precache --resolved delimiters
+            "a!b", "a#b", "a~b",  // other risky punctuation
+        ];
+        for bad in &bad_entries {
+            let toml = format!(
+                "version = 1\n[[abbr]]\nkey = \"ls\"\nexpand = \"lsd\"\nwhen_command_exists = [\"{bad}\"]\n"
+            );
+            assert!(
+                parse_config(&toml).is_err(),
+                "must reject when_command_exists entry containing metachar: {bad:?}"
+            );
+        }
     }
 
     #[test]

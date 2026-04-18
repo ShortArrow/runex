@@ -154,6 +154,12 @@ enum Commands {
         /// Target shell: bash, zsh, pwsh, clink, nu
         #[arg(long, value_name = "SHELL")]
         shell: String,
+        /// Print the list of commands to check (for external resolution)
+        #[arg(long)]
+        list_commands: bool,
+        /// Use externally resolved command existence results instead of which
+        #[arg(long, value_name = "RESOLVED")]
+        resolved: Option<String>,
     },
     /// Show per-phase timing breakdown of the expand flow
     Timings {
@@ -580,6 +586,8 @@ fn handle_export(
 
 fn handle_precache(
     shell: String,
+    list_commands: bool,
+    resolved: Option<String>,
     config_flag: Option<&Path>,
     path_prepend: Option<&Path>,
 ) -> CmdResult {
@@ -591,9 +599,29 @@ fn handle_precache(
     let shell_name = format!("{s:?}").to_lowercase();
 
     let (config_path, config) = resolve_config(config_flag)?;
+
+    // Mode 1: print comma-separated list of commands to check externally.
+    // When path_only is true, output nothing so the shell template falls
+    // back to which-based precache.
+    if list_commands {
+        if !config.precache.path_only {
+            let cmds = precache::collect_unique_commands(&config);
+            print!("{}", cmds.join(","));
+        }
+        return Ok(());
+    }
+
     let fp = compute_precache_fingerprint(&config_path, &shell_name);
 
-    // Use a plain (non-cached) command_exists for the precache build
+    // Mode 2: use externally resolved results instead of which::which()
+    if let Some(resolved_str) = resolved {
+        let cache = precache::build_cache_from_resolved(&config, &fp, &resolved_str);
+        let json = precache::cache_to_json(&cache);
+        println!("{}", precache::export_statement(&shell_name, &json));
+        return Ok(());
+    }
+
+    // Default: use which::which() for command existence checks
     let command_exists = make_command_exists(path_prepend, None);
     let cache = precache::build_cache(&config, &fp, &command_exists);
     let json = precache::cache_to_json(&cache);
@@ -673,9 +701,14 @@ fn handle_doctor(
         add_shell_alias_conflicts(&mut result, config.as_ref());
     }
     if strict {
-        // Read config source for raw TOML field checking
-        if let Ok(source) = std::fs::read_to_string(&config_path) {
+        // Read config source for raw TOML field checking. Use the safe reader
+        // (O_NOFOLLOW, size cap, regular-file check) rather than plain read_to_string.
+        if let Ok(source) = runex_core::config::read_config_source(&config_path) {
             result.checks.extend(doctor::check_unknown_fields(&source));
+        }
+        // Check for unreachable duplicate rules
+        if let Some(cfg) = config.as_ref() {
+            result.checks.extend(doctor::check_unreachable_duplicates(cfg));
         }
     }
     spinner.stop();
@@ -809,8 +842,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cli.json,
             )?;
         }
-        Commands::Precache { shell } => {
-            handle_precache(shell, cli.config.as_deref(), cli.path_prepend.as_deref())?;
+        Commands::Precache { shell, list_commands, resolved } => {
+            handle_precache(shell, list_commands, resolved, cli.config.as_deref(), cli.path_prepend.as_deref())?;
         }
         Commands::Timings { key, shell: shell_str } => {
             handle_timings(
