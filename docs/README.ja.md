@@ -234,6 +234,6 @@ runex は [fish shell の略語システム](https://fishshell.com/docs/current/
 
 ## ライセンス
 
-MIT
+[MIT](../LICENSE) または [Apache-2.0](../LICENSE) のいずれかを選択可能（デュアルライセンス）。明示的に別途合意がない限り、本プロジェクトへのあらゆる貢献も同様のデュアルライセンスで提供されるものとします。
 
 サードパーティライセンスは [THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md) に記載しています。

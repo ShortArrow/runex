@@ -239,6 +239,6 @@ runex is inspired by [fish shell's abbreviation system](https://fishshell.com/do
 
 ## License
 
-MIT
+Dual-licensed under either of [MIT](LICENSE) or [Apache-2.0](LICENSE) at your option. Unless explicitly stated otherwise, any contribution intentionally submitted for inclusion in this work by you shall be dual-licensed as above, without any additional terms or conditions.
 
 Third-party dependency licenses are documented in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
