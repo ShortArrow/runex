@@ -701,8 +701,9 @@ fn handle_doctor(
         add_shell_alias_conflicts(&mut result, config.as_ref());
     }
     if strict {
-        // Read config source for raw TOML field checking
-        if let Ok(source) = std::fs::read_to_string(&config_path) {
+        // Read config source for raw TOML field checking. Use the safe reader
+        // (O_NOFOLLOW, size cap, regular-file check) rather than plain read_to_string.
+        if let Ok(source) = runex_core::config::read_config_source(&config_path) {
             result.checks.extend(doctor::check_unknown_fields(&source));
         }
         // Check for unreachable duplicate rules
