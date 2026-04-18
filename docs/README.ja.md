@@ -29,13 +29,19 @@ ls␣  → lsd
 cargo install runex
 ```
 
-`mise` を使う場合:
+`mise` を使ってソースからビルド:
 
 ```bash
 mise use -g cargo:runex
 ```
 
-ビルド済みバイナリを使う場合は [GitHub リリース](https://github.com/ShortArrow/runex/releases)から取得できます。Windows (x86_64)、macOS (x86_64 / aarch64)、Linux (x86_64 / aarch64)、Termux/Android (aarch64) 向けのバイナリが各リリースに添付されています。
+`mise` を使って GitHub リリースのビルド済みバイナリを使う（Rust ツールチェーン不要）:
+
+```bash
+mise use -g github:ShortArrow/runex
+```
+
+ビルド済みバイナリを直接取得する場合は [GitHub リリース](https://github.com/ShortArrow/runex/releases)から。Windows (x86_64)、macOS (x86_64 / aarch64)、Linux (x86_64 / aarch64)、Termux/Android (aarch64) 向けのバイナリが各リリースに添付されています。
 
 インストール後に `runex` が見つからない場合は、Cargo の bin ディレクトリが `PATH` に入っているか確認してください。
 

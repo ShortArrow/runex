@@ -31,13 +31,19 @@ ls␣  → lsd
 cargo install runex
 ```
 
-Or with `mise`:
+Or with `mise` — compile from source:
 
 ```bash
 mise use -g cargo:runex
 ```
 
-Or grab a pre-built binary — each [GitHub release](https://github.com/ShortArrow/runex/releases) ships binaries for Windows (x86_64), macOS (x86_64 / aarch64), Linux (x86_64 / aarch64), and Termux/Android (aarch64).
+Or with `mise` — pre-built binary from GitHub releases (no Rust toolchain needed):
+
+```bash
+mise use -g github:ShortArrow/runex
+```
+
+Or grab a pre-built binary directly — each [GitHub release](https://github.com/ShortArrow/runex/releases) ships binaries for Windows (x86_64), macOS (x86_64 / aarch64), Linux (x86_64 / aarch64), and Termux/Android (aarch64).
 
 If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
 
