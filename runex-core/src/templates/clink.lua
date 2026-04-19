@@ -68,8 +68,10 @@ local function runex_is_safe_token(token)
 end
 
 local function runex_shell_quote(s)
-    -- Wrap s in single quotes for POSIX shell, escaping any embedded single quotes.
-    return "'" .. s:gsub("'", "'\\''") .. "'"
+    -- cmd.exe quoting: wrap in double quotes and escape embedded double quotes.
+    -- POSIX single-quote wrapping would be interpreted literally by cmd.exe
+    -- (e.g. 'runex' would be treated as a file named "'runex'") and fail.
+    return '"' .. s:gsub('"', '\\"') .. '"'
 end
 
 local function runex_expand_token(token)
