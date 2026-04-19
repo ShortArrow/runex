@@ -23,55 +23,27 @@ gcm␣ → git commit -m
 ls␣  → lsd
 ```
 
-## インストール
+## クイックスタート
 
 ```bash
 cargo install runex
+runex init
 ```
 
-`mise` を使ってソースからビルド:
+## インストール
 
 ```bash
-mise use -g cargo:runex
+cargo install runex                       # Rust ツールチェーン
+brew install shortarrow/runex/runex       # macOS / Linux
+paru -S runex-bin                         # Arch Linux (AUR)
+winget install ShortArrow.runex           # Windows
 ```
 
-`mise` を使って GitHub リリースのビルド済みバイナリを使う（Rust ツールチェーン不要）:
-
-```bash
-mise use -g github:ShortArrow/runex
-```
-
-macOS / Linux では Homebrew から。runex はサードパーティの tap ([`shortarrow/homebrew-runex`](https://github.com/ShortArrow/homebrew-runex)) で配布しているので、完全修飾名で一行インストール:
-
-```bash
-brew install shortarrow/runex/runex
-```
-
-…もしくは tap を追加してから短縮名でインストール:
-
-```bash
-brew tap shortarrow/runex
-brew install runex
-```
-
-Arch Linux では AUR (ビルド済みバイナリ、[`runex-bin`](https://aur.archlinux.org/packages/runex-bin)) から:
-
-```bash
-paru -S runex-bin   # または yay -S runex-bin
-```
-
-ビルド済みバイナリを直接取得する場合は [GitHub リリース](https://github.com/ShortArrow/runex/releases)から。Windows (x86_64)、macOS (x86_64 / aarch64)、Linux (x86_64 / aarch64)、Termux/Android (aarch64) 向けのバイナリが各リリースに添付されています。
-
-インストール後に `runex` が見つからない場合は、Cargo の bin ディレクトリが `PATH` に入っているか確認してください。
-
-- Linux/macOS: `~/.cargo/bin`
-- Windows: `%USERPROFILE%\.cargo\bin`
-
-生成されたシェルスクリプトと `config.toml` はローカルのシェル環境に入ります。信頼できるファイルだけを読み込んでください。
+mise・ビルド済みバイナリ・プラットフォーム別の注意事項など、その他の経路は [docs/install.ja.md](install.ja.md) を参照してください。
 
 ## セットアップ
 
-`runex init` が最短の方法です。設定ファイルを作成し、rc ファイルへのシェル連携行の追記を確認付きで行います：
+`runex init` が設定ファイルを作成し、rc ファイルにシェル連携行を追記します。各ステップで確認プロンプトが出ます:
 
 ```
 $ runex init
@@ -81,59 +53,7 @@ Append shell integration to ~/.bashrc? [y/N] y
 Appended integration to ~/.bashrc
 ```
 
-`-y` を付けると確認プロンプトをすべてスキップします。Clink はシェル連携の自動追記に対応していないため、手動で追加してください（下記参照）。
-
-各シェルへ手動で設定する場合：
-
-### bash
-
-bash 4.0 以降が必要です。macOS には bash 3.2 が同梱されています。Homebrew で新しいバージョンをインストールしてください（`brew install bash`）。
-
-`~/.bashrc` に追加：
-
-```bash
-eval "$(runex export bash)"
-```
-
-### zsh
-
-`~/.zshrc` に追加：
-
-```zsh
-eval "$(runex export zsh)"
-```
-
-### PowerShell
-
-`$PROFILE` に追加：
-
-```powershell
-Invoke-Expression (& runex export pwsh | Out-String)
-```
-
-貼り付けたテキストは途中で展開されません（PSReadLine のキーキュー経由で paste を検出し、スペースキーハンドラをスキップします）。
-
-### Nushell
-
-`~/.config/nushell/config.nu` に追加：
-
-```nu
-source ~/.config/nushell/runex.nu
-```
-
-スクリプトを生成（設定変更時・runex をアップグレードした時に再実行）：
-
-```nu
-runex export nu | save --force ~/.config/nushell/runex.nu
-```
-
-### cmd (Clink)
-
-Clink のスクリプトディレクトリに追加（設定変更時・runex をアップグレードした時に再実行）：
-
-```cmd
-runex export clink > %LOCALAPPDATA%\clink\runex.lua
-```
+`-y` を付けると確認をすべてスキップします。シェル別の手動設定 (bash / zsh / pwsh / nu / clink) は [docs/setup.ja.md](setup.ja.md) を参照してください。
 
 ## 設定
 

@@ -25,55 +25,27 @@ gcm␣ → git commit -m
 ls␣  → lsd
 ```
 
-## Installation
+## Quick start
 
 ```bash
 cargo install runex
+runex init
 ```
 
-Or with `mise` — compile from source:
+## Install
 
 ```bash
-mise use -g cargo:runex
+cargo install runex                       # Rust toolchain
+brew install shortarrow/runex/runex       # macOS / Linux
+paru -S runex-bin                         # Arch Linux (AUR)
+winget install ShortArrow.runex           # Windows
 ```
 
-Or with `mise` — pre-built binary from GitHub releases (no Rust toolchain needed):
-
-```bash
-mise use -g github:ShortArrow/runex
-```
-
-On macOS or Linux via Homebrew. runex lives in a third-party tap ([`shortarrow/homebrew-runex`](https://github.com/ShortArrow/homebrew-runex)), so either install it in one line with the fully-qualified name:
-
-```bash
-brew install shortarrow/runex/runex
-```
-
-…or add the tap first and install with the short name:
-
-```bash
-brew tap shortarrow/runex
-brew install runex
-```
-
-On Arch Linux via the AUR (pre-built binary, [`runex-bin`](https://aur.archlinux.org/packages/runex-bin)):
-
-```bash
-paru -S runex-bin   # or: yay -S runex-bin
-```
-
-Or grab a pre-built binary directly — each [GitHub release](https://github.com/ShortArrow/runex/releases) ships binaries for Windows (x86_64), macOS (x86_64 / aarch64), Linux (x86_64 / aarch64), and Termux/Android (aarch64).
-
-If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
-
-- Linux/macOS: `~/.cargo/bin`
-- Windows: `%USERPROFILE%\.cargo\bin`
-
-Generated shell scripts and your `config.toml` are part of your local shell environment. Only load and sync files you trust.
+Other options (mise, pre-built binaries, platform notes): see [docs/install.md](docs/install.md).
 
 ## Setup
 
-`runex init` is the quickest way to get started. It creates the config file and appends the shell integration line to your rc file, with a confirmation prompt at each step:
+`runex init` creates the config and appends the shell integration line to your rc file, with a confirmation prompt at each step:
 
 ```
 $ runex init
@@ -83,59 +55,7 @@ Append shell integration to ~/.bashrc? [y/N] y
 Appended integration to ~/.bashrc
 ```
 
-Pass `-y` to skip all prompts. For Clink, shell integration must be added manually (see below).
-
-Or set up manually for each shell:
-
-### bash
-
-Requires bash 4.0 or later. macOS ships bash 3.2; install a newer version via Homebrew (`brew install bash`).
-
-Add to `~/.bashrc`:
-
-```bash
-eval "$(runex export bash)"
-```
-
-### zsh
-
-Add to `~/.zshrc`:
-
-```zsh
-eval "$(runex export zsh)"
-```
-
-### PowerShell
-
-Add to `$PROFILE`:
-
-```powershell
-Invoke-Expression (& runex export pwsh | Out-String)
-```
-
-Pasted text is inserted without mid-paste expansion (runex detects the paste via PSReadLine's key queue and skips the space handler).
-
-### Nushell
-
-Add to `~/.config/nushell/config.nu`:
-
-```nu
-source ~/.config/nushell/runex.nu
-```
-
-Then generate the script (re-run after config changes or after upgrading runex):
-
-```nu
-runex export nu | save --force ~/.config/nushell/runex.nu
-```
-
-### cmd (Clink)
-
-Add to Clink's script directory (re-run after config changes or after upgrading runex):
-
-```cmd
-runex export clink > %LOCALAPPDATA%\clink\runex.lua
-```
+Pass `-y` to skip all prompts. Per-shell manual setup (bash / zsh / pwsh / nu / clink) is documented in [docs/setup.md](docs/setup.md).
 
 ## Config
 
