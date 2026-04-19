@@ -41,6 +41,12 @@ mise use -g cargo:runex
 mise use -g github:ShortArrow/runex
 ```
 
+Arch Linux では AUR (ビルド済みバイナリ) から:
+
+```bash
+paru -S runex-bin   # または yay -S runex-bin
+```
+
 ビルド済みバイナリを直接取得する場合は [GitHub リリース](https://github.com/ShortArrow/runex/releases)から。Windows (x86_64)、macOS (x86_64 / aarch64)、Linux (x86_64 / aarch64)、Termux/Android (aarch64) 向けのバイナリが各リリースに添付されています。
 
 インストール後に `runex` が見つからない場合は、Cargo の bin ディレクトリが `PATH` に入っているか確認してください。

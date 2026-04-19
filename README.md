@@ -43,6 +43,12 @@ Or with `mise` — pre-built binary from GitHub releases (no Rust toolchain need
 mise use -g github:ShortArrow/runex
 ```
 
+On Arch Linux via the AUR (pre-built binary):
+
+```bash
+paru -S runex-bin   # or: yay -S runex-bin
+```
+
 Or grab a pre-built binary directly — each [GitHub release](https://github.com/ShortArrow/runex/releases) ships binaries for Windows (x86_64), macOS (x86_64 / aarch64), Linux (x86_64 / aarch64), and Termux/Android (aarch64).
 
 If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
