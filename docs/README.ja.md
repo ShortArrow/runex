@@ -41,6 +41,12 @@ mise use -g cargo:runex
 mise use -g github:ShortArrow/runex
 ```
 
+macOS / Linux では Homebrew (ビルド済みバイナリ) から:
+
+```bash
+brew install shortarrow/runex/runex
+```
+
 Arch Linux では AUR (ビルド済みバイナリ) から:
 
 ```bash

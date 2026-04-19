@@ -43,6 +43,12 @@ Or with `mise` — pre-built binary from GitHub releases (no Rust toolchain need
 mise use -g github:ShortArrow/runex
 ```
 
+On macOS or Linux via Homebrew (pre-built binary):
+
+```bash
+brew install shortarrow/runex/runex
+```
+
 On Arch Linux via the AUR (pre-built binary):
 
 ```bash
