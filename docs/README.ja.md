@@ -41,13 +41,20 @@ mise use -g cargo:runex
 mise use -g github:ShortArrow/runex
 ```
 
-macOS / Linux では Homebrew (ビルド済みバイナリ) から:
+macOS / Linux では Homebrew から。runex はサードパーティの tap ([`shortarrow/homebrew-runex`](https://github.com/ShortArrow/homebrew-runex)) で配布しているので、完全修飾名で一行インストール:
 
 ```bash
 brew install shortarrow/runex/runex
 ```
 
-Arch Linux では AUR (ビルド済みバイナリ) から:
+…もしくは tap を追加してから短縮名でインストール:
+
+```bash
+brew tap shortarrow/runex
+brew install runex
+```
+
+Arch Linux では AUR (ビルド済みバイナリ、[`runex-bin`](https://aur.archlinux.org/packages/runex-bin)) から:
 
 ```bash
 paru -S runex-bin   # または yay -S runex-bin

@@ -43,13 +43,20 @@ Or with `mise` — pre-built binary from GitHub releases (no Rust toolchain need
 mise use -g github:ShortArrow/runex
 ```
 
-On macOS or Linux via Homebrew (pre-built binary):
+On macOS or Linux via Homebrew. runex lives in a third-party tap ([`shortarrow/homebrew-runex`](https://github.com/ShortArrow/homebrew-runex)), so either install it in one line with the fully-qualified name:
 
 ```bash
 brew install shortarrow/runex/runex
 ```
 
-On Arch Linux via the AUR (pre-built binary):
+…or add the tap first and install with the short name:
+
+```bash
+brew tap shortarrow/runex
+brew install runex
+```
+
+On Arch Linux via the AUR (pre-built binary, [`runex-bin`](https://aur.archlinux.org/packages/runex-bin)):
 
 ```bash
 paru -S runex-bin   # or: yay -S runex-bin
