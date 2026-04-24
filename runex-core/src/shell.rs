@@ -749,7 +749,14 @@ mod tests {
         );
         assert!(s.contains("clink"), "clink script must reference clink");
         assert!(s.contains("local RUNEX_BIN = \"runex\""), "clink script must quote the executable");
-        assert!(s.contains("local RUNEX_KNOWN = {"), "clink script must embed known keys");
+        assert!(
+            s.contains("hook --shell clink"),
+            "clink bootstrap must invoke `runex hook --shell clink`"
+        );
+        assert!(
+            !s.contains("local RUNEX_KNOWN"),
+            "clink bootstrap must not embed token lookup table (moved to `runex hook`)"
+        );
         assert!(s.contains(r#"pcall(rl.setbinding, [[" "]], [["luafunc:runex_expand"]], "emacs")"#), "clink script must bind the trigger key in emacs mode");
         assert!(s.contains(r#"pcall(rl.setbinding, [[" "]], [["luafunc:runex_expand"]], "vi-insert")"#), "clink script must bind the trigger key in vi insert mode");
         assert!(s.contains("rl_buffer:getcursor()"), "clink script must inspect the cursor");
