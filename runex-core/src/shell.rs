@@ -722,10 +722,12 @@ mod tests {
         );
         assert!(s.contains("zle -N __runex_expand"), "zsh script must register a zle widget");
         assert!(s.contains(r#"bindkey " " __runex_expand"#), "zsh script must bind the trigger key");
-        assert!(s.contains("__runex_expand_buffer"), "zsh script must expose a testable helper");
         assert!(s.contains("LBUFFER"), "zsh script must inspect the text before the cursor");
         assert!(s.contains("RBUFFER"), "zsh script must inspect the text after the cursor");
-        assert!(s.contains("raw=$('runex' expand"), "zsh script must quote the executable");
+        assert!(
+            s.contains("'runex' hook --shell zsh"),
+            "zsh bootstrap must invoke `runex hook --shell zsh`"
+        );
     }
 
     #[test]
@@ -1754,25 +1756,9 @@ mod tests {
     // enforced by Rust-side key validation in `config::validate_abbr_key`
     // (see runex-core/src/config.rs).
 
-    #[test]
-    fn zsh_case_pattern_star_key_matches_only_literal_star() {
-        let config = Config {
-            version: 1,
-            keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
-            abbr: vec![crate::model::Abbr {
-                key: "*".into(),
-                expand: crate::model::PerShellString::All("echo star".into()),
-                when_command_exists: None,
-            }],
-        };
-        let s = export_script(Shell::Zsh, "runex", Some(&config));
-        assert!(
-            s.contains("        '*') return 0 ;;"),
-            "zsh case must embed the single-quoted star key: {s}"
-        );
-        assert!(s.contains("*) return 1 ;;"), "zsh case must have a catch-all *) return 1 ;; arm");
-    }
+    // Zsh case-pattern injection tests removed for the same reason as bash:
+    // the new hook-based bootstrap does not embed keys in shell code. See the
+    // comment block above for the bash equivalent.
 
     /// Regression: an empty abbr list previously emitted a duplicate `default` clause,
     /// causing a PowerShell parse error.
