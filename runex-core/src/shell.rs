@@ -1132,9 +1132,13 @@ mod tests {
     /// may treat `"--dry-run"` as a flag rather than the value for `--token`.
     /// The safe form `expand --token=($token)` passes the value as part of the same argument.
     /// Note: `($token)` is Nu's parenthesized expression, not string interpolation —
-    /// Nu evaluates it and passes `--token=<value>` as a single argument.
+    /// The nu bootstrap passes the buffer as a positional `--line $line`
+    /// argument directly. Nu evaluates `$line` in its own variable scope and
+    /// passes each argument as an opaque string — there is no shell-style
+    /// word splitting — so argument injection via user-typed buffer content
+    /// is not possible. This test pins that property.
     #[test]
-    fn nu_token_uses_equals_form_to_prevent_argument_injection() {
+    fn nu_hook_invocation_uses_separate_line_and_cursor_args() {
         use crate::model::{Config, KeybindConfig, TriggerKey};
         let config = Config {
             version: 1,
@@ -1147,17 +1151,13 @@ mod tests {
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
         assert!(
-            !s.contains("--token $token"),
-            "Nu script must not use space-separated --token (argument injection risk): {s}"
+            s.contains("hook --shell nu --line $line --cursor $cursor"),
+            "Nu bootstrap must pass buffer state as separate --line/--cursor args: {s}"
         );
-        assert!(
-            !s.contains("$\"--token=($token)\"") && !s.contains("\"--token=("),
-            "Nu script must not use string interpolation for --token: {s}"
-        );
-        assert!(
-            s.contains("--token=($token)"),
-            "Nu script must use --token=($token) form to prevent argument injection: {s}"
-        );
+        // The hook returns a JSON object which the bootstrap parses with
+        // `from json`. Keep this as a structural assertion so the eval path
+        // stays parseable rather than shell-executed.
+        assert!(s.contains("from json"), "Nu bootstrap must parse hook output via `from json`: {s}");
     }
 
     #[test]

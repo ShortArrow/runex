@@ -140,9 +140,12 @@ pub fn render_action(shell: Shell, action: &HookAction) -> String {
             lua_quote_string(line),
             cursor,
         ),
+        // nu has no safe `eval`; the bootstrap reads the emitted JSON object
+        // with `from json` and applies the replace/set-cursor itself. Two
+        // fields, machine-parsable, no string escaping inside nu.
         Shell::Nu => format!(
-            "{{ line: {}, cursor: {} }}",
-            nu_quote_string(line),
+            "{{\"line\": {}, \"cursor\": {}}}",
+            serde_json::to_string(line).unwrap_or_else(|_| "\"\"".into()),
             cursor,
         ),
     }
