@@ -131,7 +131,7 @@ pub fn render_action(shell: Shell, action: &HookAction) -> String {
             format!("LBUFFER={}; RBUFFER={}", bash_quote_string(lb), bash_quote_string(rb))
         }
         Shell::Pwsh => format!(
-            "__RUNEX_LINE={}\n__RUNEX_CURSOR={}",
+            "$__RUNEX_LINE = {}\n$__RUNEX_CURSOR = {}",
             pwsh_quote_string(line),
             cursor,
         ),

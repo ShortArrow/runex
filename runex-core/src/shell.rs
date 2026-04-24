@@ -663,15 +663,23 @@ mod tests {
             !s.contains("Set-PSReadLineKeyHandler -Chord 'Tab' -Function Complete"),
             "pwsh script must not clobber the user's Tab binding"
         );
-        assert!(s.contains("$raw = & 'runex' expand"), "pwsh script must quote the executable");
-        assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
-        assert!(s.contains("EditMode"), "pwsh script must handle PSReadLine edit mode");
-        assert!(s.contains("__runex_is_command_position"), "pwsh script must detect command position");
+        assert!(
+            s.contains("'runex' @hookArgs") || s.contains("'runex' hook"),
+            "pwsh bootstrap must invoke runex with hook args"
+        );
+        assert!(
+            s.contains("hook"),
+            "pwsh bootstrap must invoke `runex hook`"
+        );
         assert!(!s.contains("{PWSH_REGISTER_LINES}"), "pwsh script must resolve register lines");
     }
 
     #[test]
-    fn pwsh_script_short_circuits_non_candidates() {
+    fn pwsh_script_has_paste_guard() {
+        // The paste-detection reflection is the one piece of logic that has
+        // to stay in the bootstrap — PSReadLine's `_queuedKeys` can only be
+        // inspected from inside the PSReadLine process. Guard against it
+        // being accidentally removed when the template is further trimmed.
         let s = export_script(
             Shell::Pwsh,
             "runex",
@@ -688,18 +696,9 @@ mod tests {
                 abbr: vec![],
             }),
         );
-        assert!(
-            s.contains("function __runex_get_expand_candidate"),
-            "pwsh script must define a fast precheck helper"
-        );
-        assert!(
-            s.contains("$candidate = __runex_get_expand_candidate $line $cursor"),
-            "pwsh handler must skip full expansion logic for non-candidates"
-        );
-        assert!(
-            s.contains("[Microsoft.PowerShell.PSConsoleReadLine]::Insert(' ')"),
-            "pwsh handler must insert a plain space on the fast path"
-        );
+        assert!(s.contains("__runex_queued_key_count"), "pwsh must retain paste guard helper");
+        assert!(s.contains("_queuedKeys"), "pwsh must probe PSReadLine's _queuedKeys field");
+        assert!(s.contains("--paste-pending"), "pwsh must forward paste state to `runex hook`");
     }
 
     #[test]
@@ -934,7 +933,9 @@ mod tests {
     }
 
     #[test]
-    fn pwsh_script_embeds_known_tokens() {
+    fn pwsh_script_does_not_embed_known_tokens() {
+        // Same rationale as bash_script_does_not_embed_known_tokens: the
+        // hook-based bootstrap consults the config at keypress time.
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
@@ -946,7 +947,8 @@ mod tests {
             }],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
-        assert!(s.contains("'gcm' { return $true }"), "pwsh script must embed known tokens");
+        assert!(!s.contains("'gcm' { return $true }"), "pwsh must not embed tokens");
+        assert!(!s.contains("__runex_is_known_token"), "legacy helper removed");
     }
 
     #[test]
@@ -1760,25 +1762,9 @@ mod tests {
     // the new hook-based bootstrap does not embed keys in shell code. See the
     // comment block above for the bash equivalent.
 
-    /// Regression: an empty abbr list previously emitted a duplicate `default` clause,
-    /// causing a PowerShell parse error.
-    #[test]
-    fn pwsh_script_has_single_default_clause() {
-        for abbr in [vec![], vec![crate::model::Abbr {
-            key: "gcm".into(),
-            expand: crate::model::PerShellString::All("git commit -m".into()),
-            when_command_exists: None,
-        }]] {
-            let s = export_script(Shell::Pwsh, "runex", Some(&Config {
-                version: 1,
-                keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
-                abbr,
-            }));
-            let default_count = s.matches("default {").count();
-            assert_eq!(default_count, 1, "pwsh script must have exactly one default clause, got {default_count}");
-        }
-    }
+    // The "pwsh switch must have exactly one `default {` clause" regression
+    // test was specific to the legacy token-embedding design; with the new
+    // bootstrap there is no switch statement at all.
 
     } // mod case_pattern_globs
 }

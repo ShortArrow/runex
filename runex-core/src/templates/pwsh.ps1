@@ -1,188 +1,7 @@
 # runex shell integration for PowerShell
 
-$__runex_resolve_commands = {
-    param([string]$cmdsStr)
-
-    function find_imported_commands {
-        param([string[]]$names)
-        $found = @{}
-        $prev = $PSModuleAutoLoadingPreference
-        $PSModuleAutoLoadingPreference = 'None'
-        try {
-            Get-Command -Name $names `
-                -ListImported `
-                -CommandType Alias,Function,Filter,Cmdlet,ExternalScript `
-                -ErrorAction Ignore |
-                ForEach-Object { $found[$_.Name] = $true }
-        }
-        finally {
-            $PSModuleAutoLoadingPreference = $prev
-        }
-        return $found
-    }
-
-    function path_contains_executable {
-        param([string]$name)
-        $pathext = @(($env:PATHEXT -split ';') | Where-Object { $_ })
-        if ($pathext.Count -eq 0) { $pathext = @('') }
-        foreach ($dir in ($env:PATH -split [System.IO.Path]::PathSeparator)) {
-            if (-not $dir) { continue }
-            foreach ($ext in $pathext) {
-                if ([System.IO.File]::Exists([System.IO.Path]::Combine($dir, "$name$ext"))) {
-                    return $true
-                }
-            }
-        }
-        return $false
-    }
-
-    $names = $cmdsStr -split ','
-    $found = find_imported_commands $names
-    foreach ($name in $names) {
-        if (-not $found[$name] -and (path_contains_executable $name)) {
-            $found[$name] = $true
-        }
-    }
-    return (($names | ForEach-Object { "$_=$(if($found[$_]){1}else{0})" }) -join ',')
-}
-
-$__runex_cmds = & {PWSH_BIN} precache --shell pwsh --list-commands 2>$null
-if ($__runex_cmds) {
-    $__runex_resolved = & $__runex_resolve_commands $__runex_cmds
-    Invoke-Expression (& {PWSH_BIN} precache --shell pwsh --resolved $__runex_resolved 2>$null) -ErrorAction SilentlyContinue
-} else {
-    Invoke-Expression (& {PWSH_BIN} precache --shell pwsh 2>$null) -ErrorAction SilentlyContinue
-}
-Remove-Variable __runex_cmds, __runex_resolved, __runex_resolve_commands -ErrorAction SilentlyContinue
-function __runex_trim_trailing_spaces {
-    param([string]$text)
-
-    return $text.TrimEnd(' ')
-}
-
-function __runex_is_command_position {
-    param([string]$prefix)
-
-    $prefix = __runex_trim_trailing_spaces $prefix
-    if (-not $prefix) {
-        return $true
-    }
-
-    if ($prefix -match '(\|\||&&|\||;)$') {
-        return $true
-    }
-
-    $parts = $prefix -split ' '
-    $prev = $parts[-1]
-    if ($prev -eq 'sudo') {
-        $before = __runex_trim_trailing_spaces ($prefix.Substring(0, $prefix.Length - 4))
-        if (-not $before) {
-            return $true
-        }
-        return [bool]($before -match '(\|\||&&|\||;)$')
-    }
-
-    return $false
-}
-
-function __runex_is_known_token {
-    param([string]$token)
-
-    switch ($token) {
-{PWSH_KNOWN_CASES}
-        default { return $false }
-    }
-}
-
-function __runex_get_expand_candidate {
-    param(
-        [string]$line,
-        [int]$cursor
-    )
-
-    if ($cursor -lt $line.Length -and $line[$cursor] -ne ' ') {
-        return $null
-    }
-
-    $left = $line.Substring(0, $cursor)
-    $tokenStart = $left.LastIndexOf(' ') + 1
-    $prefix = $line.Substring(0, $tokenStart)
-    $token = $left.Substring($tokenStart)
-
-    if (-not $token) {
-        return $null
-    }
-
-    if (-not ((__runex_is_command_position $prefix) -and (__runex_is_known_token $token))) {
-        return $null
-    }
-
-    return @{
-        Prefix = $prefix
-        Token = $token
-        TokenStart = $tokenStart
-    }
-}
-
-function __runex_expand_space {
-    param(
-        [string]$line,
-        [int]$cursor,
-        $candidate
-    )
-
-    $right = $line.Substring($cursor)
-    if ($cursor -lt $line.Length -and $line[$cursor] -ne ' ') {
-        return @{
-            Action = 'insert'
-            Line = $line.Substring(0, $cursor) + ' ' + $right
-            Cursor = $cursor + 1
-        }
-    }
-
-    if (-not $candidate) {
-        return @{
-            Action = 'insert'
-            Line = $line.Substring(0, $cursor) + ' ' + $line.Substring($cursor)
-            Cursor = $cursor + 1
-        }
-    }
-
-    $raw = & {PWSH_BIN} expand "--token=$($candidate.Token)" 2>$null
-    if (-not $raw -or $raw -eq $candidate.Token) {
-        return @{
-            Action = 'insert'
-            Line = $line.Substring(0, $cursor) + ' ' + $line.Substring($cursor)
-            Cursor = $cursor + 1
-        }
-    }
-    # Split on unit separator for cursor placeholder
-    $parts = $raw -split "`u{001f}", 2
-    $expanded = $parts[0]
-    $cursorOffset = if ($parts.Length -gt 1) { [int]$parts[1] } else { $null }
-
-    $line = $line.Substring(0, $candidate.TokenStart) + $expanded + $right
-    if ($null -ne $cursorOffset) {
-        $cursor = $candidate.TokenStart + $cursorOffset
-    } else {
-        $cursor = $candidate.TokenStart + $expanded.Length
-    }
-    return @{
-        Action = 'replace'
-        Line = $line.Substring(0, $cursor) + ' ' + $line.Substring($cursor)
-        Cursor = $cursor + 1
-    }
-
-    return @{
-        Action = 'insert'
-        Line = $line.Substring(0, $cursor) + ' ' + $line.Substring($cursor)
-        Cursor = $cursor + 1
-    }
-}
-
 # Paste detection via PSReadLine internal key queue.
-#
-# When a clipboard paste is processed, PSReadLine enqueues all the pasted
+# When a clipboard paste is processed, PSReadLine enqueues all pasted
 # characters at once — so when our Spacebar handler fires on the first space
 # inside a paste, there are still unread keys waiting in _queuedKeys. Manual
 # typing goes through the same queue but one key at a time, so the count is 0.
@@ -192,11 +11,10 @@ function __runex_expand_space {
 # crash the handler.
 $Script:__runex_psrl_singleton_field = $null
 $Script:__runex_psrl_queued_keys_field = $null
-
 try {
     $__runex_psrl_type = [Microsoft.PowerShell.PSConsoleReadLine]
     $__runex_bf = [System.Reflection.BindingFlags]'NonPublic,Static,Instance'
-    $Script:__runex_psrl_singleton_field  = $__runex_psrl_type.GetField('_singleton',  $__runex_bf)
+    $Script:__runex_psrl_singleton_field   = $__runex_psrl_type.GetField('_singleton',   $__runex_bf)
     $Script:__runex_psrl_queued_keys_field = $__runex_psrl_type.GetField('_queuedKeys', $__runex_bf)
 } catch {
     # PSReadLine internals changed — fields stay null and we fall back gracefully.
@@ -225,48 +43,52 @@ if (-not (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue)) {
 }
 
 function __runex_register_expand_handler {
-    param(
-        [string]$chord,
-        [string]$viMode
-    )
+    param([string]$chord, [string]$viMode)
 
     $params = @{
         Chord = $chord
         ScriptBlock = {
             param($key, $arg)
 
-            # Paste guard: if PSReadLine still has queued keys when the handler
-            # fires, we're in the middle of a multi-character paste. Just
-            # insert the space and skip expansion.
-            if ((__runex_queued_key_count) -gt 0) {
-                [Microsoft.PowerShell.PSConsoleReadLine]::Insert(' ')
-                return
-            }
-
             $line = $null
             $cursor = $null
             [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
 
-            $candidate = __runex_get_expand_candidate $line $cursor
-            if (-not $candidate) {
-                [Microsoft.PowerShell.PSConsoleReadLine]::Insert(' ')
-                return
+            $pastePending = (__runex_queued_key_count) -gt 0
+
+            # The hook emits two lines: __RUNEX_LINE and __RUNEX_CURSOR.
+            # pwsh_quote_string produces a double-quoted literal, so the
+            # values are safe to Invoke-Expression. On any failure we
+            # fall back to plain space insertion.
+            $out = $null
+            try {
+                $hookArgs = @('hook', '--shell', 'pwsh', '--line', $line, '--cursor', "$cursor")
+                if ($pastePending) { $hookArgs += '--paste-pending' }
+                $out = & {PWSH_BIN} @hookArgs 2>$null
+            } catch {
+                $out = $null
             }
 
-            $state = __runex_expand_space $line $cursor $candidate
-            if ($state.Action -eq 'replace') {
-                [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $state.Line)
-                [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($state.Cursor)
-            } else {
-                [Microsoft.PowerShell.PSConsoleReadLine]::Insert(' ')
+            if ($out) {
+                $__RUNEX_LINE = $null
+                $__RUNEX_CURSOR = $null
+                try {
+                    Invoke-Expression ($out -join "`n")
+                } catch {
+                    $__RUNEX_LINE = $null
+                }
+                if ($null -ne $__RUNEX_LINE -and $null -ne $__RUNEX_CURSOR) {
+                    [Microsoft.PowerShell.PSConsoleReadLine]::Replace(0, $line.Length, $__RUNEX_LINE)
+                    [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition([int]$__RUNEX_CURSOR)
+                    return
+                }
             }
+
+            [Microsoft.PowerShell.PSConsoleReadLine]::Insert(' ')
         }
     }
 
-    if ($viMode) {
-        $params.ViMode = $viMode
-    }
-
+    if ($viMode) { $params.ViMode = $viMode }
     Set-PSReadLineKeyHandler @params
 }
 
