@@ -16,6 +16,7 @@ use runex_core::shell::Shell;
 use shell_alias::add_shell_alias_conflicts;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -189,6 +190,26 @@ enum Commands {
         /// Skip confirmation prompts
         #[arg(long, short = 'y')]
         yes: bool,
+    },
+    /// Per-keystroke hook — called by the shell integration wrapper on every
+    /// trigger-key press. Returns shell-specific eval text describing the new
+    /// buffer/cursor state. Exit code 2 means "nothing to do; shell may
+    /// insert the literal trigger key".
+    #[command(hide = true)]
+    Hook {
+        /// Target shell: bash, zsh, pwsh, clink, nu
+        #[arg(long, value_name = "SHELL")]
+        shell: String,
+        /// Current buffer contents
+        #[arg(long)]
+        line: String,
+        /// Current cursor position as a byte offset into `line`
+        #[arg(long)]
+        cursor: usize,
+        /// True if a paste is in progress (pwsh). When set, the hook skips
+        /// expansion and emits a plain space-insert action.
+        #[arg(long)]
+        paste_pending: bool,
     },
 }
 
@@ -812,6 +833,64 @@ fn handle_init(config_path: PathBuf, yes: bool) -> CmdResult {
 }
 
 
+/// Per-keystroke hook handler. Writes the shell-specific eval text to stdout
+/// on success. On config-load failure we silently emit nothing and return
+/// exit code 2; the shell wrapper treats that as "insert a literal space"
+/// (so runex never breaks the user's terminal even with a broken config).
+fn handle_hook(
+    shell_str: &str,
+    line: &str,
+    cursor: usize,
+    paste_pending: bool,
+    config_override: Option<&Path>,
+    path_prepend: Option<&Path>,
+) -> CmdResult {
+    let shell = Shell::from_str(shell_str)
+        .map_err(|e| format!("{}", e))?;
+
+    // If the user pasted a block, the pwsh wrapper sets this flag so we skip
+    // expansion entirely and behave like a normal space keypress.
+    if paste_pending {
+        let action = runex_core::hook::HookAction::InsertSpace {
+            line: {
+                let mut s = String::with_capacity(line.len() + 1);
+                let cursor = cursor.min(line.len());
+                s.push_str(&line[..cursor]);
+                s.push(' ');
+                s.push_str(&line[cursor..]);
+                s
+            },
+            cursor: cursor.min(line.len()) + 1,
+        };
+        println!("{}", runex_core::hook::render_action(shell, &action));
+        return Ok(());
+    }
+
+    // Config load failures are treated as "no expansion" — we still return the
+    // InsertSpace action so the wrapper inserts a literal space on behalf of
+    // the user.
+    let (config_path, config_opt, _err) = resolve_config_opt(config_override);
+    let Some(config) = config_opt else {
+        // No valid config: emit a plain InsertSpace and return. This avoids
+        // making every keypress a no-op (which would swallow the trigger key)
+        // when a user has a malformed config they haven't fixed yet.
+        let cursor_safe = cursor.min(line.len());
+        let mut s = String::with_capacity(line.len() + 1);
+        s.push_str(&line[..cursor_safe]);
+        s.push(' ');
+        s.push_str(&line[cursor_safe..]);
+        let action = runex_core::hook::HookAction::InsertSpace { line: s, cursor: cursor_safe + 1 };
+        println!("{}", runex_core::hook::render_action(shell, &action));
+        return Ok(());
+    };
+
+    let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
+    let command_exists = make_command_exists(path_prepend, Some(&fp));
+    let action = runex_core::hook::hook(&config, shell, line, cursor, command_exists);
+    println!("{}", runex_core::hook::render_action(shell, &action));
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -868,6 +947,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 default_config_path()?
             };
             handle_init(config_path, yes)?;
+        }
+        Commands::Hook { shell, line, cursor, paste_pending } => {
+            handle_hook(
+                &shell,
+                &line,
+                cursor,
+                paste_pending,
+                cli.config.as_deref(),
+                cli.path_prepend.as_deref(),
+            )?;
         }
         Commands::Add { key, expand, when } => {
             let config_path = if let Some(p) = cli.config.as_deref() {

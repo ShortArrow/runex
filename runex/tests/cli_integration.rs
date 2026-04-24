@@ -456,13 +456,19 @@ fn export_explicit_missing_config_also_fails() {
 }
 
 #[test]
-fn export_with_valid_config_embeds_known_tokens() {
+fn export_bash_bootstrap_calls_runex_hook() {
+    // With the hook-based design, templates no longer embed the abbreviation
+    // list as inline `case` arms. Instead the bootstrap must delegate to
+    // `runex hook` at keypress time.
     let cfg = write_config(
         "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
     );
     let (stdout, _, ok) = run(&["export", "bash"], Some(cfg.path()), None);
     assert!(ok);
-    assert!(stdout.contains("gcm"), "stdout should embed known token 'gcm'");
+    assert!(
+        stdout.contains("hook --shell bash"),
+        "bash bootstrap should invoke `runex hook --shell bash`; got:\n{stdout}"
+    );
 }
 
 // ─── config error policy ─────────────────────────────────────────────────────

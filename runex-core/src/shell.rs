@@ -623,11 +623,20 @@ mod tests {
                 abbr: vec![],
             }),
         );
-        assert!(s.contains("bind -x"), "bash script must use bind");
-        assert!(s.contains(r#"bind -r "\x20""#), "bash script must remove the space binding before rebinding");
-        assert!(s.contains("raw=$('runex' expand"), "bash script must quote the executable");
-        assert!(s.contains("READLINE_LINE"), "bash script must use READLINE_LINE");
-        assert!(s.contains("READLINE_POINT"), "bash script must inspect the cursor");
+        // New design: the bootstrap is a thin wrapper that calls
+        // `runex hook --shell bash` at keypress time. It should still bind the
+        // trigger key via `bind -x`, but the expansion logic itself now lives
+        // in the Rust binary — so there must be no inline `expand` call or
+        // READLINE inspection in the template (the hook output handles both).
+        assert!(s.contains("bind -x"), "bash bootstrap must use bind -x");
+        assert!(
+            s.contains("hook --shell bash"),
+            "bash bootstrap must invoke `runex hook --shell bash`"
+        );
+        assert!(
+            s.contains("'runex' hook --shell bash"),
+            "bash bootstrap must quote the executable name"
+        );
         assert!(!s.contains("{BASH_BIND_LINES}"), "bash script must resolve bind lines");
     }
 
@@ -859,7 +868,12 @@ mod tests {
     }
 
     #[test]
-    fn bash_script_embeds_known_tokens() {
+    fn bash_script_does_not_embed_known_tokens() {
+        // New design: the abbreviation list is consulted at keypress time by
+        // `runex hook`, not baked into the bootstrap as a `case` block. This
+        // keeps the emitted script independent of user-supplied key strings —
+        // which, besides being simpler, avoids a whole class of injection
+        // concerns (quoting gcm's key into a `case` arm).
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
@@ -871,7 +885,8 @@ mod tests {
             }],
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
-        assert!(s.contains("'gcm') return 0 ;;"), "bash script must embed known tokens");
+        assert!(!s.contains("'gcm'"), "bash bootstrap must not embed tokens anymore");
+        assert!(!s.contains("__runex_is_known_token"), "legacy helper removed");
     }
 
     #[test]
@@ -1731,63 +1746,13 @@ mod tests {
     mod case_pattern_globs {
         use super::*;
 
-    #[test]
-    fn bash_case_pattern_star_key_matches_only_literal_star() {
-        let config = Config {
-            version: 1,
-            keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
-            abbr: vec![crate::model::Abbr {
-                key: "*".into(),
-                expand: crate::model::PerShellString::All("echo star".into()),
-                when_command_exists: None,
-            }],
-        };
-        let s = export_script(Shell::Bash, "runex", Some(&config));
-        assert!(
-            s.contains("        '*') return 0 ;;"),
-            "bash case must embed the single-quoted star key: {s}"
-        );
-        assert!(s.contains("*) return 1 ;;"), "bash case must have a catch-all *) return 1 ;; arm");
-    }
-
-    #[test]
-    fn bash_case_pattern_question_key_is_literal() {
-        let config = Config {
-            version: 1,
-            keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
-            abbr: vec![crate::model::Abbr {
-                key: "g?".into(),
-                expand: crate::model::PerShellString::All("git".into()),
-                when_command_exists: None,
-            }],
-        };
-        let s = export_script(Shell::Bash, "runex", Some(&config));
-        assert!(
-            s.contains("        'g?') return 0 ;;"),
-            "bash case must embed the single-quoted key with '?': {s}"
-        );
-    }
-
-    #[test]
-    fn bash_case_pattern_bracket_key_is_literal() {
-        let config = Config {
-            version: 1,
-            keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
-            abbr: vec![crate::model::Abbr {
-                key: "g[cm]".into(),
-                expand: crate::model::PerShellString::All("git".into()),
-                when_command_exists: None,
-            }],
-        };
-        let s = export_script(Shell::Bash, "runex", Some(&config));
-        assert!(
-            s.contains("        'g[cm]') return 0 ;;"),
-            "bash case must embed the single-quoted bracket key literally: {s}"
-        );
-    }
+    // The bash case-pattern injection tests were specific to the legacy
+    // design where abbreviation keys were embedded as `case` arms inside the
+    // bash bootstrap. With the new hook-based bootstrap, keys are never
+    // emitted into shell code, so glob-like keys (`*`, `?`, `[...]`) pose no
+    // shell-expansion risk at export time. The equivalent safety is now
+    // enforced by Rust-side key validation in `config::validate_abbr_key`
+    // (see runex-core/src/config.rs).
 
     #[test]
     fn zsh_case_pattern_star_key_matches_only_literal_star() {
