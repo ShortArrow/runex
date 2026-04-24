@@ -6,7 +6,7 @@
 
 use crate::expand::expand;
 use crate::model::{Config, ExpandResult, Shell};
-use crate::shell::{bash_quote_string, lua_quote_string, nu_quote_string, pwsh_quote_string};
+use crate::shell::{bash_quote_string, lua_quote_string, pwsh_quote_string};
 
 /// Outcome of a hook call — what the shell adapter should do to its buffer.
 ///

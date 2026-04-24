@@ -101,19 +101,6 @@ fn zsh_chord(trigger: TriggerKey) -> &'static str {
 /// Uses the same escaping as [`bash_quote_string`]: single-quoted with `'\''`
 /// for embedded single quotes.  ASCII control characters and Unicode
 /// line/paragraph separators are dropped.
-fn bash_quote_pattern(token: &str) -> String {
-    let mut out = String::from("'");
-    for ch in token.chars() {
-        match ch {
-            '\'' => out.push_str(r"'\''"),
-            c if c.is_ascii_control() || is_unicode_line_separator(c) => {}
-            _ => out.push(ch),
-        }
-    }
-    out.push('\'');
-    out
-}
-
 /// Quote `value` as a Bash single-quoted string.
 ///
 /// Single quotes are escaped as `'\''` (close, escaped quote, reopen).
@@ -133,33 +120,11 @@ pub(crate) fn bash_quote_string(value: &str) -> String {
     out
 }
 
-/// Generate the `case` pattern body for POSIX-compatible shells (bash, zsh).
-///
-/// When the config is absent or has no rules, returns a wildcard arm that always
-/// returns 0 (treat every token as a known abbreviation).  Otherwise generates one
-/// arm per rule plus a wildcard arm that returns 1 (unknown).
-fn posix_known_cases(config: Option<&Config>) -> String {
-    let Some(config) = config else {
-        return "        *) return 0 ;;".to_string();
-    };
-    if config.abbr.is_empty() {
-        return "        *) return 0 ;;".to_string();
-    }
-    let mut lines = Vec::with_capacity(config.abbr.len() + 1);
-    for abbr in &config.abbr {
-        lines.push(format!("        {}) return 0 ;;", bash_quote_pattern(&abbr.key)));
-    }
-    lines.push("        *) return 1 ;;".to_string());
-    lines.join("\n")
-}
-
-fn bash_known_cases(config: Option<&Config>) -> String {
-    posix_known_cases(config)
-}
-
-fn zsh_known_cases(config: Option<&Config>) -> String {
-    posix_known_cases(config)
-}
+// The legacy `posix_known_cases` / `bash_known_cases` / `zsh_known_cases`
+// helpers built a `case` block listing every abbreviation key, which was
+// spliced into the bash/zsh bootstraps. The hook-based bootstraps don't
+// need that — `runex hook` consults the config at keypress time — so
+// those helpers were removed together with the shell-side case blocks.
 
 fn pwsh_chord(trigger: TriggerKey) -> &'static str {
     match trigger {
@@ -269,40 +234,12 @@ pub(crate) fn lua_quote_string(value: &str) -> String {
     out
 }
 
-fn pwsh_known_cases(config: Option<&Config>) -> String {
-    let Some(config) = config else {
-        return String::new();
-    };
-
-    let mut lines = Vec::with_capacity(config.abbr.len());
-    for abbr in &config.abbr {
-        lines.push(format!(
-            "        {} {{ return $true }}",
-            pwsh_quote_string(&abbr.key)
-        ));
-    }
-    lines.join("\n")
-}
-
 fn nu_modifier(trigger: TriggerKey) -> &'static str {
     match trigger {
         TriggerKey::AltSpace => "alt",
         TriggerKey::ShiftSpace => "shift",
         TriggerKey::Space | TriggerKey::Tab => "none",
     }
-}
-
-fn clink_known_cases(config: Option<&Config>) -> String {
-    let Some(config) = config else {
-        return String::new();
-    };
-
-    config
-        .abbr
-        .iter()
-        .map(|abbr| format!("    [{}] = true,", lua_quote_string(&abbr.key)))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn nu_keycode(trigger: TriggerKey) -> &'static str {
@@ -471,18 +408,14 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
         .replace("{BASH_BIN}", &bash_quote_string(bin))
         .replace("{BASH_BIND_LINES}", &bash_bind_lines(trigger))
         .replace("{BASH_SELF_INSERT_LINES}", &bash_self_insert_lines(self_insert))
-        .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
         .replace("{ZSH_BIN}", &bash_quote_string(bin))
         .replace("{ZSH_BIND_LINES}", &zsh_bind_lines(trigger))
         .replace("{ZSH_SELF_INSERT_LINES}", &zsh_self_insert_lines(self_insert))
-        .replace("{ZSH_KNOWN_CASES}", &zsh_known_cases(config))
         .replace("{CLINK_BIN}", &lua_quote_string(bin))
         .replace("{CLINK_BINDING}", &clink_binding(trigger))
-        .replace("{CLINK_KNOWN_CASES}", &clink_known_cases(config))
         .replace("{PWSH_BIN}", &pwsh_quote_string(bin))
         .replace("{PWSH_REGISTER_LINES}", &pwsh_register_lines(trigger))
         .replace("{PWSH_SELF_INSERT_LINES}", &pwsh_self_insert_lines(self_insert))
-        .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
         .replace("{NU_BIN}", &nu_quote_string(bin))
         .replace("{NU_BINDINGS}", &nu_bindings(trigger, bin))
         .replace("{NU_SELF_INSERT_BINDINGS}", &nu_self_insert_lines(self_insert))
@@ -1243,17 +1176,9 @@ mod tests {
         assert!(!line.contains("$'"), "dollar-quote ANSI-C form must not be used: {line:?}");
     }
 
-    #[test]
-    fn bash_quote_pattern_escapes_newline() {
-        let s = bash_quote_pattern("key\nwith newline");
-        assert!(!s.contains('\n'), "bash_quote_pattern must not produce literal newline: {s:?}");
-    }
-
-    #[test]
-    fn bash_quote_pattern_escapes_carriage_return() {
-        let s = bash_quote_pattern("key\rwith cr");
-        assert!(!s.contains('\r'), "bash_quote_pattern must not produce literal CR: {s:?}");
-    }
+    // bash_quote_pattern tests dropped — the helper and its callers (the
+    // case-arm builder) are gone now that abbreviations aren't embedded in
+    // shell code.
 
     #[test]
     fn lua_quote_string_escapes_nul() {
@@ -1707,16 +1632,6 @@ mod tests {
 
     mod unicode_edge_cases {
         use super::*;
-
-    #[test]
-    fn bash_quote_pattern_drops_unicode_line_separators() {
-        for ch in ['\u{0085}', '\u{2028}', '\u{2029}'] {
-            let input = format!("key{ch}end");
-            let s = bash_quote_pattern(&input);
-            assert!(!s.contains(ch), "bash_quote_pattern must drop U+{:04X}: {s:?}", ch as u32);
-        }
-    }
-
 
     #[test]
     fn lua_quote_string_drops_del() {
