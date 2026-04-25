@@ -13,7 +13,7 @@ runex is a cross-shell abbreviation engine that expands short tokens into full c
 - Cross-shell support (bash / zsh / pwsh / cmd / nushell)
 - Real-time expansion (customizable trigger key)
 - Single config file shared across shells
-- Conditional rules (`when_command_exists`) — recognizes shell cmdlets, aliases, and user-defined functions, not just PATH binaries (behavior varies by shell; see [config-reference](docs/config-reference.md#precache))
+- Conditional rules (`when_command_exists`) — only expand when the listed commands resolve in the current shell
 - Fast and lightweight (Rust core)
 
 ## Concept
@@ -107,7 +107,6 @@ runex export <shell>                     generate shell integration script
 runex export <shell> --bin <name>        use a custom binary name in the script
 runex timings <key>                      show per-phase timing breakdown of expand
 runex timings                            time all abbreviation rules
-runex precache --shell <shell>           pre-compute command existence cache
 runex version                            show version and build commit
 ```
 

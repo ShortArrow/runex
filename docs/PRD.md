@@ -77,7 +77,7 @@ shell adapters
 
 - Token → expansion (first passing rule wins)
 - Self-loop guard: `key == expand` → skip rule, continue evaluation
-- `when_command_exists`: skip rule if any listed command cannot be resolved by the precache detector (shell-native or PATH-only); continue evaluation
+- `when_command_exists`: skip rule if any listed command does not resolve via `which` at hook time; continue evaluation
 - Fallback: pass through undefined tokens unchanged
 - Multiple rules with the same key: evaluated in order as a fallback chain
 
@@ -101,7 +101,6 @@ runex export <shell>                     generate shell integration script
 runex export <shell> --bin <name>        use a custom binary name in the script
 runex timings <key>                      show per-phase timing breakdown of expand
 runex timings                            time all abbreviation rules
-runex precache --shell <shell>           pre-compute command existence cache
 runex version                            show version and build commit
 ```
 
@@ -124,9 +123,6 @@ version = 1
 [keybind.trigger]
 default = "space"       # default trigger for all shells
 bash    = "alt-space"   # shell-specific override (optional)
-
-[precache]
-path_only = false       # false (default): shell-native detection; true: PATH binaries only
 
 [[abbr]]
 key    = "ls"

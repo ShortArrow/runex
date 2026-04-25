@@ -150,7 +150,13 @@ enum Commands {
         #[arg(long, value_name = "SHELL")]
         shell: Option<String>,
     },
-    /// Pre-compute command existence cache for shell startup
+    /// Pre-compute command existence cache for shell startup.
+    ///
+    /// Hidden since 0.2.0: shell templates no longer call this subcommand;
+    /// the hook subcommand evaluates `when_command_exists` per keypress
+    /// instead. The command is retained for one release for backward
+    /// compatibility and may be removed in a future version.
+    #[command(hide = true)]
     Precache {
         /// Target shell: bash, zsh, pwsh, clink, nu
         #[arg(long, value_name = "SHELL")]
@@ -733,6 +739,7 @@ fn handle_doctor(
     if strict {
         if let Some(src) = source.as_deref() {
             result.checks.extend(doctor::check_unknown_fields(src));
+            result.checks.extend(doctor::check_precache_deprecation(src));
         }
         // Check for unreachable duplicate rules
         if let Some(cfg) = config.as_ref() {

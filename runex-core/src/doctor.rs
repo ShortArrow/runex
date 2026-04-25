@@ -253,6 +253,29 @@ pub fn check_rejected_rules(config_source: &str) -> Vec<Check> {
     checks
 }
 
+/// Strict-mode check: warn when the deprecated `[precache]` section is
+/// present in the config. The section was used by the legacy shell template
+/// to emit a startup precache helper; the hook-based bootstraps consult the
+/// config at keypress time so the section now has no run-time effect.
+///
+/// Returns an empty vec when the TOML is unparseable; that case is reported
+/// by `check_config_parse` already.
+pub fn check_precache_deprecation(config_source: &str) -> Vec<Check> {
+    let table: toml::Table = match config_source.parse() {
+        Ok(t) => t,
+        Err(_) => return vec![],
+    };
+    if !table.contains_key("precache") {
+        return vec![];
+    }
+    vec![Check {
+        name: "precache_deprecation".into(),
+        status: CheckStatus::Warn,
+        detail: "[precache] is deprecated and has no effect since the shell integration moved to runtime hook calls. Remove the section to silence this warning.".into(),
+        detail_verbose: None,
+    }]
+}
+
 pub fn check_unknown_fields(config_source: &str) -> Vec<Check> {
     let table: toml::Table = match config_source.parse() {
         Ok(t) => t,
@@ -777,6 +800,39 @@ when_command_exists = ["git"]
 "#;
         let checks = check_unknown_fields(toml);
         assert!(checks.is_empty(), "valid config must produce no warnings: {:?}", checks);
+    }
+
+    #[test]
+    fn precache_deprecation_warns_when_section_is_present() {
+        let toml = r#"
+version = 1
+[precache]
+path_only = true
+"#;
+        let checks = check_precache_deprecation(toml);
+        assert_eq!(checks.len(), 1, "should warn once when [precache] is present: {:?}", checks);
+        assert_eq!(checks[0].status, CheckStatus::Warn);
+        assert!(checks[0].detail.contains("deprecated"), "detail must say deprecated: {}", checks[0].detail);
+        assert_eq!(checks[0].name, "precache_deprecation");
+    }
+
+    #[test]
+    fn precache_deprecation_silent_when_section_absent() {
+        let toml = r#"
+version = 1
+[[abbr]]
+key = "gcm"
+expand = "git commit -m"
+"#;
+        let checks = check_precache_deprecation(toml);
+        assert!(checks.is_empty(), "no warning when [precache] is absent: {:?}", checks);
+    }
+
+    #[test]
+    fn precache_deprecation_silent_when_toml_invalid() {
+        // If the TOML doesn't even parse, check_config_parse handles it.
+        let checks = check_precache_deprecation("this is not [valid toml");
+        assert!(checks.is_empty());
     }
 
     #[test]
