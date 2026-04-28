@@ -1,5 +1,7 @@
 mod format;
 mod shell_alias;
+#[cfg(windows)]
+mod win_path;
 
 use clap::{Parser, Subcommand};
 use format::{
@@ -280,6 +282,24 @@ fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> String {
 ///
 /// Results are also cached in a `RefCell<HashMap>` per invocation to avoid
 /// repeated `which` calls within the same CLI run.
+///
+/// ## Windows-specific PATH augmentation
+///
+/// On Windows we feed `which::which_in` the *augmented* search path from
+/// [`win_path::effective_search_path`] (process PATH + HKCU + HKLM) instead
+/// of relying on the inherited `PATH` env var alone.
+///
+/// The reason is that some parent processes — most notably the cmd.exe
+/// children that clink's Lua `io.popen` spawns — inherit a PATH that's
+/// missing the User-scope entries the registry holds. Without
+/// augmentation, `runex hook` running under clink would fail to find
+/// binaries installed under `~/.cargo/bin`,
+/// `~/AppData/Local/Microsoft/WinGet/Links`, or `~/AppData/Local/mise/shims`.
+/// `when_command_exists` rules pointing at those binaries would then
+/// silently evaluate false and abbreviations would no-op — looking like
+/// an integration bug while the real cause is environmental. The
+/// regression test `runex/tests/windows_path_isolation.rs` pins this
+/// behavior so the failure mode can't return unnoticed.
 fn make_command_exists<'a>(
     path_prepend: Option<&'a Path>,
     precache_fingerprint: Option<&str>,
@@ -288,6 +308,13 @@ fn make_command_exists<'a>(
 
     let hint = precache_fingerprint.and_then(precache::load_cache);
     let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
+    // On Windows we resolve commands against an *augmented* search path
+    // (process PATH + HKCU + HKLM) to cope with degraded environments
+    // such as the cmd.exe children that clink's Lua `io.popen` spawns.
+    // See `runex/src/win_path.rs` for the rationale and history. The
+    // value is computed once per CLI invocation and reused.
+    #[cfg(windows)]
+    let effective_path = win_path::effective_search_path();
 
     move |cmd: &str| -> bool {
         if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
@@ -310,6 +337,18 @@ fn make_command_exists<'a>(
             }
         }
 
+        let live_check = |c: &str| -> bool {
+            #[cfg(windows)]
+            {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                which::which_in(c, Some(&effective_path.combined), &cwd).is_ok()
+            }
+            #[cfg(not(windows))]
+            {
+                which::which(c).is_ok()
+            }
+        };
+
         let exists = if let Some(dir) = path_prepend {
             if dir.join(cmd).is_file() {
                 true
@@ -319,16 +358,16 @@ fn make_command_exists<'a>(
                     if dir.join(format!("{cmd}.exe")).is_file() {
                         true
                     } else {
-                        which::which(cmd).is_ok()
+                        live_check(cmd)
                     }
                 }
                 #[cfg(not(windows))]
                 {
-                    which::which(cmd).is_ok()
+                    live_check(cmd)
                 }
             }
         } else {
-            which::which(cmd).is_ok()
+            live_check(cmd)
         };
 
         cache.borrow_mut().insert(cmd.to_owned(), exists);
@@ -607,7 +646,31 @@ fn handle_export(
         let (_path, cfg, _err) = resolve_config_opt(None);
         cfg
     };
-    print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
+    // For clink, default-bin must resolve to an absolute path.
+    //
+    // Why: clink invokes runex via Lua's `io.popen` which spawns a fresh
+    // cmd.exe child. That child inherits whatever PATH the clink-injected
+    // host process happens to have, and on real machines that PATH is
+    // sometimes degraded (e.g. system-only, with the User scope from
+    // HKCU not yet merged in). A bare `runex` command in the lua script
+    // would then fail to resolve. Embedding the absolute path of the
+    // currently-running executable (which is by definition reachable —
+    // we ourselves were just launched from it) sidesteps the entire
+    // PATH-inheritance question for clink.
+    //
+    // Other shells (bash/zsh/pwsh/nu) rely on PATH-resolved bare names
+    // because they're invoked from rcfiles where PATH is already correct,
+    // and because users can plausibly want to override which `runex`
+    // gets used. Only clink gets the absolute-path treatment.
+    let effective_bin = if matches!(s, Shell::Clink) && bin == "runex" {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()))
+            .unwrap_or(bin)
+    } else {
+        bin
+    };
+    print!("{}", runex_core::shell::export_script(s, &effective_bin, config.as_ref()));
     Ok(())
 }
 
@@ -711,6 +774,29 @@ fn handle_timings(
     Ok(())
 }
 
+/// Compose the [`doctor::DoctorEnvInfo`] that the `doctor` subcommand
+/// passes alongside the config checks. Today this only sets the
+/// Windows effective-search-path breakdown; on other platforms it
+/// returns an empty `DoctorEnvInfo` (the corresponding check is skipped
+/// inside `doctor::diagnose`).
+fn build_doctor_env_info() -> doctor::DoctorEnvInfo {
+    #[cfg(windows)]
+    {
+        let p = win_path::effective_search_path();
+        doctor::DoctorEnvInfo {
+            effective_search_path: Some(doctor::EffectiveSearchPathSummary {
+                from_process: p.from_process,
+                from_user_registry: p.from_user_registry,
+                from_system_registry: p.from_system_registry,
+            }),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        doctor::DoctorEnvInfo::default()
+    }
+}
+
 fn handle_doctor(
     config_flag: Option<&Path>,
     path_prepend: Option<&Path>,
@@ -723,7 +809,17 @@ fn handle_doctor(
     // Doctor checks live command existence — no precache (intentional)
     let command_exists = make_command_exists(path_prepend, None);
     let spinner = Spinner::start("Checking environment...");
-    let mut result = doctor::diagnose(&config_path, config.as_ref(), parse_error.as_deref(), &command_exists);
+    // Build informational env-info that doctor renders alongside the
+    // config checks. Currently only the Windows effective_search_path
+    // breakdown — see `runex/src/win_path.rs`.
+    let env_info = build_doctor_env_info();
+    let mut result = doctor::diagnose(
+        &config_path,
+        config.as_ref(),
+        parse_error.as_deref(),
+        &env_info,
+        &command_exists,
+    );
     if !no_shell_aliases {
         add_shell_alias_conflicts(&mut result, config.as_ref());
     }
@@ -1020,6 +1116,65 @@ mod tests {
         let exists = make_command_exists(Some(dir.path()), None);
         assert!(exists("myfaketool"));
         assert!(!exists("__runex_other_fake__"));
+    }
+
+    /// On Windows, child cmd.exe processes spawned by clink's lua `io.popen`
+    /// inherit only a subset of the user's PATH (the User-scope PATH from the
+    /// registry is sometimes missing). A binary in `~/.cargo/bin` (which is
+    /// always in HKCU User PATH for a Rust developer machine, but isn't
+    /// in the system PATH) must still be discoverable by `command_exists`.
+    ///
+    /// This test simulates that environment: it strips PATH down to a minimal
+    /// system value and verifies that we can still find a known cargo-installed
+    /// binary by consulting the registry's User PATH.
+    #[test]
+    #[cfg(windows)]
+    fn make_command_exists_finds_user_path_binary_when_process_path_is_minimal() {
+        // Probe whether cargo is on the registry User PATH; if not, this test
+        // can't reliably assert anything (e.g. CI without cargo in user PATH).
+        let user_path = read_user_path_for_test();
+        if !user_path
+            .split(';')
+            .any(|p| std::path::Path::new(&p.replace("%UserProfile%", &std::env::var("USERPROFILE").unwrap_or_default()))
+                .join("cargo.exe").is_file())
+        {
+            eprintln!("skipping: cargo.exe not found via registry User PATH");
+            return;
+        }
+
+        // Strip the process PATH to a minimal Windows system value.
+        let original = std::env::var_os("PATH");
+        // SAFETY: tests run sequentially within this test module. We do not
+        // mutate PATH from any other test, and we restore it before returning.
+        unsafe { std::env::set_var("PATH", r"C:\Windows\System32;C:\Windows"); }
+
+        let exists = make_command_exists(None, None);
+        let found = exists("cargo");
+
+        // SAFETY: see above.
+        unsafe {
+            match original {
+                Some(v) => std::env::set_var("PATH", v),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+
+        assert!(
+            found,
+            "make_command_exists must consult HKCU Environment Path on Windows so commands installed under the User PATH (e.g. ~/.cargo/bin) are discoverable even when the process PATH lacks them"
+        );
+    }
+
+    #[cfg(windows)]
+    fn read_user_path_for_test() -> String {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let env = match hkcu.open_subkey("Environment") {
+            Ok(k) => k,
+            Err(_) => return String::new(),
+        };
+        env.get_value("Path").unwrap_or_default()
     }
 
     } // mod command_exists

@@ -25,10 +25,18 @@ local function runex_call_hook(line, cursor)
     if not runex_is_safe_line(line) then
         return nil
     end
-    local cmd = runex_shell_quote(RUNEX_BIN)
+    -- io.popen on Windows ultimately calls cmd.exe with the assembled
+    -- string. cmd.exe's quote handling (without /S) is heuristic: when the
+    -- string starts with `"` AND ends with `"`, cmd strips the outermost
+    -- pair before parsing the rest. So we wrap the entire command in an
+    -- extra pair of `"` so the inner quoting around argv0 and --line
+    -- survives. argv0 itself is quoted in case the binary path contains
+    -- spaces (e.g. `Program Files`). Empirically validated by the
+    -- runex/tests/clink_cmd_quoting.rs integration tests.
+    local cmd = '"' .. runex_shell_quote(RUNEX_BIN)
         .. ' hook --shell clink --line ' .. runex_shell_quote(line)
         .. ' --cursor ' .. tostring(cursor)
-        .. ' 2>&1'
+        .. ' 2>&1"'
     local handle = io.popen(cmd)
     if not handle then return nil end
     local out = handle:read("*a")

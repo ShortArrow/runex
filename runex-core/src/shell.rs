@@ -1259,6 +1259,27 @@ mod tests {
     }
 
 
+    /// Regression: cmd.exe (which Lua's `io.popen` invokes via `cmd /c
+    /// <string>` on Windows) heuristically strips the *outermost* pair of
+    /// double quotes when the string starts AND ends with `"`. The clink
+    /// template therefore must wrap the entire io.popen command in an
+    /// extra pair of `"` so the inner quoting around argv0 (which can
+    /// contain spaces, e.g. `C:\Program Files\...`) and `--line "..."`
+    /// survives. Without this, cmd reports `'... is not recognized as an
+    /// internal or external command'` and the hook never executes.
+    #[test]
+    fn clink_io_popen_command_is_wrapped_in_extra_pair_of_quotes() {
+        let s = export_script(Shell::Clink, "runex", None);
+        assert!(
+            s.contains("local cmd = '\"' .. runex_shell_quote(RUNEX_BIN)"),
+            "clink script must prepend a literal '\"' before runex_shell_quote(RUNEX_BIN): {s}"
+        );
+        assert!(
+            s.contains("' 2>&1\"'"),
+            "clink script must append a literal '\"' after `2>&1`: {s}"
+        );
+    }
+
     #[test]
     fn nu_quote_string_escapes_tab() {
         let s = nu_quote_string("run\tex");

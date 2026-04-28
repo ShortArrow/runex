@@ -33,6 +33,64 @@ impl DiagResult {
     }
 }
 
+/// Informational facts about the host environment that `runex doctor`
+/// surfaces alongside the config-validation checks.
+///
+/// Today this only carries the Windows effective search PATH summary.
+/// The struct exists (rather than passing a bare value) so future
+/// platform diagnostics — XDG paths, registry overrides, shell autodetect
+/// hints — can be added without churning every call site.
+#[derive(Debug, Clone, Default)]
+pub struct DoctorEnvInfo {
+    /// Summary of the augmented command-resolution PATH used on Windows.
+    /// `None` on non-Windows or when the caller can't compute it. When
+    /// present, `diagnose` emits an informational `effective_search_path`
+    /// check so a degraded process PATH (clink-style) is visible to the
+    /// user before they hit a `command:foo not found` warning.
+    pub effective_search_path: Option<EffectiveSearchPathSummary>,
+}
+
+/// Per-source breakdown of the merged PATH `runex hook` actually uses
+/// when resolving `when_command_exists` entries.
+#[derive(Debug, Clone)]
+pub struct EffectiveSearchPathSummary {
+    pub from_process: usize,
+    pub from_user_registry: usize,
+    pub from_system_registry: usize,
+}
+
+impl EffectiveSearchPathSummary {
+    pub fn total(&self) -> usize {
+        self.from_process + self.from_user_registry + self.from_system_registry
+    }
+}
+
+/// Build the informational `effective_search_path` check.
+///
+/// Uses `Warn` status only when the process PATH itself is empty
+/// (extremely unusual — almost certainly a misconfigured environment),
+/// otherwise stays `Ok` and reports the breakdown so users can spot
+/// "process=2, +user=42, +system=15" patterns that suggest the parent
+/// process was launched with a degraded PATH.
+fn check_effective_search_path(s: &EffectiveSearchPathSummary) -> Check {
+    let total = s.total();
+    let detail = format!(
+        "{} entries (process={}, +user={}, +system={})",
+        total, s.from_process, s.from_user_registry, s.from_system_registry
+    );
+    Check {
+        name: "effective_search_path".into(),
+        status: if s.from_process == 0 {
+            // No process PATH at all is a real anomaly — flag it.
+            CheckStatus::Warn
+        } else {
+            CheckStatus::Ok
+        },
+        detail,
+        detail_verbose: None,
+    }
+}
+
 fn check_config_file(config_path: &Path) -> Check {
     let exists = config_path.exists();
     Check {
@@ -422,13 +480,25 @@ pub fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
 /// `config` is `None` when config loading failed (parse error, etc.).
 /// `parse_error` carries the error message when `config` is `None` due to a parse failure.
 /// `command_exists` is injected for testability.
-pub fn diagnose<F>(config_path: &Path, config: Option<&Config>, parse_error: Option<&str>, command_exists: F) -> DiagResult
+pub fn diagnose<F>(
+    config_path: &Path,
+    config: Option<&Config>,
+    parse_error: Option<&str>,
+    env_info: &DoctorEnvInfo,
+    command_exists: F,
+) -> DiagResult
 where
     F: Fn(&str) -> bool,
 {
     let mut checks = Vec::new();
     checks.push(check_config_file(config_path));
     checks.push(check_config_parse(config, parse_error));
+    if let Some(summary) = env_info.effective_search_path.as_ref() {
+        // Emit before the per-command checks so users see the search PATH
+        // context above any "command:foo not found" warnings that may
+        // follow.
+        checks.push(check_effective_search_path(summary));
+    }
     if let Some(cfg) = config {
         checks.extend(check_keybind(cfg));
         checks.extend(check_abbr_quality(cfg));
@@ -481,7 +551,7 @@ mod tests {
         writeln!(f, "version = 1").unwrap();
 
         let cfg = test_config(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
 
         assert!(result.is_healthy());
         assert_eq!(result.checks[0].status, CheckStatus::Ok); // file exists
@@ -492,7 +562,7 @@ mod tests {
     #[test]
     fn config_file_missing() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
-        let result = diagnose(&path, None, None, |_| true);
+        let result = diagnose(&path, None, None, &DoctorEnvInfo::default(), |_| true);
 
         assert!(!result.is_healthy());
         assert_eq!(result.checks[0].status, CheckStatus::Error);
@@ -502,7 +572,7 @@ mod tests {
     #[test]
     fn config_parse_error_detail_shown() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
-        let result = diagnose(&path, None, Some("TOML parse error at line 4"), |_| true);
+        let result = diagnose(&path, None, Some("TOML parse error at line 4"), &DoctorEnvInfo::default(), |_| true);
 
         let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
         assert_eq!(parse_check.status, CheckStatus::Error);
@@ -514,7 +584,7 @@ mod tests {
     fn config_parse_multiline_error_splits_detail_and_verbose() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let multiline = "TOML parse error at line 4, column 11\n  |\n4 | trigger = \"space\"\n  |           ^^^^^^^\ninvalid type";
-        let result = diagnose(&path, None, Some(multiline), |_| true);
+        let result = diagnose(&path, None, Some(multiline), &DoctorEnvInfo::default(), |_| true);
 
         let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
         assert_eq!(parse_check.status, CheckStatus::Error);
@@ -534,7 +604,7 @@ mod tests {
     #[test]
     fn config_parse_single_line_error_has_no_verbose() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
-        let result = diagnose(&path, None, Some("unsupported version: 99"), |_| true);
+        let result = diagnose(&path, None, Some("unsupported version: 99"), &DoctorEnvInfo::default(), |_| true);
 
         let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
         assert!(parse_check.detail_verbose.is_none(),
@@ -548,7 +618,7 @@ mod tests {
         std::fs::write(&path, "version = 1").unwrap();
 
         let cfg = test_config(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
-        let result = diagnose(&path, Some(&cfg), None, |_| false);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
 
         assert!(result.is_healthy());
         assert_eq!(result.checks[2].status, CheckStatus::Warn);
@@ -559,7 +629,7 @@ mod tests {
     fn doctor_warns_empty_key() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![abbr("", "git commit -m")]);
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             result.checks.iter().any(|c| c.name.contains("empty_key") && c.status == CheckStatus::Warn),
             "must warn on empty key: {:?}", result.checks
@@ -570,7 +640,7 @@ mod tests {
     fn doctor_warns_self_loop() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![abbr("ls", "ls")]);
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             result.checks.iter().any(|c| c.name.contains("self_loop") && c.status == CheckStatus::Warn),
             "must warn on self-loop: {:?}", result.checks
@@ -605,7 +675,7 @@ mod tests {
             precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must warn when self_insert.bash = shift-space: {:?}", result.checks
@@ -627,7 +697,7 @@ mod tests {
             precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must not warn when only self_insert.pwsh = shift-space: {:?}", result.checks
@@ -649,7 +719,7 @@ mod tests {
             precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must warn when default self_insert = shift-space (propagates to bash/zsh): {:?}", result.checks
@@ -671,7 +741,7 @@ mod tests {
             precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must not warn when only pwsh self_insert = shift-space: {:?}", result.checks
@@ -693,7 +763,7 @@ mod tests {
     fn doctor_self_loop_detail_strips_control_chars_from_key() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![abbr("key\x07evil", "key\x07evil")]);
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         let self_loop = result.checks.iter().find(|c| c.name.contains("self_loop"));
         let check = self_loop.expect("must produce a self_loop check for a self-loop key");
         assert!(
@@ -711,7 +781,7 @@ mod tests {
             expand: crate::model::PerShellString::All("lsd".into()),
             when_command_exists: Some(crate::model::PerShellCmds::All(vec!["cmd\x07inject".into()])),
         }]);
-        let result = diagnose(&path, Some(&cfg), None, |_| false);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.contains("command:"));
         let check = cmd_check.expect("must produce a command check");
         assert!(
@@ -725,7 +795,7 @@ mod tests {
     #[test]
     fn doctor_config_file_detail_strips_control_chars_from_path() {
         let path = std::path::PathBuf::from("/home/user/\x1b[2Jevil.toml");
-        let result = diagnose(&path, None, None, |_| true);
+        let result = diagnose(&path, None, None, &DoctorEnvInfo::default(), |_| true);
         let config_check = result.checks.iter().find(|c| c.name == "config_file");
         let check = config_check.expect("must produce a config_file check");
         assert!(
@@ -745,7 +815,7 @@ mod tests {
             expand: crate::model::PerShellString::All("lsd".into()),
             when_command_exists: Some(crate::model::PerShellCmds::All(vec!["cmd\x1b[2Jevil".into()])),
         }]);
-        let result = diagnose(&path, Some(&cfg), None, |_| false);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.starts_with("command:"));
         let check = cmd_check.expect("must produce a command check");
         assert!(

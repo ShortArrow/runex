@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **clink (cmd.exe) integration: abbreviations failed to expand when the
+  cmd host process had a degraded PATH.** When clink injected into a
+  cmd.exe whose PATH lacked the User-scope entries from the registry
+  (e.g. `~/.cargo/bin`, `~/AppData/Local/Microsoft/WinGet/Links`),
+  `runex hook`'s `which::which` lookups would fail and
+  `when_command_exists` rules silently evaluated false, producing a
+  no-op space insertion instead of expansion. `runex hook` now augments
+  command resolution with HKCU/HKLM `Environment\Path` on Windows so
+  binaries installed under the User PATH stay reachable regardless of
+  how the parent process was launched. `runex doctor` also reports an
+  `effective_search_path: N entries (process=…, +user=…, +system=…)`
+  line so this kind of degradation is visible at a glance. See
+  `runex/src/win_path.rs` and the regression test
+  `runex/tests/windows_path_isolation.rs`.
+- `runex export clink` now embeds the absolute path of the running
+  executable when called with the default `--bin runex`, sidestepping
+  the same PATH-inheritance issue for clink's lua side.
+
 ### Changed
 - **Shell integration rewritten as thin wrappers around the new `runex hook`
   subcommand.** The script emitted by `runex export <shell>` is now a small
