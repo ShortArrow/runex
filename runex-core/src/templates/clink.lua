@@ -8,6 +8,11 @@ local RUNEX_BIN = {CLINK_BIN}
 -- belt-and-suspenders check — a token containing shell metacharacters would
 -- have to be an abbreviation key to reach this path, and the config validator
 -- already forbids those, but we don't rely on that here.
+--
+-- This stays in lua (rather than as a `runex validate-line` subcommand)
+-- because the whole point is to short-circuit *before* spending the cost
+-- of spawning a cmd.exe + runex.exe. A roundtrip to validate the input
+-- would defeat the gate.
 local function runex_is_safe_line(line)
     -- Allow anything printable that's not control; io.popen goes through cmd.exe
     -- so we still quote, but reject embedded nul and control chars outright.

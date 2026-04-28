@@ -41,6 +41,21 @@ pub fn default_config_content() -> &'static str {
 }
 
 /// The single line appended to the shell rc file.
+///
+/// ## Drift resistance
+///
+/// For bash/zsh/pwsh/nu the line either *re-evaluates* the export at
+/// every shell start (`eval "$(runex export ...)"`,
+/// `Invoke-Expression (& runex export pwsh ...)`) or re-writes the
+/// shell-side script every start (nu's `save --force`). That makes the
+/// integration **drift-proof**: upgrading runex automatically picks up
+/// the latest template the next time the shell starts.
+///
+/// **clink is the exception.** The lua file lives outside any rcfile
+/// reload pathway, so users have to re-run `runex init clink` after a
+/// `runex` upgrade. `runex doctor` flags this drift via the
+/// `integration:clink` check (see
+/// [`crate::integration_check::check_clink_lua_freshness`]).
 pub fn integration_line(shell: Shell, bin: &str) -> String {
     match shell {
         Shell::Bash => format!("eval \"$({} export bash)\"", bash_quote_string(bin)),

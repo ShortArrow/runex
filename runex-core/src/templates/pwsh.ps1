@@ -9,6 +9,12 @@
 # We access _queuedKeys via reflection. If the probe fails (PSReadLine API
 # change, etc.) we fall back to 0 and expansion runs as normal — we never
 # crash the handler.
+#
+# This logic stays in pwsh (rather than being lifted into Rust) on purpose:
+# the only way to read _queuedKeys is to reach into the live PSReadLine
+# singleton inside the running pwsh process. A Rust subprocess can't see
+# that state. The state we care about gets forwarded to `runex hook` via
+# the `--paste-pending` flag once we've decided here.
 $Script:__runex_psrl_singleton_field = $null
 $Script:__runex_psrl_queued_keys_field = $null
 try {

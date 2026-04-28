@@ -776,25 +776,43 @@ fn handle_timings(
 
 /// Compose the [`doctor::DoctorEnvInfo`] that the `doctor` subcommand
 /// passes alongside the config checks. Today this only sets the
-/// Windows effective-search-path breakdown; on other platforms it
-/// returns an empty `DoctorEnvInfo` (the corresponding check is skipped
-/// inside `doctor::diagnose`).
-fn build_doctor_env_info() -> doctor::DoctorEnvInfo {
+/// Windows effective-search-path breakdown; on other platforms only
+/// the integration-check fields apply.
+fn build_doctor_env_info(config: Option<&Config>) -> doctor::DoctorEnvInfo {
+    let mut info = doctor::DoctorEnvInfo::default();
+
     #[cfg(windows)]
     {
         let p = win_path::effective_search_path();
-        doctor::DoctorEnvInfo {
-            effective_search_path: Some(doctor::EffectiveSearchPathSummary {
-                from_process: p.from_process,
-                from_user_registry: p.from_user_registry,
-                from_system_registry: p.from_system_registry,
-            }),
-        }
+        info.effective_search_path = Some(doctor::EffectiveSearchPathSummary {
+            from_process: p.from_process,
+            from_user_registry: p.from_user_registry,
+            from_system_registry: p.from_system_registry,
+        });
     }
-    #[cfg(not(windows))]
-    {
-        doctor::DoctorEnvInfo::default()
-    }
+
+    // Render the canonical clink export so doctor can detect drift on
+    // disk. Use the absolute path of our own executable as the bin
+    // (matching `handle_export`'s clink full-path fallback) so a fresh
+    // `runex doctor` after upgrade matches what `runex init clink`
+    // would write today.
+    let clink_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "runex".to_string());
+    info.clink_export_for_drift_check = Some(runex_core::shell::export_script(
+        Shell::Clink,
+        &clink_bin,
+        config,
+    ));
+
+    // We always want to know whether the user ran `runex init <shell>`
+    // for each rcfile-bearing shell. doctor itself decides whether to
+    // emit each row based on rcfile existence (a missing rcfile means
+    // "user doesn't use that shell" and the check is skipped silently).
+    info.check_rcfile_markers = doctor::RcfileMarkerSelection::all();
+
+    info
 }
 
 fn handle_doctor(
@@ -810,9 +828,11 @@ fn handle_doctor(
     let command_exists = make_command_exists(path_prepend, None);
     let spinner = Spinner::start("Checking environment...");
     // Build informational env-info that doctor renders alongside the
-    // config checks. Currently only the Windows effective_search_path
-    // breakdown — see `runex/src/win_path.rs`.
-    let env_info = build_doctor_env_info();
+    // config checks: Windows effective_search_path breakdown (see
+    // `runex/src/win_path.rs`), per-shell rcfile marker checks, and a
+    // clink-lua drift check. The current config is forwarded so the
+    // generated clink export reflects the user's keybinds & abbrs.
+    let env_info = build_doctor_env_info(config.as_ref());
     let mut result = doctor::diagnose(
         &config_path,
         config.as_ref(),

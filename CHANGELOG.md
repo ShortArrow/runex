@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`runex doctor` now reports shell-integration health.** New
+  `integration:<shell>` rows tell the user whether each shell's rcfile
+  contains the `runex-init` marker (so a forgotten `runex init <shell>`
+  is visible at a glance) and, for clink specifically, whether the
+  `runex.lua` file on disk has drifted from what `runex export clink`
+  would emit today. The clink check catches the most common upgrade
+  pitfall — bash/zsh/pwsh/nu re-source their integration on shell
+  start, but clink keeps a static copy that has to be refreshed by
+  re-running `runex init clink`. New module
+  `runex-core/src/integration_check.rs` houses the comparison logic.
+
 ### Fixed
 - **clink (cmd.exe) integration: abbreviations failed to expand when the
   cmd host process had a degraded PATH.** When clink injected into a

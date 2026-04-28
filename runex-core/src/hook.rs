@@ -114,6 +114,16 @@ fn is_known_token(config: &Config, token: &str) -> bool {
 
 /// Render a `HookAction` into a shell-specific eval-able string. The shell
 /// integration script consumes this verbatim via `eval` (or equivalent).
+///
+/// ## Why a `match` instead of a trait
+///
+/// A textbook DIP refactor would introduce a `Renderer` trait with one
+/// impl per shell. We deliberately don't: there are five shells, the
+/// rendering logic for each is a single `format!`, and the shell list
+/// is closed (we wouldn't add a sixth at runtime). A trait would
+/// fragment five trivial format strings across five files without
+/// improving testability — the existing per-shell unit tests in this
+/// module already exercise each arm independently.
 pub fn render_action(shell: Shell, action: &HookAction) -> String {
     let (line, cursor) = match action {
         HookAction::Replace { line, cursor } | HookAction::InsertSpace { line, cursor } => {

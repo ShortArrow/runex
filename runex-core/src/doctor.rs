@@ -36,8 +36,7 @@ impl DiagResult {
 /// Informational facts about the host environment that `runex doctor`
 /// surfaces alongside the config-validation checks.
 ///
-/// Today this only carries the Windows effective search PATH summary.
-/// The struct exists (rather than passing a bare value) so future
+/// The struct exists (rather than passing bare values) so future
 /// platform diagnostics — XDG paths, registry overrides, shell autodetect
 /// hints — can be added without churning every call site.
 #[derive(Debug, Clone, Default)]
@@ -48,6 +47,39 @@ pub struct DoctorEnvInfo {
     /// check so a degraded process PATH (clink-style) is visible to the
     /// user before they hit a `command:foo not found` warning.
     pub effective_search_path: Option<EffectiveSearchPathSummary>,
+
+    /// The output `runex export clink` would produce *now*. When
+    /// `Some`, `diagnose` compares it against the on-disk `runex.lua`
+    /// and warns if the two have drifted — the canonical sign that the
+    /// user upgraded runex but never re-ran `runex init clink`. `None`
+    /// skips the check (e.g. on platforms without clink, or when the
+    /// caller can't render the export).
+    pub clink_export_for_drift_check: Option<String>,
+
+    /// Per-shell rcfile marker checks. The caller decides which shells
+    /// the user actually has installed; entries set to `true` produce
+    /// a `integration:<shell>` row in the doctor output.
+    pub check_rcfile_markers: RcfileMarkerSelection,
+}
+
+/// Which shells should have their rcfile checked for the runex init
+/// marker. The struct exists (rather than a bare `Vec<Shell>`) so
+/// future per-shell options (skip-if-missing, custom path overrides)
+/// can be added without churning callers.
+#[derive(Debug, Clone, Default)]
+pub struct RcfileMarkerSelection {
+    pub bash: bool,
+    pub zsh: bool,
+    pub pwsh: bool,
+    pub nu: bool,
+}
+
+impl RcfileMarkerSelection {
+    /// Enable checks for every shell that has an rcfile concept
+    /// (i.e. all of them except clink).
+    pub fn all() -> Self {
+        Self { bash: true, zsh: true, pwsh: true, nu: true }
+    }
 }
 
 /// Per-source breakdown of the merged PATH `runex hook` actually uses
@@ -499,12 +531,55 @@ where
         // follow.
         checks.push(check_effective_search_path(summary));
     }
+    checks.extend(integration_marker_checks(&env_info.check_rcfile_markers));
+    if let Some(export) = env_info.clink_export_for_drift_check.as_deref() {
+        let r = crate::integration_check::check_clink_lua_freshness(
+            export,
+            &crate::integration_check::default_clink_lua_paths(),
+        );
+        checks.push(integration_check_to_check(r));
+    }
     if let Some(cfg) = config {
         checks.extend(check_keybind(cfg));
         checks.extend(check_abbr_quality(cfg));
         checks.extend(check_when_command_exists(cfg, &command_exists));
     }
     DiagResult { checks }
+}
+
+/// Convert an [`integration_check::IntegrationCheck`] into the doctor
+/// `Check` shape. `Outdated` becomes `Warn`, `Missing` becomes `Warn`
+/// (we don't escalate to Error: a stale or missing rcfile shouldn't
+/// fail `doctor` outright — the user's shell still works).
+fn integration_check_to_check(r: crate::integration_check::IntegrationCheck) -> Check {
+    use crate::integration_check::IntegrationCheck;
+    let (status, name, detail) = match r {
+        IntegrationCheck::Ok { name, detail } => (CheckStatus::Ok, name, detail),
+        IntegrationCheck::Outdated { name, detail, .. } => (CheckStatus::Warn, name, detail),
+        IntegrationCheck::Missing { name, detail } => (CheckStatus::Warn, name, detail),
+        IntegrationCheck::Skipped { name, detail } => (CheckStatus::Ok, name, detail),
+    };
+    Check { name, status, detail, detail_verbose: None }
+}
+
+/// Run the rcfile-marker check for each shell selected by the caller.
+fn integration_marker_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
+    use crate::integration_check::check_rcfile_marker;
+    use crate::shell::Shell;
+    let mut out = Vec::new();
+    if sel.bash {
+        out.push(integration_check_to_check(check_rcfile_marker(Shell::Bash, None)));
+    }
+    if sel.zsh {
+        out.push(integration_check_to_check(check_rcfile_marker(Shell::Zsh, None)));
+    }
+    if sel.pwsh {
+        out.push(integration_check_to_check(check_rcfile_marker(Shell::Pwsh, None)));
+    }
+    if sel.nu {
+        out.push(integration_check_to_check(check_rcfile_marker(Shell::Nu, None)));
+    }
+    out
 }
 
 #[cfg(test)]
