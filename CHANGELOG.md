@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> Release-time reminder: bump the AUR `runex-bin` PKGBUILD alongside any
+> hook/CLI surface change. Older binaries (e.g. AUR 0.1.11 pre-hook) on
+> a user's `PATH` make rcfile-driven integrations silently fall back to
+> "literal space" because `runex hook` errors out as an unknown
+> subcommand. The shell template safe-fails by design, so this isn't a
+> bug to fix in the code — it's an operations note.
+
 ### Added
 - **`runex doctor` now reports shell-integration health.** New
   `integration:<shell>` rows tell the user whether each shell's rcfile

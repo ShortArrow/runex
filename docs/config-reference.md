@@ -378,6 +378,30 @@ $ runex doctor
 
 Array indices and rule numbers in the field path are 1-based. The field path is a logical path — it mirrors the in-memory shape (e.g. `expand.pwsh`, `when_command_exists.default[2]`), not literal TOML syntax.
 
+### `runex doctor` — environment & integration health
+
+Beyond config validation, `doctor` surfaces two categories of
+environment-level checks. Each row's status (`OK` / `WARN`) tells you
+whether action is required.
+
+| Check | Status | Meaning |
+|-------|--------|---------|
+| `effective_search_path` *(Windows-only)* | `OK` | Reports the PATH runex uses when resolving `when_command_exists` entries. The breakdown `entries (process=N, +user=M, +system=K)` shows how many came from the inherited process PATH versus the registry's HKCU and HKLM `Environment\Path`. If `+user` or `+system` is non-zero, the parent process inherited a degraded PATH and runex augmented it from the registry. Useful for diagnosing `command:foo not found` warnings that contradict your shell's PATH. |
+| `effective_search_path` *(Windows-only)* | `WARN` | The process PATH is empty — almost certainly a misconfigured launcher. |
+| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `OK` | The `# runex-init` marker is present in the rcfile (so `eval "$(runex export <shell>)"` is wired up), or the rcfile doesn't exist (treated as "user doesn't run that shell"). |
+| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `WARN` | The rcfile exists but lacks the marker. Run `runex init <shell>` to install the integration line. |
+| `integration:clink` | `OK` | The `runex.lua` on disk matches what `runex export clink` would emit today, or no clink integration is found (treated as "user doesn't run clink"). |
+| `integration:clink` | `WARN` | The on-disk `runex.lua` has drifted from the current export — typical after upgrading runex. Re-run `runex export clink > %LOCALAPPDATA%\clink\runex.lua`. |
+
+`integration:clink` is a content comparison rather than a marker check
+because the clink lua file is a static copy with no auto-refresh path.
+bash/zsh/pwsh/nu re-source `runex export <shell>` on every shell start
+so they can't drift.
+
+The `RUNEX_CLINK_LUA_PATH` environment variable overrides the search
+location used by the clink check (default candidates: `%LOCALAPPDATA%\clink\runex.lua`,
+then `~/.local/share/clink/runex.lua` for non-Windows clink forks).
+
 ### `runex doctor --strict`
 
 Warns about unknown fields in the config file and unreachable duplicate rules. Useful for catching typos:

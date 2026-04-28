@@ -118,6 +118,12 @@ Global flags (available on every subcommand):
 --json               JSON output (supported by: list, doctor, version, expand, which, timings)
 ```
 
+`runex doctor` reports several environment-level checks alongside the
+config validation: `effective_search_path` (Windows-only PATH augmentation
+summary, see [`docs/config-reference.md`](docs/config-reference.md#runex-doctor--environment--integration-health))
+and `integration:<shell>` (rcfile-marker presence and clink lua drift
+detection). See [`docs/setup.md`](docs/setup.md) for an annotated example.
+
 ## Avoiding Expansion
 
 If you use `trigger = "space"`, there are a few practical ways to avoid expansion:

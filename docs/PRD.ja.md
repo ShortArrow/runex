@@ -163,9 +163,14 @@ expand = "git commit -m"
 
 ## 9. ロードマップ
 
+### 完了 (0.1.11 以降)
+
+- 各キーストロークのロジックを `runex hook` サブコマンドに集約。シェルテンプレートは薄いラッパに縮小 (5 シェル合計 244 行)
+- `runex doctor` が環境レベルの健康診断を表示: Windows での `effective_search_path` 内訳、`integration:<shell>` (rcfile マーカー / clink lua のドリフト検知)
+
 ### 直近
 
-- `doctor` / `init` のエッジケース対応と診断改善
+- 実運用で見つかる新しい failure mode に応じて `doctor` / `init` の診断を継続的に強化
 
 ### 後回し
 

@@ -163,9 +163,19 @@ See `docs/config-reference.md` for the full field reference.
 
 ## 9. Roadmap
 
+### Done (post-0.1.11)
+
+- Per-keystroke logic centralised in the `runex hook` subcommand;
+  shell templates reduced to thin wrappers (244 lines total across
+  five shells).
+- `runex doctor` now reports environment-level health: Windows
+  `effective_search_path` breakdown and `integration:<shell>` rcfile
+  marker / clink-lua drift detection.
+
 ### Near-term
 
-- Harden `doctor` and `init` around edge cases and clearer diagnostics
+- Continue refining diagnostics surfaced by `doctor` and `init` as
+  new failure modes are observed in the wild.
 
 ### Later
 

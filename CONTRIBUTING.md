@@ -85,6 +85,36 @@ The rule: if new code does not need to spawn a process or write to stdout, it be
 
 **Testability follows from the architecture.** A function that accepts an injected closure can be tested without touching the filesystem or PATH. Design for this — it is not an afterthought.
 
+### Shell templates: what stays in the shell
+
+The `runex hook` migration moved every per-keystroke decision into Rust.
+The shell-side templates in `runex-core/src/templates/*.{sh,zsh,ps1,lua,nu}`
+are now thin wrappers (244 lines total across five shells) that read
+buffer state, call `runex hook`, and apply the eval-able output. When
+deciding whether new logic belongs in Rust or in a template, ask
+whether the work *requires* state only the live shell process holds:
+
+- **Stays in the shell** — anything that touches the live readline
+  buffer (`READLINE_LINE`, `LBUFFER/RBUFFER`, `commandline`, clink's
+  `rl_buffer`, PSReadLine `Replace`/`SetCursorPosition`); anything
+  that introspects the shell's internal state at runtime (PSReadLine
+  `_queuedKeys` reflection for paste detection); pre-RPC sanitisers
+  that exist specifically to *avoid* spawning a Rust subprocess
+  (clink's `runex_is_safe_line` rejects control characters before the
+  cmd.exe roundtrip).
+- **Belongs in Rust** — everything else. Token extraction,
+  command-position detection, cursor placeholder substitution, shell
+  escaping, output formatting, command-existence checks. New rules
+  that don't depend on live buffer state should be added to
+  `runex-core` and exposed through `runex hook`'s output.
+
+The remaining shell code is small, stable, and self-justifying. Avoid
+rewriting it for the sake of consistency — read the comment at the top
+of each template (e.g. `templates/pwsh.ps1` explains why paste
+detection lives in pwsh; `templates/clink.lua` explains why the line
+safety regex stays in lua) and trust the existing rationale unless
+there's a concrete observation suggesting otherwise.
+
 ### Security
 
 Any value that originates from user-controlled data (config fields, command names, file paths) and is later rendered to the terminal or embedded in a shell string must be sanitised before use.

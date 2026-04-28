@@ -116,6 +116,12 @@ runex version                            バージョンとビルドコミット
 --json               JSON 形式で出力（対応コマンド: list, doctor, version, expand, which, timings）
 ```
 
+`runex doctor` は設定検証と並んで環境レベルのチェックも表示します:
+`effective_search_path` (Windows 専用の PATH 補強概要、詳細は
+[`docs/config-reference.md`](config-reference.md#runex-doctor--environment--integration-health))
+と `integration:<shell>` (rcfile マーカーの有無、clink lua のドリフト検知)。
+出力例は [`docs/setup.ja.md`](setup.ja.md#runex-doctor-で動作確認) を参照。
+
 ## 展開を回避したいとき
 
 `trigger = "space"` を使う場合：
