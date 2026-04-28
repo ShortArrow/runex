@@ -94,9 +94,14 @@ pub fn check_clink_lua_freshness(current_export: &str, search_paths: &[PathBuf])
             };
         }
     }
-    IntegrationCheck::Missing {
+    // No file at any candidate path. Mirror the rcfile-marker policy:
+    // a missing integration script most likely means the user doesn't
+    // run clink. Don't shout about it. (Linux dev boxes hit this on
+    // every `runex doctor` invocation.) Drift is what we actually care
+    // about here — and that's a separate branch above.
+    IntegrationCheck::Skipped {
         name: "integration:clink".into(),
-        detail: "no clink integration found — run `runex init clink`".into(),
+        detail: "no clink integration found — assuming clink is not in use".into(),
     }
 }
 
@@ -247,14 +252,16 @@ mod tests {
         }
     }
 
-    /// When the only candidate path doesn't exist, fall through to Missing.
-    /// We do NOT walk other paths after a successful read (first-wins).
+    /// When the only candidate path doesn't exist, treat it as "user
+    /// doesn't run clink" and skip silently. Linux machines hit this
+    /// branch on every `runex doctor` and don't deserve a warning for
+    /// not having a Windows shell installed.
     #[test]
-    fn clink_lua_not_found_returns_missing() {
+    fn clink_lua_not_found_is_skipped() {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("does_not_exist.lua");
         let r = check_clink_lua_freshness("anything\n", &[p]);
-        assert!(matches!(r, IntegrationCheck::Missing { .. }), "got {r:?}");
+        assert!(matches!(r, IntegrationCheck::Skipped { .. }), "got {r:?}");
     }
 
     #[test]
