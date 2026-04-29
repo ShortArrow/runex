@@ -379,9 +379,15 @@ main (version bumps) vs develop (feature work).
 
 ### Binary release workflow
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml`, which
-builds for every supported platform and attaches archives to the
-auto-created GitHub release.
+Pushing a `v*` tag triggers `.github/workflows/release.yml`. The
+workflow runs `cargo test --workspace --locked` on Ubuntu, Windows,
+and macOS as a hard gate — every native target must pass before any
+binary is built or published. This closes the timing hole where a
+tag push would otherwise race the bump commit's CI workflow and
+could ship binaries from an unverified commit.
+
+Once the test gate passes, the workflow builds for every supported
+platform and attaches archives to the auto-created GitHub release.
 
 | Target                         | OS runner       | Archive |
 |--------------------------------|-----------------|---------|
