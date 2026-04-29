@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-04-30
+
 > Release-time reminder: bump the AUR `runex-bin` PKGBUILD alongside any
 > hook/CLI surface change. Older binaries (e.g. AUR 0.1.11 pre-hook) on
 > a user's `PATH` make rcfile-driven integrations silently fall back to
