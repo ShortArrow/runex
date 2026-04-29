@@ -1,6 +1,6 @@
 [package]
 name = "runex-core"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 description = "Core library for runex – a cross-shell abbreviation expansion engine"
 license = "MIT OR Apache-2.0"
