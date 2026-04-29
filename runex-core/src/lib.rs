@@ -1,7 +1,9 @@
 pub mod config;
 pub mod doctor;
 pub mod expand;
+pub mod hook;
 pub mod init;
+pub mod integration_check;
 pub mod model;
 pub mod precache;
 pub mod sanitize;

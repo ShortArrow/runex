@@ -77,7 +77,7 @@ shell adapters
 
 - Token → expansion (first passing rule wins)
 - Self-loop guard: `key == expand` → skip rule, continue evaluation
-- `when_command_exists`: skip rule if any listed command is absent from PATH; continue evaluation
+- `when_command_exists`: skip rule if any listed command does not resolve via `which` at hook time; continue evaluation
 - Fallback: pass through undefined tokens unchanged
 - Multiple rules with the same key: evaluated in order as a fallback chain
 
@@ -101,7 +101,6 @@ runex export <shell>                     generate shell integration script
 runex export <shell> --bin <name>        use a custom binary name in the script
 runex timings <key>                      show per-phase timing breakdown of expand
 runex timings                            time all abbreviation rules
-runex precache --shell <shell>           pre-compute command existence cache
 runex version                            show version and build commit
 ```
 
@@ -121,9 +120,9 @@ Override: `RUNEX_CONFIG` env var or `--config` flag.
 ```toml
 version = 1
 
-[keybind]
-trigger = "space"        # default trigger for all shells
-bash    = "alt-space"    # shell-specific override (optional)
+[keybind.trigger]
+default = "space"       # default trigger for all shells
+bash    = "alt-space"   # shell-specific override (optional)
 
 [[abbr]]
 key    = "ls"
@@ -164,9 +163,19 @@ See `docs/config-reference.md` for the full field reference.
 
 ## 9. Roadmap
 
+### Done (post-0.1.11)
+
+- Per-keystroke logic centralised in the `runex hook` subcommand;
+  shell templates reduced to thin wrappers (244 lines total across
+  five shells).
+- `runex doctor` now reports environment-level health: Windows
+  `effective_search_path` breakdown and `integration:<shell>` rcfile
+  marker / clink-lua drift detection.
+
 ### Near-term
 
-- Harden `doctor` and `init` around edge cases and clearer diagnostics
+- Continue refining diagnostics surfaced by `doctor` and `init` as
+  new failure modes are observed in the wild.
 
 ### Later
 

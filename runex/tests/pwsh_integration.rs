@@ -24,12 +24,26 @@ mod pwsh {
     }
 
     fn run_helper(config: &NamedTempFile, line: &str, cursor: usize) -> String {
+        // The new hook-based bootstrap puts all buffer logic in the Rust
+        // binary; pwsh just reads buffer state and evals the output. We
+        // mirror that here by calling `runex hook` directly and formatting
+        // the result the same way the legacy `__runex_expand_space` helper
+        // used to report it ("line|cursor").
         let script = r#"
-Invoke-Expression (& $env:RUNEX_BIN export pwsh --bin $env:RUNEX_BIN | Out-String)
 $line = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:RUNEX_LINE_B64))
-$candidate = __runex_get_expand_candidate $line ([int]$env:RUNEX_CURSOR)
-$state = __runex_expand_space $line ([int]$env:RUNEX_CURSOR) $candidate
-Write-Output "$($state.Line)|$($state.Cursor)"
+$cursor = [int]$env:RUNEX_CURSOR
+$out = & $env:RUNEX_BIN hook --shell pwsh --line $line --cursor $cursor 2>$null
+$__RUNEX_LINE = $null
+$__RUNEX_CURSOR = $null
+if ($out) { Invoke-Expression ($out -join "`n") }
+if ($null -ne $__RUNEX_LINE -and $null -ne $__RUNEX_CURSOR) {
+    Write-Output "$__RUNEX_LINE|$__RUNEX_CURSOR"
+} else {
+    # Fallback: insert a space at the cursor, mirroring the bootstrap.
+    $left  = $line.Substring(0, $cursor)
+    $right = $line.Substring($cursor)
+    Write-Output "$left $right|$($cursor + 1)"
+}
 "#;
 
         let output = Command::new("pwsh")
@@ -54,97 +68,11 @@ Write-Output "$($state.Line)|$($state.Cursor)"
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
-    fn run_with_invoke_expr(
-        config: &NamedTempFile,
-        invoke_expr: &str,
-        line: &str,
-        cursor: usize,
-    ) -> Option<String> {
-        let script = format!(
-            r#"
-{invoke_expr}
-$line = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:RUNEX_LINE_B64))
-$candidate = __runex_get_expand_candidate $line ([int]$env:RUNEX_CURSOR)
-$state = __runex_expand_space $line ([int]$env:RUNEX_CURSOR) $candidate
-Write-Output "$($state.Line)|$($state.Cursor)"
-"#
-        );
-
-        let output = Command::new("pwsh")
-            .args(["-NoLogo", "-NoProfile", "-Command", &script])
-            .env("RUNEX_BIN", bin_path())
-            .env("RUNEX_CONFIG", config.path())
-            .env(
-                "RUNEX_LINE_B64",
-                base64::engine::general_purpose::STANDARD.encode(line),
-            )
-            .env("RUNEX_CURSOR", cursor.to_string())
-            .output()
-            .unwrap();
-
-        if output.status.success() {
-            Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-        } else {
-            None
-        }
-    }
-
-    /// `& runex export pwsh` returns a string[]. PowerShell coerces it to a
-    /// space-separated string before Invoke-Expression sees it, breaking
-    /// multi-line function definitions. Both | Out-String and -join "`n"
-    /// collapse the array into a single string and work correctly.
-    #[test]
-    fn invoke_expression_bare_does_not_work() {
-        if !pwsh_available() { return; }
-        let config = write_config();
-        let result = run_with_invoke_expr(
-            &config,
-            "Invoke-Expression (& $env:RUNEX_BIN export pwsh --bin $env:RUNEX_BIN)",
-            "gcm",
-            3,
-        );
-        assert_ne!(
-            result.as_deref(),
-            Some("echo EXPANDED |14"),
-            "bare form unexpectedly worked — re-evaluate whether Out-String is still needed"
-        );
-    }
-
-    /// `| Out-String` is the documented form: readable and equivalent to -join.
-    #[test]
-    fn invoke_expression_out_string() {
-        if !pwsh_available() { return; }
-        let config = write_config();
-        let result = run_with_invoke_expr(
-            &config,
-            "Invoke-Expression (& $env:RUNEX_BIN export pwsh --bin $env:RUNEX_BIN | Out-String)",
-            "gcm",
-            3,
-        );
-        assert_eq!(
-            result.as_deref(),
-            Some("echo EXPANDED |14"),
-            "| Out-String form failed"
-        );
-    }
-
-    /// `-join \"`n\"` also works and is kept as a reference for comparison.
-    #[test]
-    fn invoke_expression_join_n_also_works() {
-        if !pwsh_available() { return; }
-        let config = write_config();
-        let result = run_with_invoke_expr(
-            &config,
-            r#"Invoke-Expression ((& $env:RUNEX_BIN export pwsh --bin $env:RUNEX_BIN) -join "`n")"#,
-            "gcm",
-            3,
-        );
-        assert_eq!(
-            result.as_deref(),
-            Some("echo EXPANDED |14"),
-            "-join form failed"
-        );
-    }
+    // Invoke-Expression format regression tests were removed when the pwsh
+    // bootstrap stopped relying on Invoke-Expression to materialise inline
+    // function definitions. The new bootstrap is a small script that defines
+    // its own functions and calls `runex hook` at keypress time — no more
+    // "function body vanishes when array is space-joined" hazard.
 
     #[test]
     fn expand_at_end() {

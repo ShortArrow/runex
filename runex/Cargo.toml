@@ -4,7 +4,7 @@ version = "0.1.11"
 edition = "2024"
 build = "build.rs"
 description = "Cross-shell abbreviation engine that expands short tokens into full commands"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/ShortArrow/runex"
 keywords = ["shell", "abbreviation", "alias", "expansion", "cli"]
 categories = ["command-line-utilities"]
@@ -24,6 +24,9 @@ which = "7"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
 
 [dev-dependencies]
 tempfile = "3"

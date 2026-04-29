@@ -14,8 +14,9 @@ Override with the `RUNEX_CONFIG` environment variable or the `--config` flag.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `version` | integer | yes | Schema version. Currently unused for validation — set to `1`. |
+| `version` | integer | yes | Schema version. Must be `1`; other values are rejected at load time. |
 | `keybind` | table | no | Trigger key configuration. If omitted, no key is bound. |
+| `precache` | table | no | **Deprecated since 0.2.0.** Retained for backward compatibility but has no run-time effect. See [`[precache]` (deprecated)](#precache-deprecated) below. |
 | `abbr` | array of tables | no | Abbreviation rules. Evaluated in order. |
 
 ---
@@ -86,6 +87,50 @@ Shell support for `self_insert`:
 
 ---
 
+## `[precache]` (deprecated)
+
+> [!IMPORTANT]
+> **Deprecated since 0.2.0.** This section has no run-time effect.
+> `runex doctor --strict` warns when it is present. Remove the section from your config to silence the warning.
+
+Earlier versions used the shell integration to populate a per-session command-existence cache at rc/profile time. With the move to the [`runex hook`](#how-shell-integration-works) per-keystroke RPC, `when_command_exists` is now evaluated against `which::which` (and the optional `--path-prepend` directory) every time the hook fires; the precache layer is gone and the section's `path_only` field is ignored.
+
+If you previously relied on `path_only = false`'s shell-native detection (cmdlets, aliases, user-defined functions), expect those rules to behave like `path_only = true` did before — only PATH-resolvable binaries match. Re-architecting that detection on top of `runex hook` is tracked separately.
+
+---
+
+## How shell integration works
+
+`runex export <shell>` emits a small bootstrap that registers a key handler
+on the trigger key. When the user presses that key the handler invokes the
+hidden subcommand `runex hook`, passing the current buffer and cursor as
+arguments:
+
+```
+runex hook --shell <shell> --line "<buffer>" --cursor <byte_offset>
+```
+
+The Rust core decides whether to expand (command-position detection,
+known-token check, `when_command_exists`, cursor-placeholder handling) and
+emits a shell-specific directive that the bootstrap evaluates. The five
+shells use different output formats but the same flow:
+
+| shell | hook output format |
+|---|---|
+| bash | `READLINE_LINE='...'; READLINE_POINT=N` (eval'd) |
+| zsh | `LBUFFER='...'; RBUFFER='...'` (eval'd) |
+| pwsh | `$__RUNEX_LINE = '...'; $__RUNEX_CURSOR = N` (Invoke-Expression'd) |
+| clink | `return { line = "...", cursor = N }` (Lua `load()` in a sandbox) |
+| nu | `{"line": "...", "cursor": N}` (parsed via `from json`) |
+
+Failures (missing config, malformed buffer) are silent: the hook returns
+an `InsertSpace` action so the bootstrap inserts a literal trigger key and
+the user keeps typing. Configuration changes take effect on the next
+keypress because the hook reads the config every time — no shell restart
+required after `runex add` / `runex remove`.
+
+---
+
 ## `[[abbr]]`
 
 Each `[[abbr]]` entry defines one abbreviation rule.
@@ -93,8 +138,26 @@ Each `[[abbr]]` entry defines one abbreviation rule.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `key` | string | yes | The short token to match. |
-| `expand` | string | yes | The full text to expand into. |
-| `when_command_exists` | array of strings | no | Only expand if **all** listed commands are present on PATH. |
+| `expand` | string or per-shell table | yes | The full text to expand into. See [per-shell form](#per-shell-form) below. |
+| `when_command_exists` | array of strings or per-shell table | no | Only expand if **all** listed commands resolve via `which` at hook time. |
+
+#### Per-shell form
+
+Both `expand` and `when_command_exists` accept either a flat value (applied to every shell) or a per-shell table. The table fields are `default`, `bash`, `zsh`, `pwsh`, and `nu` — any missing shell falls back to `default`. Clink always uses `default`.
+
+```toml
+# Flat (shared across shells)
+[[abbr]]
+key    = "gcm"
+expand = "git commit -m"
+when_command_exists = ["git"]
+
+# Per-shell (different expansions / conditions per shell)
+[[abbr]]
+key = "rm"
+expand = { default = "rm -i", pwsh = "Remove-Item" }
+when_command_exists = { default = ["rm"], pwsh = ["Remove-Item"] }
+```
 
 ### Evaluation order
 
@@ -135,7 +198,7 @@ expand = "ls"
 
 ### `when_command_exists`
 
-If any listed command is absent from PATH, the rule is skipped (not an error). Runex continues to the next rule with the same key.
+If any listed command cannot be resolved, the rule is skipped (not an error). Runex continues to the next rule with the same key. Resolution uses [`which::which`](https://crates.io/crates/which) and honors `--path-prepend <dir>` when set.
 
 Use `--path-prepend <dir>` to inject a directory into the command existence check without modifying the system PATH:
 
@@ -179,7 +242,16 @@ Runex validates each field at config load time and rejects invalid values with a
 
 **`when_command_exists` — command names only:**
 
-Entries must be bare command names (`lsd`, `bat`, `eza`). Path separators (`/`, `\`, `:`) are not allowed. To check a command installed outside your normal PATH, use `--path-prepend` at runtime instead.
+Entries must be bare command names (`lsd`, `bat`, `eza`). Beyond the path separators `/`, `\`, `:`, the following characters are rejected at config load time to keep `which`-style resolution unambiguous and to defend against any future code path that might re-introduce shell-side resolution:
+
+- Shell metacharacters: `&` `|` `;` `<` `>` `` ` `` `$` `(` `)` `{` `}` `'` `"`
+- cmd.exe metacharacters: `%` `^`
+- Whitespace: space, tab
+- Glob patterns: `*` `?` `[` `]`
+- Precache protocol delimiters: `,` `=`
+- Other risky punctuation: `!` `#` `~`
+
+To check a command installed outside your normal PATH, use `--path-prepend` at runtime instead.
 
 ---
 
@@ -290,32 +362,49 @@ $ runex timings ls --shell bash
 
 When the key argument is omitted, all abbreviation keys are timed. Use `--json` for machine-readable output.
 
-### `runex precache`
+### `runex doctor` — rejected rule diagnostics
 
-Pre-computes `when_command_exists` checks at shell startup so that `runex expand`
-can skip the expensive `which` lookup (~9 ms → ~0 ms per command).
+When a rule fails per-field validation, `parse_config` returns the first error it encounters, which is the message shown in `config_parse`. `doctor` always also lists **every** rejected rule with its field path so you can see what else needs fixing:
 
-```bash
-# The export script runs this automatically at shell startup:
-eval "$(runex precache --shell bash)"
-
-# Manual refresh (e.g. after installing a new tool):
-eval "$(runex precache --shell bash)"
+```
+$ runex doctor
+[OK]    config_file: found: ~/.config/runex/config.toml
+[ERROR] config_parse: failed to load config: abbr rule #1: key is empty (...)
+[WARN]  config_rejected_rules: 3 invalid abbr field(s) found; config loading still stops at the first one
+[WARN]  config_validation.abbr[1].key: rule #1 field 'key' rejected: key is empty
+[WARN]  config_validation.abbr[2].expand: rule #2 field 'expand' rejected: expand is empty
+[WARN]  config_validation.abbr[3].when_command_exists[1]: rule #3 field 'when_command_exists[1]' rejected: when_command_exists entry contains a shell metacharacter or glob pattern
 ```
 
-The cache is stored in `RUNEX_CMD_CACHE_V1` and validated by a fingerprint
-derived from `PATH`, config file mtime, and shell name. If the fingerprint
-does not match (e.g. after a `PATH` change), `runex expand` silently falls
-back to live `which` lookups.
+Array indices and rule numbers in the field path are 1-based. The field path is a logical path — it mirrors the in-memory shape (e.g. `expand.pwsh`, `when_command_exists.default[2]`), not literal TOML syntax.
 
-Cache rules:
-- `true` entries are trusted (skip `which`)
-- `false` entries are re-checked live (catches newly installed commands)
-- Missing entries trigger a live `which` check
+### `runex doctor` — environment & integration health
+
+Beyond config validation, `doctor` surfaces two categories of
+environment-level checks. Each row's status (`OK` / `WARN`) tells you
+whether action is required.
+
+| Check | Status | Meaning |
+|-------|--------|---------|
+| `effective_search_path` *(Windows-only)* | `OK` | Reports the PATH runex uses when resolving `when_command_exists` entries. The breakdown `entries (process=N, +user=M, +system=K)` shows how many came from the inherited process PATH versus the registry's HKCU and HKLM `Environment\Path`. If `+user` or `+system` is non-zero, the parent process inherited a degraded PATH and runex augmented it from the registry. Useful for diagnosing `command:foo not found` warnings that contradict your shell's PATH. |
+| `effective_search_path` *(Windows-only)* | `WARN` | The process PATH is empty — almost certainly a misconfigured launcher. |
+| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `OK` | The `# runex-init` marker is present in the rcfile (so `eval "$(runex export <shell>)"` is wired up), or the rcfile doesn't exist (treated as "user doesn't run that shell"). |
+| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `WARN` | The rcfile exists but lacks the marker. Run `runex init <shell>` to install the integration line. |
+| `integration:clink` | `OK` | The `runex.lua` on disk matches what `runex export clink` would emit today, or no clink integration is found (treated as "user doesn't run clink"). |
+| `integration:clink` | `WARN` | The on-disk `runex.lua` has drifted from the current export — typical after upgrading runex. Re-run `runex export clink > %LOCALAPPDATA%\clink\runex.lua`. |
+
+`integration:clink` is a content comparison rather than a marker check
+because the clink lua file is a static copy with no auto-refresh path.
+bash/zsh/pwsh/nu re-source `runex export <shell>` on every shell start
+so they can't drift.
+
+The `RUNEX_CLINK_LUA_PATH` environment variable overrides the search
+location used by the clink check (default candidates: `%LOCALAPPDATA%\clink\runex.lua`,
+then `~/.local/share/clink/runex.lua` for non-Windows clink forks).
 
 ### `runex doctor --strict`
 
-Warns about unknown fields in the config file. Useful for catching typos:
+Warns about unknown fields in the config file and unreachable duplicate rules. Useful for catching typos:
 
 ```
 $ runex doctor --strict

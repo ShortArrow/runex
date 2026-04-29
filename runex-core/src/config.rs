@@ -68,67 +68,181 @@ pub enum ConfigError {
     ExpandWhitespaceOnly(usize),
 }
 
+/// Reason a validation check failed. Shared across the walker (for doctor
+/// diagnostics) and the first-error adapter (for `parse_config`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ValidationReason {
+    // config-scope
+    TooManyRules,
+
+    // key (rule-scope)
+    KeyEmpty,
+    KeyWhitespaceOnly,
+    KeyTooLong,
+    KeyContainsNul,
+    KeyContainsControlChar,
+    KeyContainsDeceptiveUnicode,
+
+    // expand (rule-scope)
+    ExpandEmpty,
+    ExpandWhitespaceOnly,
+    ExpandTooLong,
+    ExpandContainsNul,
+    ExpandContainsControlChar,
+    ExpandContainsDeceptiveUnicode,
+
+    // when_command_exists list-level (rule-scope)
+    TooManyCmds,
+
+    // when_command_exists entry (rule-scope)
+    CmdEmpty,
+    CmdWhitespaceOnly,
+    CmdTooLong,
+    CmdContainsNul,
+    CmdContainsControlChar,
+    CmdContainsDeceptiveUnicode,
+    CmdContainsPathSeparator,
+    CmdContainsMetacharacter,
+}
+
+/// A single validation failure.
+///
+/// `ValidationIssue` carries enough information for `doctor` to produce a
+/// field-path-aware warning ("abbr[3].expand.pwsh rejected: expand is empty")
+/// while `parse_config` can still convert it back into a single `ConfigError`.
+///
+/// `field_path` is a *logical* path — it mirrors the in-memory `PerShellString`
+/// / `PerShellCmds` shape, not the literal TOML syntax. Array indices inside
+/// `field_path` are 1-based (consistent with `rule_index`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ValidationIssue {
+    Config {
+        reason: ValidationReason,
+    },
+    Rule {
+        rule_index: usize,
+        field_path: String,
+        reason: ValidationReason,
+    },
+}
+
+impl ValidationIssue {
+    /// Human-readable reason phrase (no leading "abbr rule #N: " prefix).
+    /// Used by `doctor` for WARN detail text.
+    pub(crate) fn reason_text(&self) -> &'static str {
+        let reason = match self {
+            ValidationIssue::Config { reason } => reason,
+            ValidationIssue::Rule { reason, .. } => reason,
+        };
+        match reason {
+            ValidationReason::TooManyRules => "config has too many abbr rules",
+            ValidationReason::KeyEmpty => "key is empty",
+            ValidationReason::KeyWhitespaceOnly => "key contains only whitespace",
+            ValidationReason::KeyTooLong => "key exceeds the maximum length",
+            ValidationReason::KeyContainsNul => "key contains a NUL byte",
+            ValidationReason::KeyContainsControlChar => "key contains an ASCII control character",
+            ValidationReason::KeyContainsDeceptiveUnicode => "key contains a Unicode visual-deception character",
+            ValidationReason::ExpandEmpty => "expand is empty",
+            ValidationReason::ExpandWhitespaceOnly => "expand contains only whitespace",
+            ValidationReason::ExpandTooLong => "expand exceeds the maximum length",
+            ValidationReason::ExpandContainsNul => "expand contains a NUL byte",
+            ValidationReason::ExpandContainsControlChar => "expand contains an ASCII control character",
+            ValidationReason::ExpandContainsDeceptiveUnicode => "expand contains a Unicode visual-deception character",
+            ValidationReason::TooManyCmds => "when_command_exists has too many entries",
+            ValidationReason::CmdEmpty => "when_command_exists entry is empty",
+            ValidationReason::CmdWhitespaceOnly => "when_command_exists entry contains only whitespace",
+            ValidationReason::CmdTooLong => "when_command_exists entry exceeds the maximum length",
+            ValidationReason::CmdContainsNul => "when_command_exists entry contains a NUL byte",
+            ValidationReason::CmdContainsControlChar => "when_command_exists entry contains an ASCII control character",
+            ValidationReason::CmdContainsDeceptiveUnicode => "when_command_exists entry contains a Unicode visual-deception character",
+            ValidationReason::CmdContainsPathSeparator => "when_command_exists entry contains a path separator",
+            ValidationReason::CmdContainsMetacharacter => "when_command_exists entry contains a shell metacharacter or glob pattern",
+        }
+    }
+
+    /// Convert back to a `ConfigError` for `parse_config`.
+    pub(crate) fn to_config_error(&self) -> ConfigError {
+        let (reason, n_for_rule) = match self {
+            ValidationIssue::Config { reason } => (reason, 0usize),
+            ValidationIssue::Rule { reason, rule_index, .. } => (reason, *rule_index),
+        };
+        let n = n_for_rule;
+        match reason {
+            ValidationReason::TooManyRules => ConfigError::TooManyRules,
+            ValidationReason::KeyEmpty => ConfigError::KeyEmpty(n),
+            ValidationReason::KeyWhitespaceOnly => ConfigError::KeyWhitespaceOnly(n),
+            ValidationReason::KeyTooLong => ConfigError::KeyTooLong(n),
+            ValidationReason::KeyContainsNul => ConfigError::KeyContainsNul(n),
+            ValidationReason::KeyContainsControlChar => ConfigError::KeyContainsControlChar(n),
+            ValidationReason::KeyContainsDeceptiveUnicode => ConfigError::KeyContainsDeceptiveUnicode(n),
+            ValidationReason::ExpandEmpty => ConfigError::ExpandEmpty(n),
+            ValidationReason::ExpandWhitespaceOnly => ConfigError::ExpandWhitespaceOnly(n),
+            ValidationReason::ExpandTooLong => ConfigError::ExpandTooLong(n),
+            ValidationReason::ExpandContainsNul => ConfigError::ExpandContainsNul(n),
+            ValidationReason::ExpandContainsControlChar => ConfigError::ExpandContainsControlChar(n),
+            ValidationReason::ExpandContainsDeceptiveUnicode => ConfigError::ExpandContainsDeceptiveUnicode(n),
+            ValidationReason::TooManyCmds => ConfigError::TooManyCmds(n),
+            ValidationReason::CmdEmpty => ConfigError::CmdEmpty(n),
+            ValidationReason::CmdWhitespaceOnly => ConfigError::CmdWhitespaceOnly(n),
+            ValidationReason::CmdTooLong => ConfigError::CmdTooLong(n),
+            ValidationReason::CmdContainsNul => ConfigError::CmdContainsNul(n),
+            ValidationReason::CmdContainsControlChar => ConfigError::CmdContainsControlChar(n),
+            ValidationReason::CmdContainsDeceptiveUnicode => ConfigError::CmdContainsDeceptiveUnicode(n),
+            ValidationReason::CmdContainsPathSeparator => ConfigError::CmdContainsPathSeparator(n),
+            ValidationReason::CmdContainsMetacharacter => ConfigError::CmdContainsMetacharacter(n),
+        }
+    }
+}
+
 /// Validate the `key` field of an abbreviation rule.
 ///
 /// Rejects keys that are empty, whitespace-only, or exceed [`MAX_KEY_BYTES`].
 /// Also rejects keys containing NUL bytes, ASCII control characters, or Unicode
 /// visual-deception characters — all of which would make the key unmatchable or
 /// cause it to display differently from its actual byte content.
-fn validate_abbr_key(key: &str, n: usize) -> Result<(), ConfigError> {
+fn check_abbr_key(key: &str) -> Option<ValidationReason> {
     if key.is_empty() {
-        return Err(ConfigError::KeyEmpty(n));
+        return Some(ValidationReason::KeyEmpty);
     }
     if key.trim().is_empty() {
-        return Err(ConfigError::KeyWhitespaceOnly(n));
+        return Some(ValidationReason::KeyWhitespaceOnly);
     }
     if key.len() > MAX_KEY_BYTES {
-        return Err(ConfigError::KeyTooLong(n));
+        return Some(ValidationReason::KeyTooLong);
     }
     if key.contains('\0') {
-        return Err(ConfigError::KeyContainsNul(n));
+        return Some(ValidationReason::KeyContainsNul);
     }
     if key.chars().any(|c| c.is_ascii_control()) {
-        return Err(ConfigError::KeyContainsControlChar(n));
+        return Some(ValidationReason::KeyContainsControlChar);
     }
     if key.chars().any(is_deceptive_unicode) {
-        return Err(ConfigError::KeyContainsDeceptiveUnicode(n));
+        return Some(ValidationReason::KeyContainsDeceptiveUnicode);
     }
-    Ok(())
+    None
 }
 
 /// Validate a single expand string value.
-fn validate_expand_value(expand: &str, n: usize) -> Result<(), ConfigError> {
+fn check_expand_value(expand: &str) -> Option<ValidationReason> {
     if expand.is_empty() {
-        return Err(ConfigError::ExpandEmpty(n));
+        return Some(ValidationReason::ExpandEmpty);
     }
     if expand.trim().is_empty() {
-        return Err(ConfigError::ExpandWhitespaceOnly(n));
+        return Some(ValidationReason::ExpandWhitespaceOnly);
     }
     if expand.len() > MAX_EXPAND_BYTES {
-        return Err(ConfigError::ExpandTooLong(n));
+        return Some(ValidationReason::ExpandTooLong);
     }
     if expand.contains('\0') {
-        return Err(ConfigError::ExpandContainsNul(n));
+        return Some(ValidationReason::ExpandContainsNul);
     }
     if expand.chars().any(|c| c.is_ascii_control()) {
-        return Err(ConfigError::ExpandContainsControlChar(n));
+        return Some(ValidationReason::ExpandContainsControlChar);
     }
     if expand.chars().any(is_deceptive_unicode) {
-        return Err(ConfigError::ExpandContainsDeceptiveUnicode(n));
+        return Some(ValidationReason::ExpandContainsDeceptiveUnicode);
     }
-    Ok(())
-}
-
-/// Validate the `expand` field of an abbreviation rule (all shell variants).
-///
-/// Rejects values that are empty, whitespace-only, or exceed [`MAX_EXPAND_BYTES`].
-/// Also rejects values containing NUL bytes, ASCII control characters, or Unicode
-/// visual-deception characters — all of which would corrupt the expanded output.
-fn validate_abbr_expand(expand: &crate::model::PerShellString, n: usize) -> Result<(), ConfigError> {
-    for value in expand.all_values() {
-        validate_expand_value(value, n)?;
-    }
-    Ok(())
+    None
 }
 
 /// Validate a single `when_command_exists` entry.
@@ -138,27 +252,27 @@ fn validate_abbr_expand(expand: &crate::model::PerShellString, n: usize) -> Resu
 /// visual-deception characters, or path separators (`/`, `\`, `:`).
 /// Only bare command names are allowed — filesystem paths would bypass the intent
 /// of checking only within `path_prepend`.
-fn validate_cmd_entry(cmd: &str, n: usize) -> Result<(), ConfigError> {
+fn check_cmd_entry(cmd: &str) -> Option<ValidationReason> {
     if cmd.is_empty() {
-        return Err(ConfigError::CmdEmpty(n));
+        return Some(ValidationReason::CmdEmpty);
     }
     if cmd.trim().is_empty() {
-        return Err(ConfigError::CmdWhitespaceOnly(n));
+        return Some(ValidationReason::CmdWhitespaceOnly);
     }
     if cmd.len() > MAX_CMD_BYTES {
-        return Err(ConfigError::CmdTooLong(n));
+        return Some(ValidationReason::CmdTooLong);
     }
     if cmd.contains('\0') {
-        return Err(ConfigError::CmdContainsNul(n));
+        return Some(ValidationReason::CmdContainsNul);
     }
     if cmd.chars().any(|c| c.is_ascii_control()) {
-        return Err(ConfigError::CmdContainsControlChar(n));
+        return Some(ValidationReason::CmdContainsControlChar);
     }
     if cmd.chars().any(is_deceptive_unicode) {
-        return Err(ConfigError::CmdContainsDeceptiveUnicode(n));
+        return Some(ValidationReason::CmdContainsDeceptiveUnicode);
     }
     if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
-        return Err(ConfigError::CmdContainsPathSeparator(n));
+        return Some(ValidationReason::CmdContainsPathSeparator);
     }
     // Reject shell metacharacters, cmd.exe metacharacters, glob patterns, and
     // the `,`/`=` delimiters used by the precache resolved protocol.
@@ -178,37 +292,197 @@ fn validate_cmd_entry(cmd: &str, n: usize) -> Result<(), ConfigError> {
         '!', '#', '~',
     ];
     if cmd.chars().any(|c| METACHARS.contains(&c)) {
-        return Err(ConfigError::CmdContainsMetacharacter(n));
+        return Some(ValidationReason::CmdContainsMetacharacter);
     }
-    Ok(())
+    None
 }
 
-/// Parse a TOML string into a [`Config`].
+/// Shell labels for per-shell variant field paths. Order matches
+/// `PerShellString::all_values` / `PerShellCmds::all_values`.
+const PER_SHELL_LABELS: &[&str] = &["default", "bash", "zsh", "pwsh", "nu"];
+
+/// Walk all rule-scope expand values for a `PerShellString`.
+/// Visits the same values in the same order as `PerShellString::all_values()`.
+fn walk_expand_issues(
+    expand: &crate::model::PerShellString,
+    rule_index: usize,
+    mut f: impl FnMut(ValidationIssue) -> std::ops::ControlFlow<()>,
+) -> std::ops::ControlFlow<()> {
+    use crate::model::PerShellString;
+    match expand {
+        PerShellString::All(s) => {
+            if let Some(reason) = check_expand_value(s) {
+                f(ValidationIssue::Rule {
+                    rule_index,
+                    field_path: "expand".into(),
+                    reason,
+                })?;
+            }
+        }
+        PerShellString::ByShell { default, bash, zsh, pwsh, nu } => {
+            let variants: [(&&str, &Option<String>); 5] = [
+                (&PER_SHELL_LABELS[0], default),
+                (&PER_SHELL_LABELS[1], bash),
+                (&PER_SHELL_LABELS[2], zsh),
+                (&PER_SHELL_LABELS[3], pwsh),
+                (&PER_SHELL_LABELS[4], nu),
+            ];
+            for (label, value) in variants {
+                if let Some(s) = value {
+                    if let Some(reason) = check_expand_value(s) {
+                        f(ValidationIssue::Rule {
+                            rule_index,
+                            field_path: format!("expand.{}", label),
+                            reason,
+                        })?;
+                    }
+                }
+            }
+        }
+    }
+    std::ops::ControlFlow::Continue(())
+}
+
+/// Walk `when_command_exists`, including the list-level `TooManyCmds` check
+/// before per-entry checks. Preserves `parse_config`'s ordering.
+fn walk_cmds_issues(
+    cmds: &crate::model::PerShellCmds,
+    rule_index: usize,
+    mut f: impl FnMut(ValidationIssue) -> std::ops::ControlFlow<()>,
+) -> std::ops::ControlFlow<()> {
+    use crate::model::PerShellCmds;
+
+    // Variant-level walk: always in [All] or [default, bash, zsh, pwsh, nu] order.
+    let variants: Vec<(Option<&str>, &[String])> = match cmds {
+        PerShellCmds::All(v) => vec![(None, v.as_slice())],
+        PerShellCmds::ByShell { default, bash, zsh, pwsh, nu } => {
+            let mut out = Vec::with_capacity(5);
+            for (label, value) in [
+                (PER_SHELL_LABELS[0], default),
+                (PER_SHELL_LABELS[1], bash),
+                (PER_SHELL_LABELS[2], zsh),
+                (PER_SHELL_LABELS[3], pwsh),
+                (PER_SHELL_LABELS[4], nu),
+            ] {
+                if let Some(v) = value {
+                    out.push((Some(label), v.as_slice()));
+                }
+            }
+            out
+        }
+    };
+
+    for (label, list) in variants {
+        // (list-level) TooManyCmds before per-entry validation.
+        if list.len() > MAX_CMD_LIST_LEN {
+            let path = match label {
+                Some(l) => format!("when_command_exists.{}", l),
+                None => "when_command_exists".into(),
+            };
+            f(ValidationIssue::Rule {
+                rule_index,
+                field_path: path,
+                reason: ValidationReason::TooManyCmds,
+            })?;
+            continue; // skip per-entry walk for an oversize list
+        }
+        // Per-entry walk
+        for (j, cmd) in list.iter().enumerate() {
+            if let Some(reason) = check_cmd_entry(cmd) {
+                let path = match label {
+                    Some(l) => format!("when_command_exists.{}[{}]", l, j + 1),
+                    None => format!("when_command_exists[{}]", j + 1),
+                };
+                f(ValidationIssue::Rule {
+                    rule_index,
+                    field_path: path,
+                    reason,
+                })?;
+            }
+        }
+    }
+    std::ops::ControlFlow::Continue(())
+}
+
+/// Visit every validation issue in the config in `parse_config` order.
 ///
-/// Only version 1 is accepted. Validates all abbreviation rules via
-/// [`validate_abbr_key`], [`validate_abbr_expand`], and [`validate_cmd_entry`].
-pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
+/// The caller chooses `Continue` (collect all) or `Break` (stop at first).
+fn visit_validation_issues(
+    config: &Config,
+    mut f: impl FnMut(ValidationIssue) -> std::ops::ControlFlow<()>,
+) {
+    if config.abbr.len() > MAX_ABBR_RULES {
+        let _ = f(ValidationIssue::Config { reason: ValidationReason::TooManyRules });
+        return;
+    }
+    for (i, abbr) in config.abbr.iter().enumerate() {
+        let rule_index = i + 1;
+        // (b-1) key
+        if let Some(reason) = check_abbr_key(&abbr.key) {
+            if f(ValidationIssue::Rule {
+                rule_index,
+                field_path: "key".into(),
+                reason,
+            })
+            .is_break()
+            {
+                return;
+            }
+        }
+        // (b-2) expand (per-shell aware)
+        if walk_expand_issues(&abbr.expand, rule_index, &mut f).is_break() {
+            return;
+        }
+        // (b-3) when_command_exists (per-shell aware + list-level + per-entry)
+        if let Some(cmds) = &abbr.when_command_exists {
+            if walk_cmds_issues(cmds, rule_index, &mut f).is_break() {
+                return;
+            }
+        }
+    }
+}
+
+/// Collect every validation issue in the config (used by `doctor`).
+pub(crate) fn collect_validation_issues(config: &Config) -> Vec<ValidationIssue> {
+    let mut issues = Vec::new();
+    visit_validation_issues(config, |issue| {
+        issues.push(issue);
+        std::ops::ControlFlow::Continue(())
+    });
+    issues
+}
+
+/// Return the first validation error, preserving `parse_config` ordering.
+fn first_validation_error(config: &Config) -> Option<ConfigError> {
+    let mut first = None;
+    visit_validation_issues(config, |issue| {
+        first = Some(issue.to_config_error());
+        std::ops::ControlFlow::Break(())
+    });
+    first
+}
+
+/// Deserialize a TOML string to `Config` without running validation.
+/// Used by `doctor` to walk the config for issues even when `parse_config`
+/// would fail. Version check is still enforced.
+pub(crate) fn parse_config_lenient(s: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(s)?;
     if config.version != 1 {
         return Err(ConfigError::UnsupportedVersion(config.version));
     }
-    if config.abbr.len() > MAX_ABBR_RULES {
-        return Err(ConfigError::TooManyRules);
-    }
-    for (i, abbr) in config.abbr.iter().enumerate() {
-        let n = i + 1;
-        validate_abbr_key(&abbr.key, n)?;
-        validate_abbr_expand(&abbr.expand, n)?;
-        if let Some(cmds) = &abbr.when_command_exists {
-            for cmd_list in cmds.all_values() {
-                if cmd_list.len() > MAX_CMD_LIST_LEN {
-                    return Err(ConfigError::TooManyCmds(n));
-                }
-                for cmd in cmd_list {
-                    validate_cmd_entry(cmd, n)?;
-                }
-            }
-        }
+    Ok(config)
+}
+
+/// Parse a TOML string into a [`Config`].
+///
+/// Only version 1 is accepted. All abbreviation rules are validated via
+/// [`visit_validation_issues`]; the first violation is returned as a
+/// `ConfigError`. Validation order is pinned by the `visit_validation_issues`
+/// traversal order.
+pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
+    let config = parse_config_lenient(s)?;
+    if let Some(e) = first_validation_error(&config) {
+        return Err(e);
     }
     Ok(config)
 }
@@ -370,11 +644,17 @@ pub fn append_abbr_to_file(
     when_command_exists: Option<&[String]>,
 ) -> Result<(), ConfigError> {
     let n = 0; // validation uses 1-indexed rule numbers, but we use 0 for "new rule"
-    validate_abbr_key(key, n)?;
-    validate_expand_value(expand, n)?;
+    if let Some(reason) = check_abbr_key(key) {
+        return Err(ValidationIssue::Rule { rule_index: n, field_path: "key".into(), reason }.to_config_error());
+    }
+    if let Some(reason) = check_expand_value(expand) {
+        return Err(ValidationIssue::Rule { rule_index: n, field_path: "expand".into(), reason }.to_config_error());
+    }
     if let Some(cmds) = when_command_exists {
         for cmd in cmds {
-            validate_cmd_entry(cmd, n)?;
+            if let Some(reason) = check_cmd_entry(cmd) {
+                return Err(ValidationIssue::Rule { rule_index: n, field_path: "when_command_exists".into(), reason }.to_config_error());
+            }
         }
     }
 
@@ -1266,4 +1546,232 @@ expand = "git commit -m"
     }
 
     } // mod add_remove
+
+    mod validation_walker {
+        use super::*;
+        use crate::model::{Abbr, PerShellCmds, PerShellString};
+
+        fn make_config(abbrs: Vec<Abbr>) -> Config {
+            Config {
+                version: 1,
+                keybind: crate::model::KeybindConfig::default(),
+                precache: crate::model::PrecacheConfig::default(),
+                abbr: abbrs,
+            }
+        }
+
+        fn abbr(key: &str, expand: &str) -> Abbr {
+            Abbr {
+                key: key.into(),
+                expand: PerShellString::All(expand.into()),
+                when_command_exists: None,
+            }
+        }
+
+        #[test]
+        fn collect_issues_empty_for_valid_config() {
+            let cfg = make_config(vec![abbr("gcm", "git commit -m")]);
+            assert!(collect_validation_issues(&cfg).is_empty());
+        }
+
+        #[test]
+        fn collect_issues_finds_multiple_rejected_rules() {
+            let cfg = make_config(vec![
+                abbr("", "not empty"),                // empty key
+                abbr("lsa", ""),                      // empty expand
+                abbr("valid", "echo ok"),
+            ]);
+            let issues = collect_validation_issues(&cfg);
+            assert_eq!(issues.len(), 2);
+            // ordering: rule[0].key then rule[1].expand
+            match &issues[0] {
+                ValidationIssue::Rule { rule_index, field_path, reason } => {
+                    assert_eq!(*rule_index, 1);
+                    assert_eq!(field_path, "key");
+                    assert_eq!(*reason, ValidationReason::KeyEmpty);
+                }
+                other => panic!("expected Rule, got {other:?}"),
+            }
+            match &issues[1] {
+                ValidationIssue::Rule { rule_index, field_path, reason } => {
+                    assert_eq!(*rule_index, 2);
+                    assert_eq!(field_path, "expand");
+                    assert_eq!(*reason, ValidationReason::ExpandEmpty);
+                }
+                other => panic!("expected Rule, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn collect_issues_reports_per_shell_expand_path() {
+            // `default` is valid, `pwsh` is empty.
+            let cfg = make_config(vec![Abbr {
+                key: "gcm".into(),
+                expand: PerShellString::ByShell {
+                    default: Some("git commit -m".into()),
+                    bash: None,
+                    zsh: None,
+                    pwsh: Some("".into()),
+                    nu: None,
+                },
+                when_command_exists: None,
+            }]);
+            let issues = collect_validation_issues(&cfg);
+            assert_eq!(issues.len(), 1);
+            match &issues[0] {
+                ValidationIssue::Rule { rule_index, field_path, reason } => {
+                    assert_eq!(*rule_index, 1);
+                    assert_eq!(field_path, "expand.pwsh");
+                    assert_eq!(*reason, ValidationReason::ExpandEmpty);
+                }
+                other => panic!("expected Rule, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn collect_issues_reports_when_command_exists_index_1_based() {
+            let cfg = make_config(vec![Abbr {
+                key: "ls".into(),
+                expand: PerShellString::All("lsd".into()),
+                when_command_exists: Some(PerShellCmds::All(vec![
+                    "good".into(),
+                    "bad&inject".into(),  // metachar at list position 2 (1-based)
+                ])),
+            }]);
+            let issues = collect_validation_issues(&cfg);
+            assert_eq!(issues.len(), 1);
+            match &issues[0] {
+                ValidationIssue::Rule { rule_index, field_path, reason } => {
+                    assert_eq!(*rule_index, 1);
+                    assert_eq!(field_path, "when_command_exists[2]");
+                    assert_eq!(*reason, ValidationReason::CmdContainsMetacharacter);
+                }
+                other => panic!("expected Rule, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn collect_issues_reports_per_shell_cmds_path() {
+            let cfg = make_config(vec![Abbr {
+                key: "ls".into(),
+                expand: PerShellString::All("lsd".into()),
+                when_command_exists: Some(PerShellCmds::ByShell {
+                    default: Some(vec!["ok".into()]),
+                    bash: None,
+                    zsh: None,
+                    pwsh: Some(vec!["Get-Item".into(), "bad|cmd".into()]),
+                    nu: None,
+                }),
+            }]);
+            let issues = collect_validation_issues(&cfg);
+            assert_eq!(issues.len(), 1);
+            match &issues[0] {
+                ValidationIssue::Rule { field_path, .. } => {
+                    assert_eq!(field_path, "when_command_exists.pwsh[2]");
+                }
+                other => panic!("expected Rule, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn first_validation_error_preserves_rule_order() {
+            let cfg = make_config(vec![
+                abbr("", "x"),       // empty key (rule #1)
+                abbr("gcm", ""),     // empty expand (rule #2) — earlier rule wins
+            ]);
+            let err = first_validation_error(&cfg).expect("must fail");
+            assert!(matches!(err, ConfigError::KeyEmpty(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn first_validation_error_preserves_key_before_expand() {
+            let cfg = make_config(vec![abbr("", "")]);
+            let err = first_validation_error(&cfg).expect("must fail");
+            assert!(matches!(err, ConfigError::KeyEmpty(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn first_validation_error_preserves_too_many_rules_before_rule_validation() {
+            let mut abbrs = Vec::new();
+            for _ in 0..=MAX_ABBR_RULES {
+                abbrs.push(abbr("", "x")); // every one is invalid
+            }
+            let cfg = make_config(abbrs);
+            let err = first_validation_error(&cfg).expect("must fail");
+            assert!(matches!(err, ConfigError::TooManyRules), "got {err:?}");
+        }
+
+        #[test]
+        fn first_validation_error_preserves_too_many_cmds_before_bad_cmd_entry() {
+            let mut cmds = Vec::new();
+            for _ in 0..=MAX_CMD_LIST_LEN {
+                cmds.push("bad&entry".into()); // every one is invalid
+            }
+            let cfg = make_config(vec![Abbr {
+                key: "ls".into(),
+                expand: PerShellString::All("lsd".into()),
+                when_command_exists: Some(PerShellCmds::All(cmds)),
+            }]);
+            let err = first_validation_error(&cfg).expect("must fail");
+            assert!(matches!(err, ConfigError::TooManyCmds(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn first_validation_error_preserves_per_shell_expand_order() {
+            // both `default` and `pwsh` are empty → default (index 0) should win.
+            let cfg = make_config(vec![Abbr {
+                key: "gcm".into(),
+                expand: PerShellString::ByShell {
+                    default: Some("".into()),
+                    bash: None,
+                    zsh: None,
+                    pwsh: Some("".into()),
+                    nu: None,
+                },
+                when_command_exists: None,
+            }]);
+            let err = first_validation_error(&cfg).expect("must fail");
+            assert!(matches!(err, ConfigError::ExpandEmpty(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn collect_issues_reports_multiple_issues_in_one_rule_in_order() {
+            // Bad key + bad expand.pwsh + bad cmd entry — all three should be reported
+            // in key → expand.pwsh → when_command_exists[1] order.
+            let cfg = make_config(vec![Abbr {
+                key: "".into(),
+                expand: PerShellString::ByShell {
+                    default: Some("git commit -m".into()),
+                    bash: None,
+                    zsh: None,
+                    pwsh: Some("".into()),
+                    nu: None,
+                },
+                when_command_exists: Some(PerShellCmds::All(vec!["bad&entry".into()])),
+            }]);
+            let issues = collect_validation_issues(&cfg);
+            assert_eq!(issues.len(), 3);
+            match &issues[0] {
+                ValidationIssue::Rule { field_path, reason, .. } => {
+                    assert_eq!(field_path, "key");
+                    assert_eq!(*reason, ValidationReason::KeyEmpty);
+                }
+                other => panic!("expected Rule, got {other:?}"),
+            }
+            match &issues[1] {
+                ValidationIssue::Rule { field_path, reason, .. } => {
+                    assert_eq!(field_path, "expand.pwsh");
+                    assert_eq!(*reason, ValidationReason::ExpandEmpty);
+                }
+                other => panic!("expected Rule, got {other:?}"),
+            }
+            match &issues[2] {
+                ValidationIssue::Rule { field_path, reason, .. } => {
+                    assert_eq!(field_path, "when_command_exists[1]");
+                    assert_eq!(*reason, ValidationReason::CmdContainsMetacharacter);
+                }
+                other => panic!("expected Rule, got {other:?}"),
+            }
+        }
+    } // mod validation_walker
 }

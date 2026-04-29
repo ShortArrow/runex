@@ -77,7 +77,7 @@ shell adapters
 
 - トークン → 展開（最初に通過したルールを採用）
 - 自己ループガード: `key == expand` → ルールをスキップして評価継続
-- `when_command_exists`: リスト中のコマンドがひとつでもなければスキップして継続
+- `when_command_exists`: リスト中のコマンドがひとつでも hook 実行時に `which` で解決できなければスキップして継続
 - fallback: 未定義トークンはそのまま通過
 - 同一 key の複数ルール: フォールバックチェーンとして順番に評価
 
@@ -101,7 +101,6 @@ runex export <shell>                     シェル連携スクリプトを生成
 runex export <shell> --bin <name>        スクリプト内のバイナリ名を変更
 runex timings <key>                      展開フローのフェーズ別所要時間を表示
 runex timings                            全ルールの所要時間を計測
-runex precache --shell <shell>           コマンド存在チェックを事前キャッシュ
 runex version                            バージョンとビルドコミットを表示
 ```
 
@@ -121,9 +120,9 @@ runex version                            バージョンとビルドコミット
 ```toml
 version = 1
 
-[keybind]
-trigger = "space"        # 全シェル共通のデフォルトトリガ
-bash    = "alt-space"    # シェル個別の上書き（省略可）
+[keybind.trigger]
+default = "space"       # 全シェル共通のデフォルトトリガ
+bash    = "alt-space"   # シェル個別の上書き（省略可）
 
 [[abbr]]
 key    = "ls"
@@ -164,9 +163,14 @@ expand = "git commit -m"
 
 ## 9. ロードマップ
 
+### 完了 (0.1.11 以降)
+
+- 各キーストロークのロジックを `runex hook` サブコマンドに集約。シェルテンプレートは薄いラッパに縮小 (5 シェル合計 244 行)
+- `runex doctor` が環境レベルの健康診断を表示: Windows での `effective_search_path` 内訳、`integration:<shell>` (rcfile マーカー / clink lua のドリフト検知)
+
 ### 直近
 
-- `doctor` / `init` のエッジケース対応と診断改善
+- 実運用で見つかる新しい failure mode に応じて `doctor` / `init` の診断を継続的に強化
 
 ### 後回し
 

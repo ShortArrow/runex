@@ -20,11 +20,22 @@ mod zsh {
     }
 
     fn run_helper(config: &NamedTempFile, left: &str, right: &str) -> String {
+        // The new hook-based template exposes `__runex_expand` as a zle
+        // widget. Widgets can only be invoked inside zle, so we drive the
+        // hook CLI directly — mirroring exactly what the widget would have
+        // done with the injected buffer.
         let script = r#"
-eval "$($RUNEX_BIN export zsh --bin $RUNEX_BIN)"
-LBUFFER="$RUNEX_LEFT"
-RBUFFER="$RUNEX_RIGHT"
-__runex_expand_buffer
+line="${RUNEX_LEFT}${RUNEX_RIGHT}"
+cursor=${#RUNEX_LEFT}
+out=$("$RUNEX_BIN" hook --shell zsh --line "$line" --cursor "$cursor" 2>/dev/null)
+LBUFFER=""
+RBUFFER=""
+if [[ -n "$out" ]]; then
+    eval "$out"
+else
+    LBUFFER="${RUNEX_LEFT} "
+    RBUFFER="${RUNEX_RIGHT}"
+fi
 printf '%s|%s\n' "$LBUFFER" "$RBUFFER"
 "#;
 

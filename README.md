@@ -13,7 +13,7 @@ runex is a cross-shell abbreviation engine that expands short tokens into full c
 - Cross-shell support (bash / zsh / pwsh / cmd / nushell)
 - Real-time expansion (customizable trigger key)
 - Single config file shared across shells
-- Conditional rules (`when_command_exists`)
+- Conditional rules (`when_command_exists`) — only expand when the listed commands resolve in the current shell
 - Fast and lightweight (Rust core)
 
 ## Concept
@@ -25,28 +25,27 @@ gcm␣ → git commit -m
 ls␣  → lsd
 ```
 
-## Installation
+## Quick start
 
 ```bash
 cargo install runex
+runex init
 ```
 
-Or with `mise`:
+## Install
 
 ```bash
-mise use -g cargo:runex
+cargo install runex                       # Rust toolchain
+brew install shortarrow/runex/runex       # macOS / Linux
+paru -S runex-bin                         # Arch Linux (AUR)
+winget install ShortArrow.runex           # Windows
 ```
 
-If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
-
-- Linux/macOS: `~/.cargo/bin`
-- Windows: `%USERPROFILE%\.cargo\bin`
-
-Generated shell scripts and your `config.toml` are part of your local shell environment. Only load and sync files you trust.
+Other options (mise, pre-built binaries, platform notes): see [docs/install.md](docs/install.md).
 
 ## Setup
 
-`runex init` is the quickest way to get started. It creates the config file and appends the shell integration line to your rc file, with a confirmation prompt at each step:
+`runex init` creates the config and appends the shell integration line to your rc file, with a confirmation prompt at each step:
 
 ```
 $ runex init
@@ -56,57 +55,7 @@ Append shell integration to ~/.bashrc? [y/N] y
 Appended integration to ~/.bashrc
 ```
 
-Pass `-y` to skip all prompts. For Clink, shell integration must be added manually (see below).
-
-Or set up manually for each shell:
-
-### bash
-
-Requires bash 4.0 or later. macOS ships bash 3.2; install a newer version via Homebrew (`brew install bash`).
-
-Add to `~/.bashrc`:
-
-```bash
-eval "$(runex export bash)"
-```
-
-### zsh
-
-Add to `~/.zshrc`:
-
-```zsh
-eval "$(runex export zsh)"
-```
-
-### PowerShell
-
-Add to `$PROFILE`:
-
-```powershell
-Invoke-Expression (& runex export pwsh | Out-String)
-```
-
-### Nushell
-
-Add to `~/.config/nushell/config.nu`:
-
-```nu
-source ~/.config/nushell/runex.nu
-```
-
-Then generate the script (re-run after config changes):
-
-```nu
-runex export nu | save --force ~/.config/nushell/runex.nu
-```
-
-### cmd (Clink)
-
-Add to Clink's script directory (re-run after config changes):
-
-```cmd
-runex export clink > %LOCALAPPDATA%\clink\runex.lua
-```
+Pass `-y` to skip all prompts. Per-shell manual setup (bash / zsh / pwsh / nu / clink) is documented in [docs/setup.md](docs/setup.md).
 
 ## Config
 
@@ -158,7 +107,6 @@ runex export <shell>                     generate shell integration script
 runex export <shell> --bin <name>        use a custom binary name in the script
 runex timings <key>                      show per-phase timing breakdown of expand
 runex timings                            time all abbreviation rules
-runex precache --shell <shell>           pre-compute command existence cache
 runex version                            show version and build commit
 ```
 
@@ -169,6 +117,12 @@ Global flags (available on every subcommand):
 --path-prepend <dir> prepend a directory to PATH for command existence checks
 --json               JSON output (supported by: list, doctor, version, expand, which, timings)
 ```
+
+`runex doctor` reports several environment-level checks alongside the
+config validation: `effective_search_path` (Windows-only PATH augmentation
+summary, see [`docs/config-reference.md`](docs/config-reference.md#runex-doctor--environment--integration-health))
+and `integration:<shell>` (rcfile-marker presence and clink lua drift
+detection). See [`docs/setup.md`](docs/setup.md) for an annotated example.
 
 ## Avoiding Expansion
 
@@ -235,6 +189,6 @@ runex is inspired by [fish shell's abbreviation system](https://fishshell.com/do
 
 ## License
 
-MIT
+Dual-licensed under either of [MIT](LICENSE) or [Apache-2.0](LICENSE) at your option. Unless explicitly stated otherwise, any contribution intentionally submitted for inclusion in this work by you shall be dual-licensed as above, without any additional terms or conditions.
 
 Third-party dependency licenses are documented in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

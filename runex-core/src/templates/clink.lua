@@ -1,141 +1,78 @@
 -- runex shell integration for clink
+
 local RUNEX_BIN = {CLINK_BIN}
--- Pre-compute command existence cache using shell-native command detection
-local precache_cmds_handle = io.popen(RUNEX_BIN .. " precache --shell clink --list-commands 2>nul")
-local precache_cmds = precache_cmds_handle and precache_cmds_handle:read("*l") or nil
-if precache_cmds_handle then precache_cmds_handle:close() end
 
-if precache_cmds and #precache_cmds > 0 then
-    local resolved = {}
-    for cmd in precache_cmds:gmatch("[^,]+") do
-        local check = io.popen("where " .. cmd .. " 2>nul")
-        local found = check and check:read("*l") ~= nil
-        if check then check:close() end
-        table.insert(resolved, cmd .. "=" .. (found and "1" or "0"))
-    end
-    local resolved_str = table.concat(resolved, ",")
-    local precache_handle = io.popen(RUNEX_BIN .. " precache --shell clink --resolved " .. resolved_str .. " 2>nul")
-    if precache_handle then
-        local precache_line = precache_handle:read("*l")
-        precache_handle:close()
-        if precache_line then os.execute(precache_line) end
-    end
-else
-    local precache_handle = io.popen(RUNEX_BIN .. " precache --shell clink 2>nul")
-    if precache_handle then
-        local precache_line = precache_handle:read("*l")
-        precache_handle:close()
-        if precache_line then os.execute(precache_line) end
-    end
-end
-local RUNEX_KNOWN = {
-{CLINK_KNOWN_CASES}
-}
-
-local function runex_trim_trailing_spaces(text)
-    return text:gsub("%s+$", "")
+-- Safe token check: only alphanumerics, dot, underscore, hyphen. We use this
+-- to gate whether we pass user buffer content to the runex CLI. Even though
+-- the child process is launched via io.popen with explicit quoting, this is a
+-- belt-and-suspenders check — a token containing shell metacharacters would
+-- have to be an abbreviation key to reach this path, and the config validator
+-- already forbids those, but we don't rely on that here.
+--
+-- This stays in lua (rather than as a `runex validate-line` subcommand)
+-- because the whole point is to short-circuit *before* spending the cost
+-- of spawning a cmd.exe + runex.exe. A roundtrip to validate the input
+-- would defeat the gate.
+local function runex_is_safe_line(line)
+    -- Allow anything printable that's not control; io.popen goes through cmd.exe
+    -- so we still quote, but reject embedded nul and control chars outright.
+    return not line:find("[%z\1-\31]")
 end
 
-local function runex_is_command_position(prefix)
-    prefix = runex_trim_trailing_spaces(prefix)
-    if prefix == "" then
-        return true
-    end
-
-    if prefix:match("(%|%||&&|;)$") then
-        return true
-    end
-
-    local prev = prefix:match("([^ ]+)$")
-    if prev == "sudo" then
-        local before = runex_trim_trailing_spaces(prefix:sub(1, #prefix - 4))
-        if before == "" then
-            return true
-        end
-        return before:match("(%|%||&&|;)$") ~= nil
-    end
-
-    return false
-end
-
-local function runex_is_safe_token(token)
-    -- Whitelist: only alphanumeric, dot, underscore, hyphen.
-    -- This is a prerequisite for runex_shell_quote safety: tokens that pass this
-    -- check contain no shell metacharacters, so shell quoting is a defence-in-depth
-    -- measure rather than the sole guard. Do not relax this whitelist without
-    -- also auditing the io.popen command construction below.
-    return token:match("^[%w%._%-]+$") ~= nil
-end
-
+-- cmd.exe quoting: wrap in double quotes and escape embedded double quotes.
+-- POSIX single-quote wrapping would be interpreted literally by cmd.exe and
+-- fail (e.g. 'runex' would be treated as a file named "'runex'").
 local function runex_shell_quote(s)
-    -- Wrap s in single quotes for POSIX shell, escaping any embedded single quotes.
-    return "'" .. s:gsub("'", "'\\''") .. "'"
+    return '"' .. s:gsub('"', '\\"') .. '"'
 end
 
-local function runex_expand_token(token)
-    if not RUNEX_KNOWN[token] or not runex_is_safe_token(token) then
-        return token
+local function runex_call_hook(line, cursor)
+    if not runex_is_safe_line(line) then
+        return nil
     end
-
-    local command = runex_shell_quote(RUNEX_BIN) .. ' expand --token=' .. runex_shell_quote(token) .. ' 2>&1'
-    local handle = io.popen(command)
-    if not handle then
-        return token
-    end
-
-    local expanded = handle:read("*a")
+    -- io.popen on Windows ultimately calls cmd.exe with the assembled
+    -- string. cmd.exe's quote handling (without /S) is heuristic: when the
+    -- string starts with `"` AND ends with `"`, cmd strips the outermost
+    -- pair before parsing the rest. So we wrap the entire command in an
+    -- extra pair of `"` so the inner quoting around argv0 and --line
+    -- survives. argv0 itself is quoted in case the binary path contains
+    -- spaces (e.g. `Program Files`). Empirically validated by the
+    -- runex/tests/clink_cmd_quoting.rs integration tests.
+    local cmd = '"' .. runex_shell_quote(RUNEX_BIN)
+        .. ' hook --shell clink --line ' .. runex_shell_quote(line)
+        .. ' --cursor ' .. tostring(cursor)
+        .. ' 2>&1"'
+    local handle = io.popen(cmd)
+    if not handle then return nil end
+    local out = handle:read("*a")
     handle:close()
-    if not expanded then
-        return token
+    if not out or out == "" then return nil end
+    -- The hook emits a `return { line = "...", cursor = N }` Lua literal.
+    local chunk, err = load(out, "=runex_hook", "t", {})
+    if not chunk then return nil end
+    local ok, result = pcall(chunk)
+    if not ok or type(result) ~= "table" then return nil end
+    if type(result.line) ~= "string" or type(result.cursor) ~= "number" then
+        return nil
     end
-    expanded = expanded:gsub("%s+$", "")
-    if expanded == "" then
-        return token
-    end
-    -- Split on unit separator (\x1f) for cursor placeholder
-    local sep = expanded:find("\x1f")
-    if sep then
-        local text = expanded:sub(1, sep - 1)
-        local cursor_offset = tonumber(expanded:sub(sep + 1))
-        return text, cursor_offset
-    end
-    return expanded, nil
+    return result
 end
 
 function runex_expand(rl_buffer, line_state)
     local line = rl_buffer:getbuffer()
     local cursor = rl_buffer:getcursor()
-    local length = rl_buffer:getlength()
-
-    if cursor <= length then
-        local ch = line:sub(cursor, cursor)
-        if ch ~= " " then
-            rl_buffer:insert(" ")
-            return
-        end
+    -- clink's cursor is 1-based (position, not byte offset); runex's Rust
+    -- side expects a 0-based byte offset into `line`. Subtract 1.
+    local result = runex_call_hook(line, cursor - 1)
+    if result and result.line ~= line then
+        rl_buffer:beginundogroup()
+        rl_buffer:remove(1, rl_buffer:getlength() + 1)
+        rl_buffer:insert(result.line)
+        rl_buffer:setcursor(result.cursor + 1)
+        rl_buffer:endundogroup()
+    else
+        rl_buffer:insert(" ")
     end
-
-    local left = line:sub(1, cursor - 1)
-    local token = left:match("([^ ]+)$")
-    if token then
-        local token_start = cursor - #token
-        local prefix = line:sub(1, token_start - 1)
-        if runex_is_command_position(prefix) and RUNEX_KNOWN[token] then
-            local expanded, cursor_offset = runex_expand_token(token)
-            if expanded ~= token then
-                rl_buffer:beginundogroup()
-                rl_buffer:remove(token_start, cursor)
-                rl_buffer:setcursor(token_start)
-                rl_buffer:insert(expanded)
-                if cursor_offset then
-                    rl_buffer:setcursor(token_start + cursor_offset)
-                end
-                rl_buffer:endundogroup()
-            end
-        end
-    end
-
-    rl_buffer:insert(" ")
 end
 
 rl.describemacro([["luafunc:runex_expand"]], "Expand a runex abbreviation and insert a space")

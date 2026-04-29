@@ -1,5 +1,7 @@
 mod format;
 mod shell_alias;
+#[cfg(windows)]
+mod win_path;
 
 use clap::{Parser, Subcommand};
 use format::{
@@ -16,6 +18,7 @@ use runex_core::shell::Shell;
 use shell_alias::add_shell_alias_conflicts;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -149,7 +152,13 @@ enum Commands {
         #[arg(long, value_name = "SHELL")]
         shell: Option<String>,
     },
-    /// Pre-compute command existence cache for shell startup
+    /// Pre-compute command existence cache for shell startup.
+    ///
+    /// Hidden since 0.2.0: shell templates no longer call this subcommand;
+    /// the hook subcommand evaluates `when_command_exists` per keypress
+    /// instead. The command is retained for one release for backward
+    /// compatibility and may be removed in a future version.
+    #[command(hide = true)]
     Precache {
         /// Target shell: bash, zsh, pwsh, clink, nu
         #[arg(long, value_name = "SHELL")]
@@ -189,6 +198,26 @@ enum Commands {
         /// Skip confirmation prompts
         #[arg(long, short = 'y')]
         yes: bool,
+    },
+    /// Per-keystroke hook — called by the shell integration wrapper on every
+    /// trigger-key press. Returns shell-specific eval text describing the new
+    /// buffer/cursor state. Exit code 2 means "nothing to do; shell may
+    /// insert the literal trigger key".
+    #[command(hide = true)]
+    Hook {
+        /// Target shell: bash, zsh, pwsh, clink, nu
+        #[arg(long, value_name = "SHELL")]
+        shell: String,
+        /// Current buffer contents
+        #[arg(long)]
+        line: String,
+        /// Current cursor position as a byte offset into `line`
+        #[arg(long)]
+        cursor: usize,
+        /// True if a paste is in progress (pwsh). When set, the hook skips
+        /// expansion and emits a plain space-insert action.
+        #[arg(long)]
+        paste_pending: bool,
     },
 }
 
@@ -253,6 +282,24 @@ fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> String {
 ///
 /// Results are also cached in a `RefCell<HashMap>` per invocation to avoid
 /// repeated `which` calls within the same CLI run.
+///
+/// ## Windows-specific PATH augmentation
+///
+/// On Windows we feed `which::which_in` the *augmented* search path from
+/// [`win_path::effective_search_path`] (process PATH + HKCU + HKLM) instead
+/// of relying on the inherited `PATH` env var alone.
+///
+/// The reason is that some parent processes — most notably the cmd.exe
+/// children that clink's Lua `io.popen` spawns — inherit a PATH that's
+/// missing the User-scope entries the registry holds. Without
+/// augmentation, `runex hook` running under clink would fail to find
+/// binaries installed under `~/.cargo/bin`,
+/// `~/AppData/Local/Microsoft/WinGet/Links`, or `~/AppData/Local/mise/shims`.
+/// `when_command_exists` rules pointing at those binaries would then
+/// silently evaluate false and abbreviations would no-op — looking like
+/// an integration bug while the real cause is environmental. The
+/// regression test `runex/tests/windows_path_isolation.rs` pins this
+/// behavior so the failure mode can't return unnoticed.
 fn make_command_exists<'a>(
     path_prepend: Option<&'a Path>,
     precache_fingerprint: Option<&str>,
@@ -261,6 +308,13 @@ fn make_command_exists<'a>(
 
     let hint = precache_fingerprint.and_then(precache::load_cache);
     let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
+    // On Windows we resolve commands against an *augmented* search path
+    // (process PATH + HKCU + HKLM) to cope with degraded environments
+    // such as the cmd.exe children that clink's Lua `io.popen` spawns.
+    // See `runex/src/win_path.rs` for the rationale and history. The
+    // value is computed once per CLI invocation and reused.
+    #[cfg(windows)]
+    let effective_path = win_path::effective_search_path();
 
     move |cmd: &str| -> bool {
         if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
@@ -283,6 +337,18 @@ fn make_command_exists<'a>(
             }
         }
 
+        let live_check = |c: &str| -> bool {
+            #[cfg(windows)]
+            {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                which::which_in(c, Some(&effective_path.combined), &cwd).is_ok()
+            }
+            #[cfg(not(windows))]
+            {
+                which::which(c).is_ok()
+            }
+        };
+
         let exists = if let Some(dir) = path_prepend {
             if dir.join(cmd).is_file() {
                 true
@@ -292,16 +358,16 @@ fn make_command_exists<'a>(
                     if dir.join(format!("{cmd}.exe")).is_file() {
                         true
                     } else {
-                        which::which(cmd).is_ok()
+                        live_check(cmd)
                     }
                 }
                 #[cfg(not(windows))]
                 {
-                    which::which(cmd).is_ok()
+                    live_check(cmd)
                 }
             }
         } else {
-            which::which(cmd).is_ok()
+            live_check(cmd)
         };
 
         cache.borrow_mut().insert(cmd.to_owned(), exists);
@@ -580,7 +646,31 @@ fn handle_export(
         let (_path, cfg, _err) = resolve_config_opt(None);
         cfg
     };
-    print!("{}", runex_core::shell::export_script(s, &bin, config.as_ref()));
+    // For clink, default-bin must resolve to an absolute path.
+    //
+    // Why: clink invokes runex via Lua's `io.popen` which spawns a fresh
+    // cmd.exe child. That child inherits whatever PATH the clink-injected
+    // host process happens to have, and on real machines that PATH is
+    // sometimes degraded (e.g. system-only, with the User scope from
+    // HKCU not yet merged in). A bare `runex` command in the lua script
+    // would then fail to resolve. Embedding the absolute path of the
+    // currently-running executable (which is by definition reachable —
+    // we ourselves were just launched from it) sidesteps the entire
+    // PATH-inheritance question for clink.
+    //
+    // Other shells (bash/zsh/pwsh/nu) rely on PATH-resolved bare names
+    // because they're invoked from rcfiles where PATH is already correct,
+    // and because users can plausibly want to override which `runex`
+    // gets used. Only clink gets the absolute-path treatment.
+    let effective_bin = if matches!(s, Shell::Clink) && bin == "runex" {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()))
+            .unwrap_or(bin)
+    } else {
+        bin
+    };
+    print!("{}", runex_core::shell::export_script(s, &effective_bin, config.as_ref()));
     Ok(())
 }
 
@@ -684,6 +774,47 @@ fn handle_timings(
     Ok(())
 }
 
+/// Compose the [`doctor::DoctorEnvInfo`] that the `doctor` subcommand
+/// passes alongside the config checks. Today this only sets the
+/// Windows effective-search-path breakdown; on other platforms only
+/// the integration-check fields apply.
+fn build_doctor_env_info(config: Option<&Config>) -> doctor::DoctorEnvInfo {
+    let mut info = doctor::DoctorEnvInfo::default();
+
+    #[cfg(windows)]
+    {
+        let p = win_path::effective_search_path();
+        info.effective_search_path = Some(doctor::EffectiveSearchPathSummary {
+            from_process: p.from_process,
+            from_user_registry: p.from_user_registry,
+            from_system_registry: p.from_system_registry,
+        });
+    }
+
+    // Render the canonical clink export so doctor can detect drift on
+    // disk. Use the absolute path of our own executable as the bin
+    // (matching `handle_export`'s clink full-path fallback) so a fresh
+    // `runex doctor` after upgrade matches what `runex init clink`
+    // would write today.
+    let clink_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "runex".to_string());
+    info.clink_export_for_drift_check = Some(runex_core::shell::export_script(
+        Shell::Clink,
+        &clink_bin,
+        config,
+    ));
+
+    // We always want to know whether the user ran `runex init <shell>`
+    // for each rcfile-bearing shell. doctor itself decides whether to
+    // emit each row based on rcfile existence (a missing rcfile means
+    // "user doesn't use that shell" and the check is skipped silently).
+    info.check_rcfile_markers = doctor::RcfileMarkerSelection::all();
+
+    info
+}
+
 fn handle_doctor(
     config_flag: Option<&Path>,
     path_prepend: Option<&Path>,
@@ -696,15 +827,35 @@ fn handle_doctor(
     // Doctor checks live command existence — no precache (intentional)
     let command_exists = make_command_exists(path_prepend, None);
     let spinner = Spinner::start("Checking environment...");
-    let mut result = doctor::diagnose(&config_path, config.as_ref(), parse_error.as_deref(), &command_exists);
+    // Build informational env-info that doctor renders alongside the
+    // config checks: Windows effective_search_path breakdown (see
+    // `runex/src/win_path.rs`), per-shell rcfile marker checks, and a
+    // clink-lua drift check. The current config is forwarded so the
+    // generated clink export reflects the user's keybinds & abbrs.
+    let env_info = build_doctor_env_info(config.as_ref());
+    let mut result = doctor::diagnose(
+        &config_path,
+        config.as_ref(),
+        parse_error.as_deref(),
+        &env_info,
+        &command_exists,
+    );
     if !no_shell_aliases {
         add_shell_alias_conflicts(&mut result, config.as_ref());
     }
+    // Read config source once (O_NOFOLLOW, size-capped) and share across checks.
+    let source = runex_core::config::read_config_source(&config_path).ok();
+
+    // Always: report every rule rejected by per-field validation so users know
+    // *all* the invalid fields, not just the first one that tripped parse_config.
+    if let Some(src) = source.as_deref() {
+        result.checks.extend(doctor::check_rejected_rules(src));
+    }
+
     if strict {
-        // Read config source for raw TOML field checking. Use the safe reader
-        // (O_NOFOLLOW, size cap, regular-file check) rather than plain read_to_string.
-        if let Ok(source) = runex_core::config::read_config_source(&config_path) {
-            result.checks.extend(doctor::check_unknown_fields(&source));
+        if let Some(src) = source.as_deref() {
+            result.checks.extend(doctor::check_unknown_fields(src));
+            result.checks.extend(doctor::check_precache_deprecation(src));
         }
         // Check for unreachable duplicate rules
         if let Some(cfg) = config.as_ref() {
@@ -805,6 +956,64 @@ fn handle_init(config_path: PathBuf, yes: bool) -> CmdResult {
 }
 
 
+/// Per-keystroke hook handler. Writes the shell-specific eval text to stdout
+/// on success. On config-load failure we silently emit nothing and return
+/// exit code 2; the shell wrapper treats that as "insert a literal space"
+/// (so runex never breaks the user's terminal even with a broken config).
+fn handle_hook(
+    shell_str: &str,
+    line: &str,
+    cursor: usize,
+    paste_pending: bool,
+    config_override: Option<&Path>,
+    path_prepend: Option<&Path>,
+) -> CmdResult {
+    let shell = Shell::from_str(shell_str)
+        .map_err(|e| format!("{}", e))?;
+
+    // If the user pasted a block, the pwsh wrapper sets this flag so we skip
+    // expansion entirely and behave like a normal space keypress.
+    if paste_pending {
+        let action = runex_core::hook::HookAction::InsertSpace {
+            line: {
+                let mut s = String::with_capacity(line.len() + 1);
+                let cursor = cursor.min(line.len());
+                s.push_str(&line[..cursor]);
+                s.push(' ');
+                s.push_str(&line[cursor..]);
+                s
+            },
+            cursor: cursor.min(line.len()) + 1,
+        };
+        println!("{}", runex_core::hook::render_action(shell, &action));
+        return Ok(());
+    }
+
+    // Config load failures are treated as "no expansion" — we still return the
+    // InsertSpace action so the wrapper inserts a literal space on behalf of
+    // the user.
+    let (config_path, config_opt, _err) = resolve_config_opt(config_override);
+    let Some(config) = config_opt else {
+        // No valid config: emit a plain InsertSpace and return. This avoids
+        // making every keypress a no-op (which would swallow the trigger key)
+        // when a user has a malformed config they haven't fixed yet.
+        let cursor_safe = cursor.min(line.len());
+        let mut s = String::with_capacity(line.len() + 1);
+        s.push_str(&line[..cursor_safe]);
+        s.push(' ');
+        s.push_str(&line[cursor_safe..]);
+        let action = runex_core::hook::HookAction::InsertSpace { line: s, cursor: cursor_safe + 1 };
+        println!("{}", runex_core::hook::render_action(shell, &action));
+        return Ok(());
+    };
+
+    let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
+    let command_exists = make_command_exists(path_prepend, Some(&fp));
+    let action = runex_core::hook::hook(&config, shell, line, cursor, command_exists);
+    println!("{}", runex_core::hook::render_action(shell, &action));
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -862,6 +1071,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             handle_init(config_path, yes)?;
         }
+        Commands::Hook { shell, line, cursor, paste_pending } => {
+            handle_hook(
+                &shell,
+                &line,
+                cursor,
+                paste_pending,
+                cli.config.as_deref(),
+                cli.path_prepend.as_deref(),
+            )?;
+        }
         Commands::Add { key, expand, when } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
                 p.to_path_buf()
@@ -917,6 +1136,65 @@ mod tests {
         let exists = make_command_exists(Some(dir.path()), None);
         assert!(exists("myfaketool"));
         assert!(!exists("__runex_other_fake__"));
+    }
+
+    /// On Windows, child cmd.exe processes spawned by clink's lua `io.popen`
+    /// inherit only a subset of the user's PATH (the User-scope PATH from the
+    /// registry is sometimes missing). A binary in `~/.cargo/bin` (which is
+    /// always in HKCU User PATH for a Rust developer machine, but isn't
+    /// in the system PATH) must still be discoverable by `command_exists`.
+    ///
+    /// This test simulates that environment: it strips PATH down to a minimal
+    /// system value and verifies that we can still find a known cargo-installed
+    /// binary by consulting the registry's User PATH.
+    #[test]
+    #[cfg(windows)]
+    fn make_command_exists_finds_user_path_binary_when_process_path_is_minimal() {
+        // Probe whether cargo is on the registry User PATH; if not, this test
+        // can't reliably assert anything (e.g. CI without cargo in user PATH).
+        let user_path = read_user_path_for_test();
+        if !user_path
+            .split(';')
+            .any(|p| std::path::Path::new(&p.replace("%UserProfile%", &std::env::var("USERPROFILE").unwrap_or_default()))
+                .join("cargo.exe").is_file())
+        {
+            eprintln!("skipping: cargo.exe not found via registry User PATH");
+            return;
+        }
+
+        // Strip the process PATH to a minimal Windows system value.
+        let original = std::env::var_os("PATH");
+        // SAFETY: tests run sequentially within this test module. We do not
+        // mutate PATH from any other test, and we restore it before returning.
+        unsafe { std::env::set_var("PATH", r"C:\Windows\System32;C:\Windows"); }
+
+        let exists = make_command_exists(None, None);
+        let found = exists("cargo");
+
+        // SAFETY: see above.
+        unsafe {
+            match original {
+                Some(v) => std::env::set_var("PATH", v),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+
+        assert!(
+            found,
+            "make_command_exists must consult HKCU Environment Path on Windows so commands installed under the User PATH (e.g. ~/.cargo/bin) are discoverable even when the process PATH lacks them"
+        );
+    }
+
+    #[cfg(windows)]
+    fn read_user_path_for_test() -> String {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let env = match hkcu.open_subkey("Environment") {
+            Ok(k) => k,
+            Err(_) => return String::new(),
+        };
+        env.get_value("Path").unwrap_or_default()
     }
 
     } // mod command_exists

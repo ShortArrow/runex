@@ -101,19 +101,6 @@ fn zsh_chord(trigger: TriggerKey) -> &'static str {
 /// Uses the same escaping as [`bash_quote_string`]: single-quoted with `'\''`
 /// for embedded single quotes.  ASCII control characters and Unicode
 /// line/paragraph separators are dropped.
-fn bash_quote_pattern(token: &str) -> String {
-    let mut out = String::from("'");
-    for ch in token.chars() {
-        match ch {
-            '\'' => out.push_str(r"'\''"),
-            c if c.is_ascii_control() || is_unicode_line_separator(c) => {}
-            _ => out.push(ch),
-        }
-    }
-    out.push('\'');
-    out
-}
-
 /// Quote `value` as a Bash single-quoted string.
 ///
 /// Single quotes are escaped as `'\''` (close, escaped quote, reopen).
@@ -133,33 +120,11 @@ pub(crate) fn bash_quote_string(value: &str) -> String {
     out
 }
 
-/// Generate the `case` pattern body for POSIX-compatible shells (bash, zsh).
-///
-/// When the config is absent or has no rules, returns a wildcard arm that always
-/// returns 0 (treat every token as a known abbreviation).  Otherwise generates one
-/// arm per rule plus a wildcard arm that returns 1 (unknown).
-fn posix_known_cases(config: Option<&Config>) -> String {
-    let Some(config) = config else {
-        return "        *) return 0 ;;".to_string();
-    };
-    if config.abbr.is_empty() {
-        return "        *) return 0 ;;".to_string();
-    }
-    let mut lines = Vec::with_capacity(config.abbr.len() + 1);
-    for abbr in &config.abbr {
-        lines.push(format!("        {}) return 0 ;;", bash_quote_pattern(&abbr.key)));
-    }
-    lines.push("        *) return 1 ;;".to_string());
-    lines.join("\n")
-}
-
-fn bash_known_cases(config: Option<&Config>) -> String {
-    posix_known_cases(config)
-}
-
-fn zsh_known_cases(config: Option<&Config>) -> String {
-    posix_known_cases(config)
-}
+// The legacy `posix_known_cases` / `bash_known_cases` / `zsh_known_cases`
+// helpers built a `case` block listing every abbreviation key, which was
+// spliced into the bash/zsh bootstraps. The hook-based bootstraps don't
+// need that — `runex hook` consults the config at keypress time — so
+// those helpers were removed together with the shell-side case blocks.
 
 fn pwsh_chord(trigger: TriggerKey) -> &'static str {
     match trigger {
@@ -269,40 +234,12 @@ pub(crate) fn lua_quote_string(value: &str) -> String {
     out
 }
 
-fn pwsh_known_cases(config: Option<&Config>) -> String {
-    let Some(config) = config else {
-        return String::new();
-    };
-
-    let mut lines = Vec::with_capacity(config.abbr.len());
-    for abbr in &config.abbr {
-        lines.push(format!(
-            "        {} {{ return $true }}",
-            pwsh_quote_string(&abbr.key)
-        ));
-    }
-    lines.join("\n")
-}
-
 fn nu_modifier(trigger: TriggerKey) -> &'static str {
     match trigger {
         TriggerKey::AltSpace => "alt",
         TriggerKey::ShiftSpace => "shift",
         TriggerKey::Space | TriggerKey::Tab => "none",
     }
-}
-
-fn clink_known_cases(config: Option<&Config>) -> String {
-    let Some(config) = config else {
-        return String::new();
-    };
-
-    config
-        .abbr
-        .iter()
-        .map(|abbr| format!("    [{}] = true,", lua_quote_string(&abbr.key)))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn nu_keycode(trigger: TriggerKey) -> &'static str {
@@ -471,18 +408,14 @@ pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String
         .replace("{BASH_BIN}", &bash_quote_string(bin))
         .replace("{BASH_BIND_LINES}", &bash_bind_lines(trigger))
         .replace("{BASH_SELF_INSERT_LINES}", &bash_self_insert_lines(self_insert))
-        .replace("{BASH_KNOWN_CASES}", &bash_known_cases(config))
         .replace("{ZSH_BIN}", &bash_quote_string(bin))
         .replace("{ZSH_BIND_LINES}", &zsh_bind_lines(trigger))
         .replace("{ZSH_SELF_INSERT_LINES}", &zsh_self_insert_lines(self_insert))
-        .replace("{ZSH_KNOWN_CASES}", &zsh_known_cases(config))
         .replace("{CLINK_BIN}", &lua_quote_string(bin))
         .replace("{CLINK_BINDING}", &clink_binding(trigger))
-        .replace("{CLINK_KNOWN_CASES}", &clink_known_cases(config))
         .replace("{PWSH_BIN}", &pwsh_quote_string(bin))
         .replace("{PWSH_REGISTER_LINES}", &pwsh_register_lines(trigger))
         .replace("{PWSH_SELF_INSERT_LINES}", &pwsh_self_insert_lines(self_insert))
-        .replace("{PWSH_KNOWN_CASES}", &pwsh_known_cases(config))
         .replace("{NU_BIN}", &nu_quote_string(bin))
         .replace("{NU_BINDINGS}", &nu_bindings(trigger, bin))
         .replace("{NU_SELF_INSERT_BINDINGS}", &nu_self_insert_lines(self_insert))
@@ -623,11 +556,20 @@ mod tests {
                 abbr: vec![],
             }),
         );
-        assert!(s.contains("bind -x"), "bash script must use bind");
-        assert!(s.contains(r#"bind -r "\x20""#), "bash script must remove the space binding before rebinding");
-        assert!(s.contains("raw=$('runex' expand"), "bash script must quote the executable");
-        assert!(s.contains("READLINE_LINE"), "bash script must use READLINE_LINE");
-        assert!(s.contains("READLINE_POINT"), "bash script must inspect the cursor");
+        // New design: the bootstrap is a thin wrapper that calls
+        // `runex hook --shell bash` at keypress time. It should still bind the
+        // trigger key via `bind -x`, but the expansion logic itself now lives
+        // in the Rust binary — so there must be no inline `expand` call or
+        // READLINE inspection in the template (the hook output handles both).
+        assert!(s.contains("bind -x"), "bash bootstrap must use bind -x");
+        assert!(
+            s.contains("hook --shell bash"),
+            "bash bootstrap must invoke `runex hook --shell bash`"
+        );
+        assert!(
+            s.contains("'runex' hook --shell bash"),
+            "bash bootstrap must quote the executable name"
+        );
         assert!(!s.contains("{BASH_BIND_LINES}"), "bash script must resolve bind lines");
     }
 
@@ -654,15 +596,23 @@ mod tests {
             !s.contains("Set-PSReadLineKeyHandler -Chord 'Tab' -Function Complete"),
             "pwsh script must not clobber the user's Tab binding"
         );
-        assert!(s.contains("$raw = & 'runex' expand"), "pwsh script must quote the executable");
-        assert!(s.contains("$cursor -lt $line.Length"), "pwsh script must guard mid-line insertion");
-        assert!(s.contains("EditMode"), "pwsh script must handle PSReadLine edit mode");
-        assert!(s.contains("__runex_is_command_position"), "pwsh script must detect command position");
+        assert!(
+            s.contains("'runex' @hookArgs") || s.contains("'runex' hook"),
+            "pwsh bootstrap must invoke runex with hook args"
+        );
+        assert!(
+            s.contains("hook"),
+            "pwsh bootstrap must invoke `runex hook`"
+        );
         assert!(!s.contains("{PWSH_REGISTER_LINES}"), "pwsh script must resolve register lines");
     }
 
     #[test]
-    fn pwsh_script_short_circuits_non_candidates() {
+    fn pwsh_script_has_paste_guard() {
+        // The paste-detection reflection is the one piece of logic that has
+        // to stay in the bootstrap — PSReadLine's `_queuedKeys` can only be
+        // inspected from inside the PSReadLine process. Guard against it
+        // being accidentally removed when the template is further trimmed.
         let s = export_script(
             Shell::Pwsh,
             "runex",
@@ -679,18 +629,9 @@ mod tests {
                 abbr: vec![],
             }),
         );
-        assert!(
-            s.contains("function __runex_get_expand_candidate"),
-            "pwsh script must define a fast precheck helper"
-        );
-        assert!(
-            s.contains("$candidate = __runex_get_expand_candidate $line $cursor"),
-            "pwsh handler must skip full expansion logic for non-candidates"
-        );
-        assert!(
-            s.contains("[Microsoft.PowerShell.PSConsoleReadLine]::Insert(' ')"),
-            "pwsh handler must insert a plain space on the fast path"
-        );
+        assert!(s.contains("__runex_queued_key_count"), "pwsh must retain paste guard helper");
+        assert!(s.contains("_queuedKeys"), "pwsh must probe PSReadLine's _queuedKeys field");
+        assert!(s.contains("--paste-pending"), "pwsh must forward paste state to `runex hook`");
     }
 
     #[test]
@@ -713,10 +654,12 @@ mod tests {
         );
         assert!(s.contains("zle -N __runex_expand"), "zsh script must register a zle widget");
         assert!(s.contains(r#"bindkey " " __runex_expand"#), "zsh script must bind the trigger key");
-        assert!(s.contains("__runex_expand_buffer"), "zsh script must expose a testable helper");
         assert!(s.contains("LBUFFER"), "zsh script must inspect the text before the cursor");
         assert!(s.contains("RBUFFER"), "zsh script must inspect the text after the cursor");
-        assert!(s.contains("raw=$('runex' expand"), "zsh script must quote the executable");
+        assert!(
+            s.contains("'runex' hook --shell zsh"),
+            "zsh bootstrap must invoke `runex hook --shell zsh`"
+        );
     }
 
     #[test]
@@ -739,7 +682,14 @@ mod tests {
         );
         assert!(s.contains("clink"), "clink script must reference clink");
         assert!(s.contains("local RUNEX_BIN = \"runex\""), "clink script must quote the executable");
-        assert!(s.contains("local RUNEX_KNOWN = {"), "clink script must embed known keys");
+        assert!(
+            s.contains("hook --shell clink"),
+            "clink bootstrap must invoke `runex hook --shell clink`"
+        );
+        assert!(
+            !s.contains("local RUNEX_KNOWN"),
+            "clink bootstrap must not embed token lookup table (moved to `runex hook`)"
+        );
         assert!(s.contains(r#"pcall(rl.setbinding, [[" "]], [["luafunc:runex_expand"]], "emacs")"#), "clink script must bind the trigger key in emacs mode");
         assert!(s.contains(r#"pcall(rl.setbinding, [[" "]], [["luafunc:runex_expand"]], "vi-insert")"#), "clink script must bind the trigger key in vi insert mode");
         assert!(s.contains("rl_buffer:getcursor()"), "clink script must inspect the cursor");
@@ -859,7 +809,12 @@ mod tests {
     }
 
     #[test]
-    fn bash_script_embeds_known_tokens() {
+    fn bash_script_does_not_embed_known_tokens() {
+        // New design: the abbreviation list is consulted at keypress time by
+        // `runex hook`, not baked into the bootstrap as a `case` block. This
+        // keeps the emitted script independent of user-supplied key strings —
+        // which, besides being simpler, avoids a whole class of injection
+        // concerns (quoting gcm's key into a `case` arm).
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
@@ -871,7 +826,8 @@ mod tests {
             }],
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
-        assert!(s.contains("'gcm') return 0 ;;"), "bash script must embed known tokens");
+        assert!(!s.contains("'gcm'"), "bash bootstrap must not embed tokens anymore");
+        assert!(!s.contains("__runex_is_known_token"), "legacy helper removed");
     }
 
     #[test]
@@ -917,7 +873,9 @@ mod tests {
     }
 
     #[test]
-    fn pwsh_script_embeds_known_tokens() {
+    fn pwsh_script_does_not_embed_known_tokens() {
+        // Same rationale as bash_script_does_not_embed_known_tokens: the
+        // hook-based bootstrap consults the config at keypress time.
         let config = Config {
             version: 1,
             keybind: crate::model::KeybindConfig::default(),
@@ -929,7 +887,8 @@ mod tests {
             }],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
-        assert!(s.contains("'gcm' { return $true }"), "pwsh script must embed known tokens");
+        assert!(!s.contains("'gcm' { return $true }"), "pwsh must not embed tokens");
+        assert!(!s.contains("__runex_is_known_token"), "legacy helper removed");
     }
 
     #[test]
@@ -1106,9 +1065,13 @@ mod tests {
     /// may treat `"--dry-run"` as a flag rather than the value for `--token`.
     /// The safe form `expand --token=($token)` passes the value as part of the same argument.
     /// Note: `($token)` is Nu's parenthesized expression, not string interpolation —
-    /// Nu evaluates it and passes `--token=<value>` as a single argument.
+    /// The nu bootstrap passes the buffer as a positional `--line $line`
+    /// argument directly. Nu evaluates `$line` in its own variable scope and
+    /// passes each argument as an opaque string — there is no shell-style
+    /// word splitting — so argument injection via user-typed buffer content
+    /// is not possible. This test pins that property.
     #[test]
-    fn nu_token_uses_equals_form_to_prevent_argument_injection() {
+    fn nu_hook_invocation_uses_separate_line_and_cursor_args() {
         use crate::model::{Config, KeybindConfig, TriggerKey};
         let config = Config {
             version: 1,
@@ -1121,17 +1084,13 @@ mod tests {
         };
         let s = export_script(Shell::Nu, "runex", Some(&config));
         assert!(
-            !s.contains("--token $token"),
-            "Nu script must not use space-separated --token (argument injection risk): {s}"
+            s.contains("hook --shell nu --line $line --cursor $cursor"),
+            "Nu bootstrap must pass buffer state as separate --line/--cursor args: {s}"
         );
-        assert!(
-            !s.contains("$\"--token=($token)\"") && !s.contains("\"--token=("),
-            "Nu script must not use string interpolation for --token: {s}"
-        );
-        assert!(
-            s.contains("--token=($token)"),
-            "Nu script must use --token=($token) form to prevent argument injection: {s}"
-        );
+        // The hook returns a JSON object which the bootstrap parses with
+        // `from json`. Keep this as a structural assertion so the eval path
+        // stays parseable rather than shell-executed.
+        assert!(s.contains("from json"), "Nu bootstrap must parse hook output via `from json`: {s}");
     }
 
     #[test]
@@ -1217,17 +1176,9 @@ mod tests {
         assert!(!line.contains("$'"), "dollar-quote ANSI-C form must not be used: {line:?}");
     }
 
-    #[test]
-    fn bash_quote_pattern_escapes_newline() {
-        let s = bash_quote_pattern("key\nwith newline");
-        assert!(!s.contains('\n'), "bash_quote_pattern must not produce literal newline: {s:?}");
-    }
-
-    #[test]
-    fn bash_quote_pattern_escapes_carriage_return() {
-        let s = bash_quote_pattern("key\rwith cr");
-        assert!(!s.contains('\r'), "bash_quote_pattern must not produce literal CR: {s:?}");
-    }
+    // bash_quote_pattern tests dropped — the helper and its callers (the
+    // case-arm builder) are gone now that abbreviations aren't embedded in
+    // shell code.
 
     #[test]
     fn lua_quote_string_escapes_nul() {
@@ -1307,6 +1258,27 @@ mod tests {
         );
     }
 
+
+    /// Regression: cmd.exe (which Lua's `io.popen` invokes via `cmd /c
+    /// <string>` on Windows) heuristically strips the *outermost* pair of
+    /// double quotes when the string starts AND ends with `"`. The clink
+    /// template therefore must wrap the entire io.popen command in an
+    /// extra pair of `"` so the inner quoting around argv0 (which can
+    /// contain spaces, e.g. `C:\Program Files\...`) and `--line "..."`
+    /// survives. Without this, cmd reports `'... is not recognized as an
+    /// internal or external command'` and the hook never executes.
+    #[test]
+    fn clink_io_popen_command_is_wrapped_in_extra_pair_of_quotes() {
+        let s = export_script(Shell::Clink, "runex", None);
+        assert!(
+            s.contains("local cmd = '\"' .. runex_shell_quote(RUNEX_BIN)"),
+            "clink script must prepend a literal '\"' before runex_shell_quote(RUNEX_BIN): {s}"
+        );
+        assert!(
+            s.contains("' 2>&1\"'"),
+            "clink script must append a literal '\"' after `2>&1`: {s}"
+        );
+    }
 
     #[test]
     fn nu_quote_string_escapes_tab() {
@@ -1683,16 +1655,6 @@ mod tests {
         use super::*;
 
     #[test]
-    fn bash_quote_pattern_drops_unicode_line_separators() {
-        for ch in ['\u{0085}', '\u{2028}', '\u{2029}'] {
-            let input = format!("key{ch}end");
-            let s = bash_quote_pattern(&input);
-            assert!(!s.contains(ch), "bash_quote_pattern must drop U+{:04X}: {s:?}", ch as u32);
-        }
-    }
-
-
-    #[test]
     fn lua_quote_string_drops_del() {
         let s = lua_quote_string("run\x7fex");
         assert!(!s.contains('\x7f'), "lua_quote_string must drop DEL: {s:?}");
@@ -1731,103 +1693,21 @@ mod tests {
     mod case_pattern_globs {
         use super::*;
 
-    #[test]
-    fn bash_case_pattern_star_key_matches_only_literal_star() {
-        let config = Config {
-            version: 1,
-            keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
-            abbr: vec![crate::model::Abbr {
-                key: "*".into(),
-                expand: crate::model::PerShellString::All("echo star".into()),
-                when_command_exists: None,
-            }],
-        };
-        let s = export_script(Shell::Bash, "runex", Some(&config));
-        assert!(
-            s.contains("        '*') return 0 ;;"),
-            "bash case must embed the single-quoted star key: {s}"
-        );
-        assert!(s.contains("*) return 1 ;;"), "bash case must have a catch-all *) return 1 ;; arm");
-    }
+    // The bash case-pattern injection tests were specific to the legacy
+    // design where abbreviation keys were embedded as `case` arms inside the
+    // bash bootstrap. With the new hook-based bootstrap, keys are never
+    // emitted into shell code, so glob-like keys (`*`, `?`, `[...]`) pose no
+    // shell-expansion risk at export time. The equivalent safety is now
+    // enforced by Rust-side key validation in `config::validate_abbr_key`
+    // (see runex-core/src/config.rs).
 
-    #[test]
-    fn bash_case_pattern_question_key_is_literal() {
-        let config = Config {
-            version: 1,
-            keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
-            abbr: vec![crate::model::Abbr {
-                key: "g?".into(),
-                expand: crate::model::PerShellString::All("git".into()),
-                when_command_exists: None,
-            }],
-        };
-        let s = export_script(Shell::Bash, "runex", Some(&config));
-        assert!(
-            s.contains("        'g?') return 0 ;;"),
-            "bash case must embed the single-quoted key with '?': {s}"
-        );
-    }
+    // Zsh case-pattern injection tests removed for the same reason as bash:
+    // the new hook-based bootstrap does not embed keys in shell code. See the
+    // comment block above for the bash equivalent.
 
-    #[test]
-    fn bash_case_pattern_bracket_key_is_literal() {
-        let config = Config {
-            version: 1,
-            keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
-            abbr: vec![crate::model::Abbr {
-                key: "g[cm]".into(),
-                expand: crate::model::PerShellString::All("git".into()),
-                when_command_exists: None,
-            }],
-        };
-        let s = export_script(Shell::Bash, "runex", Some(&config));
-        assert!(
-            s.contains("        'g[cm]') return 0 ;;"),
-            "bash case must embed the single-quoted bracket key literally: {s}"
-        );
-    }
-
-    #[test]
-    fn zsh_case_pattern_star_key_matches_only_literal_star() {
-        let config = Config {
-            version: 1,
-            keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
-            abbr: vec![crate::model::Abbr {
-                key: "*".into(),
-                expand: crate::model::PerShellString::All("echo star".into()),
-                when_command_exists: None,
-            }],
-        };
-        let s = export_script(Shell::Zsh, "runex", Some(&config));
-        assert!(
-            s.contains("        '*') return 0 ;;"),
-            "zsh case must embed the single-quoted star key: {s}"
-        );
-        assert!(s.contains("*) return 1 ;;"), "zsh case must have a catch-all *) return 1 ;; arm");
-    }
-
-    /// Regression: an empty abbr list previously emitted a duplicate `default` clause,
-    /// causing a PowerShell parse error.
-    #[test]
-    fn pwsh_script_has_single_default_clause() {
-        for abbr in [vec![], vec![crate::model::Abbr {
-            key: "gcm".into(),
-            expand: crate::model::PerShellString::All("git commit -m".into()),
-            when_command_exists: None,
-        }]] {
-            let s = export_script(Shell::Pwsh, "runex", Some(&Config {
-                version: 1,
-                keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
-                abbr,
-            }));
-            let default_count = s.matches("default {").count();
-            assert_eq!(default_count, 1, "pwsh script must have exactly one default clause, got {default_count}");
-        }
-    }
+    // The "pwsh switch must have exactly one `default {` clause" regression
+    // test was specific to the legacy token-embedding design; with the new
+    // bootstrap there is no switch statement at all.
 
     } // mod case_pattern_globs
 }

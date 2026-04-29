@@ -33,6 +33,96 @@ impl DiagResult {
     }
 }
 
+/// Informational facts about the host environment that `runex doctor`
+/// surfaces alongside the config-validation checks.
+///
+/// The struct exists (rather than passing bare values) so future
+/// platform diagnostics — XDG paths, registry overrides, shell autodetect
+/// hints — can be added without churning every call site.
+#[derive(Debug, Clone, Default)]
+pub struct DoctorEnvInfo {
+    /// Summary of the augmented command-resolution PATH used on Windows.
+    /// `None` on non-Windows or when the caller can't compute it. When
+    /// present, `diagnose` emits an informational `effective_search_path`
+    /// check so a degraded process PATH (clink-style) is visible to the
+    /// user before they hit a `command:foo not found` warning.
+    pub effective_search_path: Option<EffectiveSearchPathSummary>,
+
+    /// The output `runex export clink` would produce *now*. When
+    /// `Some`, `diagnose` compares it against the on-disk `runex.lua`
+    /// and warns if the two have drifted — the canonical sign that the
+    /// user upgraded runex but never re-ran `runex init clink`. `None`
+    /// skips the check (e.g. on platforms without clink, or when the
+    /// caller can't render the export).
+    pub clink_export_for_drift_check: Option<String>,
+
+    /// Per-shell rcfile marker checks. The caller decides which shells
+    /// the user actually has installed; entries set to `true` produce
+    /// a `integration:<shell>` row in the doctor output.
+    pub check_rcfile_markers: RcfileMarkerSelection,
+}
+
+/// Which shells should have their rcfile checked for the runex init
+/// marker. The struct exists (rather than a bare `Vec<Shell>`) so
+/// future per-shell options (skip-if-missing, custom path overrides)
+/// can be added without churning callers.
+#[derive(Debug, Clone, Default)]
+pub struct RcfileMarkerSelection {
+    pub bash: bool,
+    pub zsh: bool,
+    pub pwsh: bool,
+    pub nu: bool,
+}
+
+impl RcfileMarkerSelection {
+    /// Enable checks for every shell that has an rcfile concept
+    /// (i.e. all of them except clink).
+    pub fn all() -> Self {
+        Self { bash: true, zsh: true, pwsh: true, nu: true }
+    }
+}
+
+/// Per-source breakdown of the merged PATH `runex hook` actually uses
+/// when resolving `when_command_exists` entries.
+#[derive(Debug, Clone)]
+pub struct EffectiveSearchPathSummary {
+    pub from_process: usize,
+    pub from_user_registry: usize,
+    pub from_system_registry: usize,
+}
+
+impl EffectiveSearchPathSummary {
+    pub fn total(&self) -> usize {
+        self.from_process + self.from_user_registry + self.from_system_registry
+    }
+}
+
+/// Build the informational `effective_search_path` check.
+///
+/// Uses `Warn` status only when the process PATH itself is empty
+/// (extremely unusual — almost certainly a misconfigured environment),
+/// otherwise stays `Ok` and reports the breakdown so users can spot
+/// "process=2, +user=42, +system=15" patterns that suggest the parent
+/// process was launched with a degraded PATH.
+fn check_effective_search_path(s: &EffectiveSearchPathSummary) -> Check {
+    let total = s.total();
+    let detail = format!(
+        "{} entries (process={}, +user={}, +system={})",
+        total, s.from_process, s.from_user_registry, s.from_system_registry
+    );
+    Check {
+        name: "effective_search_path".into(),
+        status: if s.from_process == 0 {
+            // No process PATH at all is a real anomaly — flag it.
+            CheckStatus::Warn
+        } else {
+            CheckStatus::Ok
+        },
+        detail,
+        detail_verbose: None,
+    }
+}
+
 fn check_config_file(config_path: &Path) -> Check {
     let exists = config_path.exists();
     Check {
@@ -195,6 +285,87 @@ const KNOWN_PRECACHE_KEYS: &[&str] = &["path_only"];
 ///
 /// Parses the config as a raw TOML table and compares keys against whitelists.
 /// Returns Warn checks for each unknown field, with "did you mean?" suggestions.
+/// Check for rules rejected by per-field validation.
+///
+/// Unlike `check_config_parse`, which surfaces only the first `ConfigError`
+/// from `parse_config`, this walks every rule and reports *all* validation
+/// failures with field-path diagnostics (e.g. `abbr[3].expand.pwsh`).
+///
+/// Config loading still stops at the first error — these warnings are
+/// observability only, not a lenient-load mode.
+pub fn check_rejected_rules(config_source: &str) -> Vec<Check> {
+    // If deserialization fails (syntax / unsupported version), check_config_parse
+    // already reports it. Emit nothing here.
+    let Ok(config) = crate::config::parse_config_lenient(config_source) else {
+        return vec![];
+    };
+    let issues = crate::config::collect_validation_issues(&config);
+    if issues.is_empty() {
+        return vec![];
+    }
+
+    let mut checks = Vec::with_capacity(issues.len() + 1);
+
+    // Summary check first, so the reader sees the semantics before the details.
+    checks.push(Check {
+        name: "config_rejected_rules".into(),
+        status: CheckStatus::Warn,
+        detail: format!(
+            "{} invalid abbr field(s) found; config loading still stops at the first one",
+            issues.len()
+        ),
+        detail_verbose: None,
+    });
+
+    for issue in issues {
+        let check = match &issue {
+            crate::config::ValidationIssue::Config { .. } => Check {
+                name: "config_validation".into(),
+                status: CheckStatus::Warn,
+                detail: format!("config rejected: {}", issue.reason_text()),
+                detail_verbose: None,
+            },
+            crate::config::ValidationIssue::Rule { rule_index, field_path, .. } => {
+                let safe_path = sanitize_for_display(field_path);
+                Check {
+                    name: format!("config_validation.abbr[{rule_index}].{safe_path}"),
+                    status: CheckStatus::Warn,
+                    detail: format!(
+                        "rule #{rule_index} field '{safe_path}' rejected: {}",
+                        issue.reason_text(),
+                    ),
+                    detail_verbose: None,
+                }
+            }
+        };
+        checks.push(check);
+    }
+    checks
+}
+
+/// Strict-mode check: warn when the deprecated `[precache]` section is
+/// present in the config. The section was used by the legacy shell template
+/// to emit a startup precache helper; the hook-based bootstraps consult the
+/// config at keypress time so the section now has no run-time effect.
+///
+/// Returns an empty vec when the TOML is unparseable; that case is reported
+/// by `check_config_parse` already.
+pub fn check_precache_deprecation(config_source: &str) -> Vec<Check> {
+    let table: toml::Table = match config_source.parse() {
+        Ok(t) => t,
+        Err(_) => return vec![],
+    };
+    if !table.contains_key("precache") {
+        return vec![];
+    }
+    vec![Check {
+        name: "precache_deprecation".into(),
+        status: CheckStatus::Warn,
+        detail: "[precache] is deprecated and has no effect since the shell integration moved to runtime hook calls. Remove the section to silence this warning.".into(),
+        detail_verbose: None,
+    }]
+}
+
 pub fn check_unknown_fields(config_source: &str) -> Vec<Check> {
     let table: toml::Table = match config_source.parse() {
         Ok(t) => t,
@@ -341,19 +512,74 @@ pub fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
 /// `config` is `None` when config loading failed (parse error, etc.).
 /// `parse_error` carries the error message when `config` is `None` due to a parse failure.
 /// `command_exists` is injected for testability.
-pub fn diagnose<F>(config_path: &Path, config: Option<&Config>, parse_error: Option<&str>, command_exists: F) -> DiagResult
+pub fn diagnose<F>(
+    config_path: &Path,
+    config: Option<&Config>,
+    parse_error: Option<&str>,
+    env_info: &DoctorEnvInfo,
+    command_exists: F,
+) -> DiagResult
 where
     F: Fn(&str) -> bool,
 {
     let mut checks = Vec::new();
     checks.push(check_config_file(config_path));
     checks.push(check_config_parse(config, parse_error));
+    if let Some(summary) = env_info.effective_search_path.as_ref() {
+        // Emit before the per-command checks so users see the search PATH
+        // context above any "command:foo not found" warnings that may
+        // follow.
+        checks.push(check_effective_search_path(summary));
+    }
+    checks.extend(integration_marker_checks(&env_info.check_rcfile_markers));
+    if let Some(export) = env_info.clink_export_for_drift_check.as_deref() {
+        let r = crate::integration_check::check_clink_lua_freshness(
+            export,
+            &crate::integration_check::default_clink_lua_paths(),
+        );
+        checks.push(integration_check_to_check(r));
+    }
     if let Some(cfg) = config {
         checks.extend(check_keybind(cfg));
         checks.extend(check_abbr_quality(cfg));
         checks.extend(check_when_command_exists(cfg, &command_exists));
     }
     DiagResult { checks }
+}
+
+/// Convert an [`integration_check::IntegrationCheck`] into the doctor
+/// `Check` shape. `Outdated` becomes `Warn`, `Missing` becomes `Warn`
+/// (we don't escalate to Error: a stale or missing rcfile shouldn't
+/// fail `doctor` outright — the user's shell still works).
+fn integration_check_to_check(r: crate::integration_check::IntegrationCheck) -> Check {
+    use crate::integration_check::IntegrationCheck;
+    let (status, name, detail) = match r {
+        IntegrationCheck::Ok { name, detail } => (CheckStatus::Ok, name, detail),
+        IntegrationCheck::Outdated { name, detail, .. } => (CheckStatus::Warn, name, detail),
+        IntegrationCheck::Missing { name, detail } => (CheckStatus::Warn, name, detail),
+        IntegrationCheck::Skipped { name, detail } => (CheckStatus::Ok, name, detail),
+    };
+    Check { name, status, detail, detail_verbose: None }
+}
+
+/// Run the rcfile-marker check for each shell selected by the caller.
+fn integration_marker_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
+    use crate::integration_check::check_rcfile_marker;
+    use crate::shell::Shell;
+    let mut out = Vec::new();
+    if sel.bash {
+        out.push(integration_check_to_check(check_rcfile_marker(Shell::Bash, None)));
+    }
+    if sel.zsh {
+        out.push(integration_check_to_check(check_rcfile_marker(Shell::Zsh, None)));
+    }
+    if sel.pwsh {
+        out.push(integration_check_to_check(check_rcfile_marker(Shell::Pwsh, None)));
+    }
+    if sel.nu {
+        out.push(integration_check_to_check(check_rcfile_marker(Shell::Nu, None)));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -400,7 +626,7 @@ mod tests {
         writeln!(f, "version = 1").unwrap();
 
         let cfg = test_config(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
 
         assert!(result.is_healthy());
         assert_eq!(result.checks[0].status, CheckStatus::Ok); // file exists
@@ -411,7 +637,7 @@ mod tests {
     #[test]
     fn config_file_missing() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
-        let result = diagnose(&path, None, None, |_| true);
+        let result = diagnose(&path, None, None, &DoctorEnvInfo::default(), |_| true);
 
         assert!(!result.is_healthy());
         assert_eq!(result.checks[0].status, CheckStatus::Error);
@@ -421,7 +647,7 @@ mod tests {
     #[test]
     fn config_parse_error_detail_shown() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
-        let result = diagnose(&path, None, Some("TOML parse error at line 4"), |_| true);
+        let result = diagnose(&path, None, Some("TOML parse error at line 4"), &DoctorEnvInfo::default(), |_| true);
 
         let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
         assert_eq!(parse_check.status, CheckStatus::Error);
@@ -433,7 +659,7 @@ mod tests {
     fn config_parse_multiline_error_splits_detail_and_verbose() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let multiline = "TOML parse error at line 4, column 11\n  |\n4 | trigger = \"space\"\n  |           ^^^^^^^\ninvalid type";
-        let result = diagnose(&path, None, Some(multiline), |_| true);
+        let result = diagnose(&path, None, Some(multiline), &DoctorEnvInfo::default(), |_| true);
 
         let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
         assert_eq!(parse_check.status, CheckStatus::Error);
@@ -453,7 +679,7 @@ mod tests {
     #[test]
     fn config_parse_single_line_error_has_no_verbose() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
-        let result = diagnose(&path, None, Some("unsupported version: 99"), |_| true);
+        let result = diagnose(&path, None, Some("unsupported version: 99"), &DoctorEnvInfo::default(), |_| true);
 
         let parse_check = result.checks.iter().find(|c| c.name == "config_parse").unwrap();
         assert!(parse_check.detail_verbose.is_none(),
@@ -467,7 +693,7 @@ mod tests {
         std::fs::write(&path, "version = 1").unwrap();
 
         let cfg = test_config(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
-        let result = diagnose(&path, Some(&cfg), None, |_| false);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
 
         assert!(result.is_healthy());
         assert_eq!(result.checks[2].status, CheckStatus::Warn);
@@ -478,7 +704,7 @@ mod tests {
     fn doctor_warns_empty_key() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![abbr("", "git commit -m")]);
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             result.checks.iter().any(|c| c.name.contains("empty_key") && c.status == CheckStatus::Warn),
             "must warn on empty key: {:?}", result.checks
@@ -489,7 +715,7 @@ mod tests {
     fn doctor_warns_self_loop() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![abbr("ls", "ls")]);
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             result.checks.iter().any(|c| c.name.contains("self_loop") && c.status == CheckStatus::Warn),
             "must warn on self-loop: {:?}", result.checks
@@ -524,7 +750,7 @@ mod tests {
             precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must warn when self_insert.bash = shift-space: {:?}", result.checks
@@ -546,7 +772,7 @@ mod tests {
             precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must not warn when only self_insert.pwsh = shift-space: {:?}", result.checks
@@ -568,7 +794,7 @@ mod tests {
             precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must warn when default self_insert = shift-space (propagates to bash/zsh): {:?}", result.checks
@@ -590,7 +816,7 @@ mod tests {
             precache: crate::model::PrecacheConfig::default(),
             abbr: vec![],
         };
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         assert!(
             !result.checks.iter().any(|c| c.name == "keybind.self_insert" && c.status == CheckStatus::Warn),
             "must not warn when only pwsh self_insert = shift-space: {:?}", result.checks
@@ -612,7 +838,7 @@ mod tests {
     fn doctor_self_loop_detail_strips_control_chars_from_key() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = test_config(vec![abbr("key\x07evil", "key\x07evil")]);
-        let result = diagnose(&path, Some(&cfg), None, |_| true);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
         let self_loop = result.checks.iter().find(|c| c.name.contains("self_loop"));
         let check = self_loop.expect("must produce a self_loop check for a self-loop key");
         assert!(
@@ -630,7 +856,7 @@ mod tests {
             expand: crate::model::PerShellString::All("lsd".into()),
             when_command_exists: Some(crate::model::PerShellCmds::All(vec!["cmd\x07inject".into()])),
         }]);
-        let result = diagnose(&path, Some(&cfg), None, |_| false);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.contains("command:"));
         let check = cmd_check.expect("must produce a command check");
         assert!(
@@ -644,7 +870,7 @@ mod tests {
     #[test]
     fn doctor_config_file_detail_strips_control_chars_from_path() {
         let path = std::path::PathBuf::from("/home/user/\x1b[2Jevil.toml");
-        let result = diagnose(&path, None, None, |_| true);
+        let result = diagnose(&path, None, None, &DoctorEnvInfo::default(), |_| true);
         let config_check = result.checks.iter().find(|c| c.name == "config_file");
         let check = config_check.expect("must produce a config_file check");
         assert!(
@@ -664,7 +890,7 @@ mod tests {
             expand: crate::model::PerShellString::All("lsd".into()),
             when_command_exists: Some(crate::model::PerShellCmds::All(vec!["cmd\x1b[2Jevil".into()])),
         }]);
-        let result = diagnose(&path, Some(&cfg), None, |_| false);
+        let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.starts_with("command:"));
         let check = cmd_check.expect("must produce a command check");
         assert!(
@@ -719,6 +945,39 @@ when_command_exists = ["git"]
 "#;
         let checks = check_unknown_fields(toml);
         assert!(checks.is_empty(), "valid config must produce no warnings: {:?}", checks);
+    }
+
+    #[test]
+    fn precache_deprecation_warns_when_section_is_present() {
+        let toml = r#"
+version = 1
+[precache]
+path_only = true
+"#;
+        let checks = check_precache_deprecation(toml);
+        assert_eq!(checks.len(), 1, "should warn once when [precache] is present: {:?}", checks);
+        assert_eq!(checks[0].status, CheckStatus::Warn);
+        assert!(checks[0].detail.contains("deprecated"), "detail must say deprecated: {}", checks[0].detail);
+        assert_eq!(checks[0].name, "precache_deprecation");
+    }
+
+    #[test]
+    fn precache_deprecation_silent_when_section_absent() {
+        let toml = r#"
+version = 1
+[[abbr]]
+key = "gcm"
+expand = "git commit -m"
+"#;
+        let checks = check_precache_deprecation(toml);
+        assert!(checks.is_empty(), "no warning when [precache] is absent: {:?}", checks);
+    }
+
+    #[test]
+    fn precache_deprecation_silent_when_toml_invalid() {
+        // If the TOML doesn't even parse, check_config_parse handles it.
+        let checks = check_precache_deprecation("this is not [valid toml");
+        assert!(checks.is_empty());
     }
 
     #[test]
@@ -796,4 +1055,104 @@ trigerr = "space"
     }
 
     } // mod strict
+
+    mod rejected_rules {
+        use super::*;
+
+        #[test]
+        fn check_rejected_rules_empty_for_valid_config() {
+            let toml = r#"
+version = 1
+[[abbr]]
+key = "gcm"
+expand = "git commit -m"
+"#;
+            assert!(check_rejected_rules(toml).is_empty());
+        }
+
+        #[test]
+        fn check_rejected_rules_emits_summary_check_first() {
+            let toml = r#"
+version = 1
+[[abbr]]
+key = ""
+expand = "x"
+[[abbr]]
+key = "ls"
+expand = ""
+"#;
+            let checks = check_rejected_rules(toml);
+            assert!(!checks.is_empty());
+            assert_eq!(checks[0].name, "config_rejected_rules");
+            assert!(checks[0].detail.contains("2 invalid"), "summary count: {:?}", checks[0].detail);
+            // Remaining are per-field warns, sorted by rule order.
+            assert!(checks[1].name.starts_with("config_validation.abbr[1]."));
+            assert!(checks[2].name.starts_with("config_validation.abbr[2]."));
+        }
+
+        #[test]
+        fn check_rejected_rules_warns_for_each_bad_rule() {
+            let toml = r#"
+version = 1
+[[abbr]]
+key = ""
+expand = "something"
+[[abbr]]
+key = "lsa"
+expand = ""
+[[abbr]]
+key = "valid"
+expand = "echo ok"
+when_command_exists = ["good", "bad&inject"]
+"#;
+            let checks = check_rejected_rules(toml);
+            // 1 summary + 3 per-field = 4
+            assert_eq!(checks.len(), 4, "expected 1 summary + 3 warns: {checks:?}");
+            assert_eq!(checks[1].name, "config_validation.abbr[1].key");
+            assert_eq!(checks[2].name, "config_validation.abbr[2].expand");
+            assert_eq!(checks[3].name, "config_validation.abbr[3].when_command_exists[2]");
+        }
+
+        #[test]
+        fn check_rejected_rules_does_not_leak_raw_values() {
+            // Key contains a BEL control character. The check must not echo it.
+            let toml = "
+version = 1
+[[abbr]]
+key = \"gc\\u0007m\"
+expand = \"x\"
+";
+            let checks = check_rejected_rules(toml);
+            assert!(!checks.is_empty());
+            for check in &checks {
+                assert!(
+                    !check.detail.contains('\x07'),
+                    "raw BEL must not appear in detail: {:?}",
+                    check.detail
+                );
+                assert!(
+                    !check.name.contains('\x07'),
+                    "raw BEL must not appear in name: {:?}",
+                    check.name
+                );
+            }
+        }
+
+        #[test]
+        fn check_rejected_rules_skips_when_deserialization_fails() {
+            // Invalid TOML syntax — check_config_parse handles this.
+            let toml = "this is = not [ valid toml";
+            assert!(check_rejected_rules(toml).is_empty());
+        }
+
+        #[test]
+        fn check_rejected_rules_skips_when_unsupported_version() {
+            let toml = r#"version = 99
+[[abbr]]
+key = ""
+expand = "x"
+"#;
+            assert!(check_rejected_rules(toml).is_empty());
+        }
+    } // mod rejected_rules
 }
