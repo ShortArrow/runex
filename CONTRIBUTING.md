@@ -301,20 +301,54 @@ fraction of past PRs have been blocked by ML detections like
   Rust code with reproducible builds via GitHub Actions. Include a link
   to the failing winget PR.
 
+Pre-submission checks (the PR template asks for these — do them
+*before* opening the PR):
+
+- [ ] **wingetcreate is current** — `wingetcreate --version` should
+  match a recent release (1.12+ at time of writing). Older
+  wingetcreate defaults to schema 1.10, which `winget-pkgs` master
+  has moved past; check with
+  `winget upgrade Microsoft.WingetCreate`.
+- [ ] **Schema matches the previously-merged version's schema.**
+  Inspect the existing manifest in
+  `microsoft/winget-pkgs:manifests/s/ShortArrow/runex/<previous>/`
+  for its `ManifestVersion`, and confirm the regenerated manifest
+  uses the same or newer. The 0.1.11 PR landed at 1.12.0 — a
+  regression to 1.10.0 will get pushed back.
+- [ ] **No other open PRs for the same manifest:**
+  `gh search prs --repo microsoft/winget-pkgs "is:pr is:open ShortArrow.runex"`.
+- [ ] **Manifest validates locally:**
+  `winget validate --manifest <path>`.
+- [ ] **Local install attempt** with
+  `winget install --manifest <path> --accept-source-agreements --accept-package-agreements`.
+  *Be aware:* on Defender-active machines this may stall at the
+  "applying motw" step due to the same false-positive that hits
+  the official validation pipeline. A successful local install is
+  nice-to-have but not required — the PR still gets the same
+  Defender treatment regardless.
+
 Submission steps:
 
-1. **Generate a manifest update** with `wingetcreate update` against the
-   previous PR's branch, pointing at the new x86_64-pc-windows-msvc zip
-   from the GitHub release.
-2. **Open a PR against `microsoft/winget-pkgs`** with the regenerated
-   manifest. Title format: `New version: ShortArrow.runex version X.Y.Z`.
-3. **Watch the validation pipeline.** Status is reported as PR comments
-   from `@microsoft-github-policy-service` and tags like `Validation-Defender-Error`.
-4. **If Defender rejects:** post the WDSI submission ID on the PR, ask
-   for revalidation after the analyst clears the file.
-5. **If validation hangs:** the validation pipeline sometimes uses stale
-   Defender definitions; retry by closing/reopening the PR or pushing
-   an empty commit to the branch.
+1. **Generate the manifest update** with
+   `wingetcreate update ShortArrow.runex --version X.Y.Z --urls <release-zip-url>`,
+   passing `--out <dir>` so the files land somewhere obvious. The
+   tool produces three YAMLs:
+   `ShortArrow.runex.{installer,locale.en-US,version}.yaml`.
+2. **Open a PR against `microsoft/winget-pkgs`** by adding `--submit`
+   to the same `wingetcreate update` invocation, or by manually
+   committing on a `winget-pkgs` fork and opening the PR with `gh pr
+   create`. Title format: `New version: ShortArrow.runex version X.Y.Z`.
+3. **Post the checklist confirmation as a PR comment** so reviewers
+   don't have to verify each box themselves. Mention which boxes
+   are blocked by Defender (the local-install row).
+4. **Watch the validation pipeline.** Status is reported as PR
+   comments from `@microsoft-github-policy-service` and tags like
+   `Validation-Defender-Error`.
+5. **If Defender rejects:** post the WDSI submission ID on the PR,
+   ask for revalidation after the analyst clears the file.
+6. **If validation hangs:** the validation pipeline sometimes uses
+   stale Defender definitions; retry by closing/reopening the PR or
+   pushing an empty commit to the branch.
 
 Until the PR merges, point users at `cargo install runex` or
 `brew install shortarrow/runex/runex` as the fastest install path.
