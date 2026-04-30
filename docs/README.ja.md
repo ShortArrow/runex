@@ -83,7 +83,7 @@ key    = "gcam"
 expand = "git commit -am '{}'"   # {} = 展開後ここにカーソルが残る
 ```
 
-全フィールド・評価順・フォールバックチェーンの詳細は [docs/config-reference.md](config-reference.md) を参照してください。
+全フィールド・評価順・フォールバックチェーンの詳細は [docs/config-reference.md](config-reference.md) を参照してください。コピペで使えるシナリオ別サンプル (Git ショートカット、シェル別コマンド、フォールバックチェーンなど) は [docs/recipes.ja.md](recipes.ja.md) にまとめています。
 
 ## コマンド
 

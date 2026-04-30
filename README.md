@@ -85,7 +85,7 @@ key    = "gcam"
 expand = "git commit -am '{}'"   # {} = cursor stays here after expansion
 ```
 
-See [docs/config-reference.md](docs/config-reference.md) for the full reference, including evaluation order, fallback chains, and all accepted fields.
+See [docs/config-reference.md](docs/config-reference.md) for the full reference, including evaluation order, fallback chains, and all accepted fields. For copy-pasteable scenarios (Git shortcuts, per-shell commands, fallback chains, …) see [docs/recipes.md](docs/recipes.md).
 
 ## Commands
 

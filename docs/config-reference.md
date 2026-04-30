@@ -1,5 +1,8 @@
 # Config Reference
 
+> Looking for working examples first? See [recipes.md](recipes.md) for
+> copy-pasteable `config.toml` snippets organised by use case.
+
 Default path: `$XDG_CONFIG_HOME/runex/config.toml`, falling back to `~/.config/runex/config.toml` on all platforms including Windows.
 
 Override with the `RUNEX_CONFIG` environment variable or the `--config` flag.
