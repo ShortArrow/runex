@@ -14,9 +14,60 @@ Create config at ~/.config/runex/config.toml? [y/N] y
 Created: ~/.config/runex/config.toml
 Append shell integration to ~/.bashrc? [y/N] y
 Appended integration to ~/.bashrc
+
+Next steps:
+  1. Reload your shell: `source ~/.bashrc` (or `exec $SHELL`)
+  2. Try `gst<Space>` — it should expand to `git status `.
+  3. Add your own abbreviations: see https://github.com/ShortArrow/runex/blob/main/docs/recipes.md
+  4. Verify any time with: `runex doctor`
 ```
 
-`-y` を付けると確認プロンプトをすべてスキップします。Clink は自動追記に対応していないため、手動で追加してください(下記)。
+`-y` を付けると確認プロンプトをすべてスキップします。シェル名を渡せば
+auto-detection をスキップして特定のシェルだけを対象にできます (例:
+`runex init pwsh`、`runex init clink`)。clink は rcfile ではなく lua
+ファイルとして書かれます。
+
+## `runex init` が何をする / しないか
+
+`init` で最も多い不安は「既存の rcfile を壊さないか?」です。**壊しま
+せん**。詳細:
+
+**やること:**
+
+- `~/.config/runex/config.toml` が存在しない場合のみ作成する
+  (`OpenOptions::create_new` を使うため、既存ファイルは絶対に上書き
+  しない)。デフォルトの設定には `gst → git status` のサンプルが入っ
+  ているので、インストール直後に展開動作を確認できる。
+- rcfile に `# runex-init` マーカー付きの 1 ブロックを追記する:
+
+  ```bash
+  # runex-init
+  eval "$(runex export bash)"
+  ```
+
+- 各ファイル書き込み前に確認プロンプトを出す (`-y` で全スキップ可)。
+
+**やらないこと:**
+
+- **既存行を絶対に変更しない**。すべての書き込みが
+  `OpenOptions::append` 経由なので、既存内容はバイト単位で保持され、
+  新ブロックは末尾に追加される。
+- **既存 rcfile を上書きしない**。
+- **シンボリックリンクを辿らない** (Unix では `O_NOFOLLOW`)。
+- **`# runex-init` マーカーが既にあれば再追記しない** — `runex init`
+  はべき等で、2 回実行しても結果は単一ブロックのまま。
+- **1 MB を超える rcfile では実行しない** (安全制限。サイズオーバー時
+  はマーカー欠落として扱い fail safe)。
+
+**アンインストール:** `# runex-init` 行から次の空行までを手で削除する
+だけ。runex は `runex init` を再実行しない限りそのブロックに書き戻し
+ません。シードした config も消したい場合は
+`rm ~/.config/runex/config.toml`。
+
+**clink は別扱い**: lua ファイルは `%LOCALAPPDATA%\clink\runex.lua`
+(または `RUNEX_CLINK_LUA_PATH` 指定先) に静的コピーとして書く。
+`runex init clink` はディスク上の内容と現在の正規 export 結果を比較
+し、ドリフトしている場合のみ確認プロンプト + 上書き。同一なら no-op。
 
 ## シェル別の手動設定
 

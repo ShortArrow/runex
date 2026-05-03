@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`runex init <shell>`** — `init` now accepts an optional shell
+  positional argument so users can target a specific shell (e.g.
+  `runex init pwsh`, `runex init clink`) instead of relying on
+  `$SHELL` auto-detection. Plain `runex init` keeps the existing
+  detect-and-do-one-shell behaviour. Closes the documentation /
+  implementation mismatch where `runex doctor` and the docs were
+  recommending `runex init <shell>` against a CLI that didn't accept
+  shell arguments.
+- **`runex init clink` writes `%LOCALAPPDATA%\clink\runex.lua`** for
+  you. The lua file is generated from `runex export clink` against
+  the current config, written under `%LOCALAPPDATA%\clink\runex.lua`
+  by default (override with `RUNEX_CLINK_LUA_PATH`). Drift with the
+  on-disk file is detected and confirmed before overwriting; identical
+  content is a no-op. This replaces the manual
+  `runex export clink > %LOCALAPPDATA%\clink\runex.lua` step that
+  every clink user previously had to run by hand and re-run after
+  every upgrade.
+- **Next-steps guidance after `runex init`.** Each successful init
+  prints a four-step blurb tailored to the target shell (how to
+  reload, the seed `gst<Space>` demo, the recipes link, and `runex
+  doctor` for verification).
+- **Seed config now includes a working sample.** `runex init` writes a
+  `[keybind.trigger] default = "space"` block plus a `gst → git
+  status` `[[abbr]]` rule so a fresh install demonstrates expansion
+  immediately. Existing configs are untouched (`init` still uses
+  `OpenOptions::create_new` and refuses to overwrite).
+
+### Changed
+- **README & docs/setup explicitly document rcfile-write safety.** New
+  "What `runex init` will and won't do" section in `docs/setup.md`
+  (and the Japanese mirror) lists the append-only / `O_NOFOLLOW` /
+  marker-idempotent / size-cap properties so users can confidently
+  run `init` without fearing for their existing rcfile.
+- **crates.io publish moved into CI via OIDC Trusted Publishing.**
+  The `publish-crates` job in `release.yml` exchanges the workflow's
+  GitHub OIDC token for a short-lived crates.io token
+  (`rust-lang/crates-io-auth-action@v1.0.4`), publishes `runex-core`,
+  waits for the sparse index to propagate, then publishes `runex`.
+  No long-lived `CARGO_REGISTRY_TOKEN` is stored as a repository
+  secret or kept on a developer laptop. One-time per-crate Trusted
+  Publisher setup is required on crates.io — see
+  `CONTRIBUTING.md` `### crates.io (OIDC Trusted Publishing)`.
+  Skip the publish on a particular tag by including `[skip publish]`
+  in the bump commit message.
+
 ## [0.1.12] - 2026-04-30
 
 > Release-time reminder: bump the AUR `runex-bin` PKGBUILD alongside any

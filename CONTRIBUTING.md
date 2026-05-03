@@ -161,6 +161,15 @@ Before touching any version number:
   integration drift that unit tests don't see (e.g. clink lua
   outdated). Especially important if the release touches shell
   templates.
+- [ ] **crates.io Trusted Publisher is registered for both
+  `runex-core` and `runex`.** Sanity check at
+  https://crates.io/crates/runex-core/settings/ and
+  https://crates.io/crates/runex/settings/ — both crates need a
+  GitHub Actions trusted publisher entry pointing at this repo +
+  `release.yml`. One-time setup, but worth re-confirming if you
+  haven't released in a while (crates.io occasionally invalidates
+  unused tokens). See `### crates.io (OIDC Trusted Publishing)` below
+  for the exact field values.
 
 ### Cut the release
 
@@ -213,13 +222,20 @@ All commands from the repo root.
 Run **after** the GitHub release artifacts are visible at
 https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
 
-- [ ] **crates.io.** `runex-core` must publish before `runex` because
-  the latter depends on it:
+- [ ] **crates.io.** Automated. The `publish-crates` job in
+  `release.yml` fires on the same tag push as `build` / `release` and
+  publishes `runex-core` first, then `runex`, via OIDC Trusted
+  Publishing. See `### crates.io (OIDC Trusted Publishing)` below for
+  the one-time setup.
 
-  ```bash
-  RUNEX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) cargo publish -p runex-core
-  RUNEX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) cargo publish -p runex
-  ```
+  - To **skip** publishing on a particular tag (e.g. when re-tagging
+    a previously-published version because of a release-process
+    glitch), include `[skip publish]` in the bump commit's message.
+    The job's `if:` condition checks for it.
+  - There is **no `CARGO_REGISTRY_TOKEN` to manage** — the workflow
+    exchanges a short-lived GitHub OIDC token for an equally
+    short-lived crates.io token at job start, scoped to the
+    workflow + repository registered with crates.io.
 
 - [ ] **AUR `runex-bin`.** Use the helper:
 
@@ -287,6 +303,63 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
   winget show ShortArrow.runex            # winget (after the PR merges)
   ```
 
+### crates.io (OIDC Trusted Publishing)
+
+`runex-core` and `runex` are published to crates.io via OIDC Trusted
+Publishing — no long-lived `CARGO_REGISTRY_TOKEN` is stored as a
+GitHub secret or in any local environment. The `publish-crates` job in
+`.github/workflows/release.yml` exchanges the workflow's GitHub OIDC
+token for a short-lived crates.io token at job start
+(`rust-lang/crates-io-auth-action@v1.0.4`), publishes `runex-core`,
+waits for the index to propagate, then publishes `runex`.
+
+#### One-time setup (per crate)
+
+For each of the two crates, register this repository's `release.yml`
+as a Trusted Publisher on crates.io:
+
+1. Sign in at https://crates.io as a crate owner.
+2. Go to https://crates.io/crates/runex-core/settings (then repeat for
+   `runex`).
+3. Under **Trusted Publishers**, click **Add** and choose
+   **GitHub Actions**.
+4. Fill in:
+   - **Repository owner**: `ShortArrow`
+   - **Repository name**: `runex`
+   - **Workflow filename**: `release.yml`
+   - **Environment**: leave blank (we don't gate publishing behind a
+     GitHub Environment for runex).
+5. Save.
+
+The same workflow file is used for both crates, so the entry is
+identical between the two `settings/` pages — only the crate URL
+differs. After both are saved, the next tag-pushed release will
+publish without any further manual action.
+
+#### Sanity check before relying on it
+
+If the `publish-crates` job has been failing at the
+`Exchange OIDC token` step or the `Publish runex-core` step, the
+usual cause is one of:
+
+- **Trusted Publisher not registered** for that crate yet (or for the
+  other crate). The error mentions the missing crate name. Re-run
+  the setup above for whichever crate is missing.
+- **Workflow filename mismatch.** If you renamed the workflow file
+  the registered entry no longer matches and crates.io won't issue a
+  token. Update the entry to the new filename.
+- **Repository was renamed/transferred.** Update the
+  `Repository owner` / `Repository name` fields to the current ones.
+
+If you ever need to publish manually as a fallback (e.g. crates.io
+OIDC issuer outage), you can still run
+`RUNEX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) cargo publish -p runex-core`
+followed by `cargo publish -p runex` from a checkout at the release
+tag, using a personal API token via
+`cargo login --registry crates-io`. **Don't commit the token
+anywhere; revoke it from your crates.io account once the manual run
+is complete.**
+
 ### winget submission
 
 winget validation runs the candidate manifest through Defender. A non-zero
@@ -301,20 +374,54 @@ fraction of past PRs have been blocked by ML detections like
   Rust code with reproducible builds via GitHub Actions. Include a link
   to the failing winget PR.
 
+Pre-submission checks (the PR template asks for these — do them
+*before* opening the PR):
+
+- [ ] **wingetcreate is current** — `wingetcreate --version` should
+  match a recent release (1.12+ at time of writing). Older
+  wingetcreate defaults to schema 1.10, which `winget-pkgs` master
+  has moved past; check with
+  `winget upgrade Microsoft.WingetCreate`.
+- [ ] **Schema matches the previously-merged version's schema.**
+  Inspect the existing manifest in
+  `microsoft/winget-pkgs:manifests/s/ShortArrow/runex/<previous>/`
+  for its `ManifestVersion`, and confirm the regenerated manifest
+  uses the same or newer. The 0.1.11 PR landed at 1.12.0 — a
+  regression to 1.10.0 will get pushed back.
+- [ ] **No other open PRs for the same manifest:**
+  `gh search prs --repo microsoft/winget-pkgs "is:pr is:open ShortArrow.runex"`.
+- [ ] **Manifest validates locally:**
+  `winget validate --manifest <path>`.
+- [ ] **Local install attempt** with
+  `winget install --manifest <path> --accept-source-agreements --accept-package-agreements`.
+  *Be aware:* on Defender-active machines this may stall at the
+  "applying motw" step due to the same false-positive that hits
+  the official validation pipeline. A successful local install is
+  nice-to-have but not required — the PR still gets the same
+  Defender treatment regardless.
+
 Submission steps:
 
-1. **Generate a manifest update** with `wingetcreate update` against the
-   previous PR's branch, pointing at the new x86_64-pc-windows-msvc zip
-   from the GitHub release.
-2. **Open a PR against `microsoft/winget-pkgs`** with the regenerated
-   manifest. Title format: `New version: ShortArrow.runex version X.Y.Z`.
-3. **Watch the validation pipeline.** Status is reported as PR comments
-   from `@microsoft-github-policy-service` and tags like `Validation-Defender-Error`.
-4. **If Defender rejects:** post the WDSI submission ID on the PR, ask
-   for revalidation after the analyst clears the file.
-5. **If validation hangs:** the validation pipeline sometimes uses stale
-   Defender definitions; retry by closing/reopening the PR or pushing
-   an empty commit to the branch.
+1. **Generate the manifest update** with
+   `wingetcreate update ShortArrow.runex --version X.Y.Z --urls <release-zip-url>`,
+   passing `--out <dir>` so the files land somewhere obvious. The
+   tool produces three YAMLs:
+   `ShortArrow.runex.{installer,locale.en-US,version}.yaml`.
+2. **Open a PR against `microsoft/winget-pkgs`** by adding `--submit`
+   to the same `wingetcreate update` invocation, or by manually
+   committing on a `winget-pkgs` fork and opening the PR with `gh pr
+   create`. Title format: `New version: ShortArrow.runex version X.Y.Z`.
+3. **Post the checklist confirmation as a PR comment** so reviewers
+   don't have to verify each box themselves. Mention which boxes
+   are blocked by Defender (the local-install row).
+4. **Watch the validation pipeline.** Status is reported as PR
+   comments from `@microsoft-github-policy-service` and tags like
+   `Validation-Defender-Error`.
+5. **If Defender rejects:** post the WDSI submission ID on the PR,
+   ask for revalidation after the analyst clears the file.
+6. **If validation hangs:** the validation pipeline sometimes uses
+   stale Defender definitions; retry by closing/reopening the PR or
+   pushing an empty commit to the branch.
 
 Until the PR merges, point users at `cargo install runex` or
 `brew install shortarrow/runex/runex` as the fastest install path.
@@ -379,9 +486,15 @@ main (version bumps) vs develop (feature work).
 
 ### Binary release workflow
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml`, which
-builds for every supported platform and attaches archives to the
-auto-created GitHub release.
+Pushing a `v*` tag triggers `.github/workflows/release.yml`. The
+workflow runs `cargo test --workspace --locked` on Ubuntu, Windows,
+and macOS as a hard gate — every native target must pass before any
+binary is built or published. This closes the timing hole where a
+tag push would otherwise race the bump commit's CI workflow and
+could ship binaries from an unverified commit.
+
+Once the test gate passes, the workflow builds for every supported
+platform and attaches archives to the auto-created GitHub release.
 
 | Target                         | OS runner       | Archive |
 |--------------------------------|-----------------|---------|

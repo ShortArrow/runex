@@ -95,7 +95,8 @@ runex doctor --strict                    不明な設定フィールドも警告
 runex add <key> <expand>                 略語ルールを設定に追加
 runex add <key> <expand> --when <cmd>    when_command_exists 付きで追加
 runex remove <key>                       略語ルールを設定から削除
-runex init                               設定を作成し、rc ファイルへシェル連携を追記
+runex init                               設定を作成し、rc ファイルへシェル連携を追記 (auto-detect)
+runex init <shell>                       特定のシェルを対象 (bash/zsh/pwsh/clink/nu)
 runex init -y                            確認プロンプトをスキップ
 runex export <shell>                     シェル連携スクリプトを生成
 runex export <shell> --bin <name>        スクリプト内のバイナリ名を変更
@@ -157,7 +158,6 @@ expand = "git commit -m"
 - shell parser を完全実装しない — token 単位処理のみ
 - トークン内のクォートは解釈しない
 - runex は展開テキストを再エスケープしない。シェルにはそのままの文字列が渡る
-- `runex init` は Clink のシェル連携を自動追記できない
 
 ---
 
