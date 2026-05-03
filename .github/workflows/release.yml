@@ -174,33 +174,68 @@ jobs:
         uses: rust-lang/crates-io-auth-action@v1.0.4
 
       - name: Publish runex-core
+        # Skip when this version is already on crates.io. Reruns of a
+        # partially-failed publish-crates job would otherwise abort
+        # here with "crate already exists on crates.io index" — that
+        # bit us on 0.1.13 where the wait step timed out and the
+        # rerun couldn't proceed past this step.
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
           RUNEX_GIT_COMMIT: ${{ github.sha }}
-        run: cargo publish -p runex-core
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          status=$(curl -fsS -o /dev/null -w '%{http_code}' \
+            "https://crates.io/api/v1/crates/runex-core/$version" || echo "000")
+          if [ "$status" = "200" ]; then
+            echo "runex-core $version already on crates.io — skipping publish"
+          else
+            cargo publish -p runex-core
+          fi
 
       - name: Wait for runex-core to appear on the index
         # cargo publish returns as soon as the upload succeeds, but the
-        # sparse index can take 30–90 s to propagate. The `runex`
-        # publish below verifies its own dep graph against the index
-        # and will fail with "no matching package named runex-core" if
-        # we don't wait. 5 minutes is generous; in practice it's <2 min.
+        # sparse index can take 30–90 s (sometimes more) to propagate.
+        # The `runex` publish below verifies its own dep graph against
+        # the index and would fail with "no matching package named
+        # runex-core" if we don't wait.
+        #
+        # Probe the registry HTTP API directly (`/api/v1/crates/<name>/<version>`)
+        # rather than `cargo search`, which depends on the sparse index
+        # cache being populated and gave inconsistent timing on
+        # 0.1.13's first publish (returned no rows for >5 minutes
+        # despite the crate being live in the API).
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           for i in $(seq 1 30); do
-            if cargo search runex-core --limit 1 | grep -q "^runex-core = \"$version\""; then
-              echo "runex-core $version visible on the index"
+            status=$(curl -fsS -o /dev/null -w '%{http_code}' \
+              "https://crates.io/api/v1/crates/runex-core/$version" || echo "000")
+            if [ "$status" = "200" ]; then
+              echo "runex-core $version visible on the registry API"
+              # Give the sparse index one more breath so cargo's own
+              # verify step picks it up too on the next call.
+              sleep 5
               exit 0
             fi
-            echo "waiting for runex-core $version on the index... ($i/30)"
+            echo "waiting for runex-core $version on the API... ($i/30, last status=$status)"
             sleep 10
           done
-          echo "runex-core $version did not appear on the index in 5 minutes" >&2
+          echo "runex-core $version did not appear on the registry API in 5 minutes" >&2
           exit 1
 
       - name: Publish runex
+        # Same skip-if-exists guard as runex-core above.
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
           RUNEX_GIT_COMMIT: ${{ github.sha }}
-        run: cargo publish -p runex
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          status=$(curl -fsS -o /dev/null -w '%{http_code}' \
+            "https://crates.io/api/v1/crates/runex/$version" || echo "000")
+          if [ "$status" = "200" ]; then
+            echo "runex $version already on crates.io — skipping publish"
+          else
+            cargo publish -p runex
+          fi
