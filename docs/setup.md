@@ -14,9 +14,62 @@ Create config at ~/.config/runex/config.toml? [y/N] y
 Created: ~/.config/runex/config.toml
 Append shell integration to ~/.bashrc? [y/N] y
 Appended integration to ~/.bashrc
+
+Next steps:
+  1. Reload your shell: `source ~/.bashrc` (or `exec $SHELL`)
+  2. Try `gst<Space>` — it should expand to `git status `.
+  3. Add your own abbreviations: see https://github.com/ShortArrow/runex/blob/main/docs/recipes.md
+  4. Verify any time with: `runex doctor`
 ```
 
-Pass `-y` to skip all prompts. Clink must be set up manually; see below.
+Pass `-y` to skip all prompts. Target a specific shell with
+`runex init <shell>` (e.g. `runex init pwsh`, `runex init clink`) to
+skip auto-detection and bypass the rcfile entirely on clink (where
+the integration is a separate lua file).
+
+## What `runex init` will and won't do
+
+The most common worry about `init` is "will it break my existing
+rcfile?" The short answer is **no**. The longer answer:
+
+**Will:**
+
+- Create `~/.config/runex/config.toml` if it doesn't exist (never
+  overwrites — uses `OpenOptions::create_new`). The seed config
+  contains a working `gst → git status` sample so you can verify
+  expansion immediately after a fresh install.
+- Append a single block to your rcfile, marked with `# runex-init`:
+
+  ```bash
+  # runex-init
+  eval "$(runex export bash)"
+  ```
+
+- Ask before each filesystem write (skip every prompt with `-y`).
+
+**Will not:**
+
+- **Never modify lines you wrote yourself.** All writes use
+  `OpenOptions::append`, so existing content is left byte-for-byte
+  intact and the new block goes past the file's end.
+- **Never overwrite an existing rcfile.**
+- **Never follow symlinks** (Unix uses `O_NOFOLLOW` on the open).
+- **Never re-append** if the `# runex-init` marker is already present
+  in the file. `runex init` is idempotent — running it twice produces
+  the same single block.
+- **Never run on rcfiles larger than 1 MB** (safety limit; oversized
+  files are treated as if the marker were absent, which fails safe).
+
+**To uninstall:** delete the block between `# runex-init` and the next
+blank line. runex itself never writes to that block again unless you
+re-run `runex init`. To remove the seeded config too,
+`rm ~/.config/runex/config.toml`.
+
+**clink is different:** the lua integration file is a static copy
+written to `%LOCALAPPDATA%\clink\runex.lua` (or `RUNEX_CLINK_LUA_PATH`
+if set). `runex init clink` compares the on-disk content against the
+current canonical export and only overwrites with confirmation when
+the two have drifted; identical content is a no-op.
 
 ## Manual setup per shell
 

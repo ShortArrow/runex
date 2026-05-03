@@ -25,12 +25,20 @@ gcm␣ → git commit -m
 ls␣  → lsd
 ```
 
-## Quick start
+## First expand in 5 minutes
 
 ```bash
-cargo install runex
-runex init
+cargo install runex                # 1. install
+runex init                         # 2. create config + hook into your shell
+                                   #    (asks before touching your rcfile)
+exec $SHELL                        # 3. fresh shell so the integration loads
+gst<Space>                         # 4. expands to: git status
 ```
+
+The config seeded by `runex init` includes a `gst → git status` sample
+so you can verify expansion works immediately. From there, swap in your
+own abbreviations — see [docs/recipes.md](docs/recipes.md) for
+copy-pasteable patterns.
 
 ## Install
 
@@ -45,7 +53,12 @@ Other options (mise, pre-built binaries, platform notes): see [docs/install.md](
 
 ## Setup
 
-`runex init` creates the config and appends the shell integration line to your rc file, with a confirmation prompt at each step:
+`runex init` is **append-only and asks before each write** — your
+existing rcfile is never modified except for one new block at the end.
+See [What `runex init` will and won't do](docs/setup.md#what-runex-init-will-and-wont-do)
+for the full guarantees.
+
+It creates the config and appends the shell integration line to your rc file, with a confirmation prompt at each step:
 
 ```
 $ runex init
@@ -101,7 +114,8 @@ runex doctor --strict                    also warn about unknown config fields
 runex add <key> <expand>                 add an abbreviation rule to config
 runex add <key> <expand> --when <cmd>    add with when_command_exists condition
 runex remove <key>                       remove an abbreviation rule from config
-runex init                               create config and append shell integration
+runex init                               create config and append shell integration (auto-detect shell)
+runex init <shell>                       target a specific shell (bash/zsh/pwsh/clink/nu)
 runex init -y                            same, skip confirmation prompts
 runex export <shell>                     generate shell integration script
 runex export <shell> --bin <name>        use a custom binary name in the script

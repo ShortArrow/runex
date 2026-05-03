@@ -29,14 +29,33 @@ fn nu_quote_path(path: &str) -> String {
 /// Marker comment written into rc files to enable idempotent init.
 pub const RUNEX_INIT_MARKER: &str = "# runex-init";
 
-/// Minimal config template written by `runex init`.
+/// Seed config written by `runex init` when no config exists yet.
+///
+/// Includes a working trigger key and one runnable sample abbreviation
+/// so the user can verify expansion immediately after a fresh install
+/// without first having to read the docs. The codex usability review
+/// flagged "installed but nothing happens" as the second-most painful
+/// onboarding break, so the seed is deliberately *useful* rather than
+/// minimal.
+///
+/// `runex init` only writes this content when the config file does not
+/// already exist (`OpenOptions::create_new`). Existing configs are
+/// never touched.
 pub fn default_config_content() -> &'static str {
     r#"version = 1
 
-# Add your abbreviations below.
-# [[abbr]]
-# key = "gcm"
-# expand = "git commit -m"
+[keybind.trigger]
+default = "space"
+
+# Sample abbreviation. After restarting your shell, type `gst<Space>`
+# and it will expand to `git status `.
+[[abbr]]
+key    = "gst"
+expand = "git status"
+
+# Add your own below. For more recipes (per-shell commands, fallback
+# chains, cursor placeholders, etc.) see:
+# https://github.com/ShortArrow/runex/blob/main/docs/recipes.md
 "#
 }
 
@@ -81,6 +100,75 @@ pub fn integration_line(shell: Shell, bin: &str) -> String {
     }
 }
 
+/// Where `runex init clink` writes the lua integration script.
+///
+/// Resolution order (first match wins):
+///
+/// 1. `RUNEX_CLINK_LUA_PATH` env — explicit override for non-standard
+///    clink installations or for testing.
+/// 2. `%LOCALAPPDATA%\clink\runex.lua` — clink's default state directory
+///    on Windows. This is what `clink info` reports as the scripts dir.
+/// 3. `~/.local/share/clink/runex.lua` — POSIX-style fallback for the
+///    Linux clink fork (rare, included for completeness).
+///
+/// We deliberately do not shell out to `clink info` to discover the
+/// scripts directory: that would invert the dependency direction
+/// (Rust → shell tool) for one path lookup, and the env-var override
+/// already lets users with non-standard installs cope.
+pub fn default_clink_lua_install_path() -> std::path::PathBuf {
+    clink_lua_install_path_with(|k| std::env::var(k).ok(), dirs::home_dir)
+}
+
+/// Pure variant of [`default_clink_lua_install_path`] for testing —
+/// env access and the home-dir lookup are injected so tests can pin
+/// the result without racing other threads on `std::env::set_var`.
+pub(crate) fn clink_lua_install_path_with<E, H>(env_get: E, home_dir: H) -> std::path::PathBuf
+where
+    E: Fn(&str) -> Option<String>,
+    H: Fn() -> Option<std::path::PathBuf>,
+{
+    if let Some(p) = env_get("RUNEX_CLINK_LUA_PATH") {
+        if !p.is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    if let Some(local) = env_get("LOCALAPPDATA") {
+        if !local.is_empty() {
+            return std::path::PathBuf::from(local).join("clink").join("runex.lua");
+        }
+    }
+    if let Some(home) = home_dir() {
+        return home.join(".local").join("share").join("clink").join("runex.lua");
+    }
+    std::path::PathBuf::from("runex.lua")
+}
+
+/// "What to do next" blurb shown after `runex init` finishes. The
+/// integration line lives in the rcfile but the *currently-running*
+/// shell hasn't sourced it yet, so the user has to either reload the
+/// rcfile or open a fresh shell. Each shell has its own idiomatic
+/// reload command; clink keeps no rcfile and just needs a new cmd.
+///
+/// `rc_path` is the file we just appended to (or `None` for clink, where
+/// the integration goes into a separate lua file rather than an rcfile).
+pub fn next_steps_message(shell: Shell, rc_path: Option<&std::path::Path>) -> String {
+    let reload = match shell {
+        Shell::Bash | Shell::Zsh => match rc_path {
+            Some(p) => format!("Reload your shell: `source {}` (or `exec $SHELL`)", p.display()),
+            None => "Reload your shell: `exec $SHELL`".to_string(),
+        },
+        Shell::Pwsh => match rc_path {
+            Some(p) => format!("Reload your profile: `. $PROFILE` (resolves to {})", p.display()),
+            None => "Reload your profile: `. $PROFILE`".to_string(),
+        },
+        Shell::Nu => "Reload nushell: open a new shell (or run `exec nu`)".to_string(),
+        Shell::Clink => "Open a new cmd window — clink loads the lua at startup.".to_string(),
+    };
+    format!(
+        "Next steps:\n  1. {reload}\n  2. Try `gst<Space>` — it should expand to `git status `.\n  3. Add your own abbreviations: see https://github.com/ShortArrow/runex/blob/main/docs/recipes.md\n  4. Verify any time with: `runex doctor`"
+    )
+}
+
 /// The rc file path for a given shell (best-effort; may not exist yet).
 ///
 /// For PowerShell, `$PROFILE` is a runtime variable and cannot be resolved statically,
@@ -116,6 +204,118 @@ mod tests {
     #[test]
     fn default_config_content_has_version() {
         assert!(default_config_content().contains("version = 1"));
+    }
+
+    /// The seed config must include a working keybind so that the very
+    /// first `runex init` produces a setup that actually expands. Without
+    /// this, users hit "I installed runex and nothing happens" — the
+    /// codex usability review flagged this as the second-most painful
+    /// onboarding break after the missing `init <shell>` surface.
+    #[test]
+    fn default_config_content_includes_default_trigger() {
+        let s = default_config_content();
+        assert!(s.contains("[keybind.trigger]"), "missing [keybind.trigger]: {s}");
+        assert!(s.contains("default = \"space\""), "missing default trigger: {s}");
+    }
+
+    /// The seed config must include at least one runnable abbreviation so
+    /// the user can verify expansion immediately after `runex init`.
+    #[test]
+    fn default_config_content_includes_sample_abbr_gst() {
+        let s = default_config_content();
+        assert!(s.contains("key    = \"gst\""), "missing gst sample: {s}");
+        assert!(s.contains("expand = \"git status\""), "missing gst expand: {s}");
+    }
+
+    /// `next_steps_message` produces the after-init "what to do next"
+    /// blurb. Each shell's blurb has to mention how to *reload* the
+    /// integration (since rcfile changes don't take effect in the
+    /// already-running shell), how to find more abbreviations, and how
+    /// to verify with `runex doctor`.
+    #[test]
+    fn next_steps_for_bash_mentions_source_command() {
+        let msg = next_steps_message(Shell::Bash, Some(std::path::Path::new("/home/u/.bashrc")));
+        assert!(msg.contains("source /home/u/.bashrc") || msg.contains("exec"),
+            "bash next_steps must explain how to reload: {msg}");
+        assert!(msg.contains("runex doctor"), "must suggest doctor: {msg}");
+        assert!(msg.contains("recipes"), "must point at recipes: {msg}");
+    }
+
+    #[test]
+    fn next_steps_for_clink_mentions_new_cmd_window() {
+        let msg = next_steps_message(Shell::Clink, None);
+        assert!(msg.to_lowercase().contains("cmd"),
+            "clink next_steps must mention opening a new cmd window: {msg}");
+        assert!(msg.contains("runex doctor"), "must suggest doctor: {msg}");
+    }
+
+    #[test]
+    fn next_steps_for_pwsh_mentions_dot_profile() {
+        let msg = next_steps_message(
+            Shell::Pwsh,
+            Some(std::path::Path::new("/u/Microsoft.PowerShell_profile.ps1")),
+        );
+        assert!(msg.contains("$PROFILE") || msg.contains(". /"),
+            "pwsh next_steps must explain reload: {msg}");
+    }
+
+    /// `clink_lua_install_path_with` decides where `runex init clink`
+    /// writes the lua file. Honours `RUNEX_CLINK_LUA_PATH` first, then
+    /// `LOCALAPPDATA` (Windows convention), then a POSIX-style fallback
+    /// for clink forks on Linux. Tests use the closure-injected variant
+    /// to avoid racing on the global env from parallel test threads.
+    #[test]
+    fn clink_install_path_honors_env_override() {
+        let p = clink_lua_install_path_with(
+            |k| match k {
+                "RUNEX_CLINK_LUA_PATH" => Some("/tmp/runex_test_clink.lua".into()),
+                _ => None,
+            },
+            || None,
+        );
+        assert_eq!(p, std::path::PathBuf::from("/tmp/runex_test_clink.lua"));
+    }
+
+    #[test]
+    fn clink_install_path_uses_localappdata_when_set() {
+        let p = clink_lua_install_path_with(
+            |k| match k {
+                "LOCALAPPDATA" => Some("/tmp/local_appdata_test".into()),
+                _ => None,
+            },
+            || None,
+        );
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/tmp/local_appdata_test/clink/runex.lua")
+        );
+    }
+
+    #[test]
+    fn clink_install_path_falls_back_to_home() {
+        let p = clink_lua_install_path_with(
+            |_| None,
+            || Some(std::path::PathBuf::from("/home/user")),
+        );
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/home/user/.local/share/clink/runex.lua")
+        );
+    }
+
+    /// An empty env var must be ignored (treated as if unset). Otherwise
+    /// `RUNEX_CLINK_LUA_PATH=` would silently anchor writes to "" which
+    /// either fails outright or hits an unintended cwd.
+    #[test]
+    fn clink_install_path_treats_empty_env_as_unset() {
+        let p = clink_lua_install_path_with(
+            |k| match k {
+                "RUNEX_CLINK_LUA_PATH" | "LOCALAPPDATA" => Some(String::new()),
+                _ => None,
+            },
+            || Some(std::path::PathBuf::from("/home/u")),
+        );
+        assert!(p.starts_with("/home/u"), "expected home fallback, got {p:?}");
     }
 
     #[test]

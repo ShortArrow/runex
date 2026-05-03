@@ -195,6 +195,9 @@ enum Commands {
     },
     /// Initialize runex: create config and add shell integration
     Init {
+        /// Target shell (bash, zsh, pwsh, clink, nu). When omitted,
+        /// runex auto-detects from $SHELL / $PSModulePath.
+        shell: Option<String>,
         /// Skip confirmation prompts
         #[arg(long, short = 'y')]
         yes: bool,
@@ -878,7 +881,7 @@ fn handle_doctor(
     Ok(())
 }
 
-fn handle_init(config_path: PathBuf, yes: bool) -> CmdResult {
+fn handle_init(config_path: PathBuf, shell_override: Option<&str>, yes: bool) -> CmdResult {
     let msg = format!("Create config at {}?", sanitize_for_display(&config_path.display().to_string()));
     if yes || prompt_confirm(&msg) {
         if let Some(parent) = config_path.parent() {
@@ -902,56 +905,157 @@ fn handle_init(config_path: PathBuf, yes: bool) -> CmdResult {
         println!("Skipped config creation.");
     }
 
-    let shell = detect_shell().unwrap_or_else(|| {
-        eprintln!(
-            "Could not detect shell. Defaulting to bash. \
-             Use `runex export <shell>` to generate integration manually."
-        );
-        Shell::Bash
-    });
-
-    match runex_init::rc_file_for(shell) {
-        None => {
-            println!(
-                "Shell integration for {:?} must be added manually. \
-                 Run `runex export {:?}` for the script.",
-                shell, shell
+    let shell = if let Some(s) = shell_override {
+        s.parse::<Shell>().map_err(|e: runex_core::shell::ShellParseError| {
+            Box::<dyn std::error::Error>::from(e.to_string())
+        })?
+    } else {
+        detect_shell().unwrap_or_else(|| {
+            eprintln!(
+                "Could not detect shell. Defaulting to bash. \
+                 Use `runex init <shell>` (e.g. `runex init pwsh`) to target a specific shell."
             );
+            Shell::Bash
+        })
+    };
+
+    let rc_path_for_next_steps = match shell {
+        Shell::Clink => {
+            install_clink_lua(yes, &config_path)?;
+            None
         }
-        Some(rc_path) => {
-            let existing = read_rc_content(&rc_path);
-            if existing.contains(runex_init::RUNEX_INIT_MARKER) {
-                println!(
-                    "Shell integration already present in {}",
-                    sanitize_for_display(&rc_path.display().to_string())
-                );
-            } else {
-                let msg = format!(
-                    "Append shell integration to {}?",
-                    sanitize_for_display(&rc_path.display().to_string())
-                );
-                if yes || prompt_confirm(&msg) {
-                    let line = runex_init::integration_line(shell, "runex");
-                    let block = format!("\n{}\n{}\n", runex_init::RUNEX_INIT_MARKER, line);
-                    if let Some(parent) = rc_path.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    let mut open_opts = std::fs::OpenOptions::new();
-                    open_opts.create(true).append(true);
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::OpenOptionsExt;
-                        open_opts.custom_flags(libc::O_NOFOLLOW);
-                    }
-                    let mut file = open_opts.open(&rc_path)?;
-                    file.write_all(block.as_bytes())?;
-                    println!("Appended integration to {}", sanitize_for_display(&rc_path.display().to_string()));
-                } else {
-                    println!("Skipped shell integration.");
-                }
+        _ => install_rcfile_integration(shell, yes)?,
+    };
+
+    println!();
+    println!("{}", runex_init::next_steps_message(shell, rc_path_for_next_steps.as_deref()));
+    Ok(())
+}
+
+/// Append the integration block to the rcfile for `shell`. Returns the
+/// rcfile path so the caller can show it in the Next-steps blurb.
+///
+/// Safety properties (documented in `docs/setup.md` for users):
+///
+/// - `OpenOptions::append` so existing rcfile content is **never**
+///   overwritten — every byte we write goes after the file's current
+///   end.
+/// - `O_NOFOLLOW` on Unix so a symlink at `rc_path` doesn't redirect
+///   the write to a different file.
+/// - Idempotent: if `RUNEX_INIT_MARKER` is already present in the
+///   file, we skip the append entirely (no duplicate blocks).
+/// - User confirmation per write unless `--yes`.
+fn install_rcfile_integration(shell: Shell, yes: bool) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    let Some(rc_path) = runex_init::rc_file_for(shell) else {
+        println!(
+            "Shell integration for {:?} must be added manually. \
+             Run `runex export {:?}` for the script.",
+            shell, shell
+        );
+        return Ok(None);
+    };
+    let existing = read_rc_content(&rc_path);
+    if existing.contains(runex_init::RUNEX_INIT_MARKER) {
+        println!(
+            "Shell integration already present in {}",
+            sanitize_for_display(&rc_path.display().to_string())
+        );
+        return Ok(Some(rc_path));
+    }
+    let msg = format!(
+        "Append shell integration to {}?",
+        sanitize_for_display(&rc_path.display().to_string())
+    );
+    if !(yes || prompt_confirm(&msg)) {
+        println!("Skipped shell integration.");
+        return Ok(Some(rc_path));
+    }
+    let line = runex_init::integration_line(shell, "runex");
+    let block = format!("\n{}\n{}\n", runex_init::RUNEX_INIT_MARKER, line);
+    if let Some(parent) = rc_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut open_opts = std::fs::OpenOptions::new();
+    open_opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open_opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = open_opts.open(&rc_path)?;
+    file.write_all(block.as_bytes())?;
+    println!("Appended integration to {}", sanitize_for_display(&rc_path.display().to_string()));
+    Ok(Some(rc_path))
+}
+
+/// Write the clink lua integration to the resolved install path.
+///
+/// Unlike the rcfile flow, clink's lua file is a *static copy* of the
+/// `runex export clink` output. There's no marker block to detect, so
+/// we compare full file content against what would be emitted now and
+/// only ask before overwriting if the on-disk content has actually
+/// drifted. Identical content is a no-op (silent OK).
+///
+/// `config_path` is consulted so the export reflects the user's
+/// keybind / abbr config (clink's lua bakes a `RUNEX_BIN` reference,
+/// not abbreviation tables, so the dependency is light — but still
+/// correct to thread through).
+fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
+    use runex_core::integration_check::{check_clink_lua_freshness, IntegrationCheck};
+
+    // Compute the canonical export content for *this* runex binary.
+    let bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "runex".to_string());
+    let (_path, config, _err) = resolve_config_opt(Some(config_path));
+    let new_content = runex_core::shell::export_script(Shell::Clink, &bin, config.as_ref());
+
+    let install_path = runex_init::default_clink_lua_install_path();
+
+    // Decide what to do based on what's already on disk at any of the
+    // probe paths. We only write to `install_path`; the freshness check
+    // is purely informational ("would this PR-style overwrite be a no-op?").
+    let probe = check_clink_lua_freshness(
+        &new_content,
+        &runex_core::integration_check::default_clink_lua_paths(),
+    );
+    match probe {
+        IntegrationCheck::Ok { detail, .. } => {
+            println!("clink integration already up-to-date ({detail}).");
+            return Ok(());
+        }
+        IntegrationCheck::Outdated { path, .. } => {
+            let msg = format!(
+                "clink lua at {} is out of date. Overwrite with the current export?",
+                sanitize_for_display(&path.display().to_string())
+            );
+            if !(yes || prompt_confirm(&msg)) {
+                println!("Skipped clink integration update.");
+                return Ok(());
+            }
+        }
+        IntegrationCheck::Skipped { .. } | IntegrationCheck::Missing { .. } => {
+            // No clink lua on disk yet; ask before creating it.
+            let msg = format!(
+                "Write clink integration to {}?",
+                sanitize_for_display(&install_path.display().to_string())
+            );
+            if !(yes || prompt_confirm(&msg)) {
+                println!("Skipped clink integration.");
+                return Ok(());
             }
         }
     }
+
+    if let Some(parent) = install_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&install_path, new_content.as_bytes())?;
+    println!(
+        "Wrote clink integration to {}",
+        sanitize_for_display(&install_path.display().to_string())
+    );
     Ok(())
 }
 
@@ -1063,13 +1167,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cli.json,
             )?;
         }
-        Commands::Init { yes } => {
+        Commands::Init { shell, yes } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
                 p.to_path_buf()
             } else {
                 default_config_path()?
             };
-            handle_init(config_path, yes)?;
+            handle_init(config_path, shell.as_deref(), yes)?;
         }
         Commands::Hook { shell, line, cursor, paste_pending } => {
             handle_hook(
@@ -1198,6 +1302,50 @@ mod tests {
     }
 
     } // mod command_exists
+
+    /// Regression coverage for the `init` subcommand surface. The earlier
+    /// implementation only accepted `-y`; doctor and the docs assumed
+    /// `runex init <shell>` worked, leaving users following dead advice.
+    mod init_cli {
+        use super::*;
+        use clap::Parser;
+
+        #[test]
+        fn init_without_args_parses() {
+            let cli = Cli::try_parse_from(["runex", "init"]).expect("init parses without args");
+            match cli.command {
+                Commands::Init { shell, yes } => {
+                    assert!(shell.is_none(), "no positional → shell must be None");
+                    assert!(!yes, "no -y → yes must be false");
+                }
+                _ => panic!("expected Init"),
+            }
+        }
+
+        #[test]
+        fn init_with_shell_positional_parses() {
+            let cli = Cli::try_parse_from(["runex", "init", "bash"]).expect("init bash parses");
+            match cli.command {
+                Commands::Init { shell, .. } => {
+                    assert_eq!(shell.as_deref(), Some("bash"));
+                }
+                _ => panic!("expected Init"),
+            }
+        }
+
+        #[test]
+        fn init_with_shell_and_yes_parses() {
+            let cli = Cli::try_parse_from(["runex", "init", "-y", "clink"])
+                .expect("init -y clink parses");
+            match cli.command {
+                Commands::Init { shell, yes } => {
+                    assert_eq!(shell.as_deref(), Some("clink"));
+                    assert!(yes);
+                }
+                _ => panic!("expected Init"),
+            }
+        }
+    }
 
     /// `init` reads the rc file to check for RUNEX_INIT_MARKER before appending.
     /// If the rc file is extremely large (e.g. corrupted or adversarially crafted),
