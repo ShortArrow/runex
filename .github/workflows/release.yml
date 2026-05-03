@@ -134,3 +134,73 @@ jobs:
             --title "$TAG" \
             --generate-notes \
             artifacts/*
+
+  publish-crates:
+    # Publish runex-core then runex to crates.io via OIDC Trusted
+    # Publishing. No long-lived CARGO_REGISTRY_TOKEN is stored anywhere
+    # — every run exchanges a short-lived GitHub OIDC token for an
+    # equally short-lived crates.io token via
+    # `rust-lang/crates-io-auth-action`.
+    #
+    # Requires Trusted Publisher to be registered on crates.io for both
+    # `runex-core` and `runex` (one-time setup, see CONTRIBUTING.md
+    # `### crates.io (OIDC Trusted Publishing)`). Until that's done,
+    # this job will fail at the auth step but everything else
+    # (test/build/release) still completes and the GitHub Release is
+    # published as usual.
+    #
+    # Set `[skip publish]` in the bump commit message to bypass this
+    # job — useful for re-tagging after a release-process glitch where
+    # the binaries are out of date but the crate already published.
+    name: Publish to crates.io (OIDC)
+    needs: [test, build, release]
+    if: ${{ !contains(github.event.head_commit.message, '[skip publish]') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable pinned 2026-04
+
+      - name: Exchange OIDC token for crates.io token
+        id: auth
+        # v1.0.4 (2026-03-23) is the first release on Node 24, silencing
+        # the "Node.js 20 actions are deprecated" warning. Re-evaluate
+        # when v1.1 / v2 ships.
+        uses: rust-lang/crates-io-auth-action@v1.0.4
+
+      - name: Publish runex-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          RUNEX_GIT_COMMIT: ${{ github.sha }}
+        run: cargo publish -p runex-core
+
+      - name: Wait for runex-core to appear on the index
+        # cargo publish returns as soon as the upload succeeds, but the
+        # sparse index can take 30–90 s to propagate. The `runex`
+        # publish below verifies its own dep graph against the index
+        # and will fail with "no matching package named runex-core" if
+        # we don't wait. 5 minutes is generous; in practice it's <2 min.
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 30); do
+            if cargo search runex-core --limit 1 | grep -q "^runex-core = \"$version\""; then
+              echo "runex-core $version visible on the index"
+              exit 0
+            fi
+            echo "waiting for runex-core $version on the index... ($i/30)"
+            sleep 10
+          done
+          echo "runex-core $version did not appear on the index in 5 minutes" >&2
+          exit 1
+
+      - name: Publish runex
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          RUNEX_GIT_COMMIT: ${{ github.sha }}
+        run: cargo publish -p runex

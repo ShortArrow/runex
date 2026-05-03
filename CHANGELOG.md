@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (and the Japanese mirror) lists the append-only / `O_NOFOLLOW` /
   marker-idempotent / size-cap properties so users can confidently
   run `init` without fearing for their existing rcfile.
+- **crates.io publish moved into CI via OIDC Trusted Publishing.**
+  The `publish-crates` job in `release.yml` exchanges the workflow's
+  GitHub OIDC token for a short-lived crates.io token
+  (`rust-lang/crates-io-auth-action@v1.0.4`), publishes `runex-core`,
+  waits for the sparse index to propagate, then publishes `runex`.
+  No long-lived `CARGO_REGISTRY_TOKEN` is stored as a repository
+  secret or kept on a developer laptop. One-time per-crate Trusted
+  Publisher setup is required on crates.io — see
+  `CONTRIBUTING.md` `### crates.io (OIDC Trusted Publishing)`.
+  Skip the publish on a particular tag by including `[skip publish]`
+  in the bump commit message.
 
 ## [0.1.12] - 2026-04-30
 

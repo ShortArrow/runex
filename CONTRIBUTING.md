@@ -161,6 +161,15 @@ Before touching any version number:
   integration drift that unit tests don't see (e.g. clink lua
   outdated). Especially important if the release touches shell
   templates.
+- [ ] **crates.io Trusted Publisher is registered for both
+  `runex-core` and `runex`.** Sanity check at
+  https://crates.io/crates/runex-core/settings/ and
+  https://crates.io/crates/runex/settings/ — both crates need a
+  GitHub Actions trusted publisher entry pointing at this repo +
+  `release.yml`. One-time setup, but worth re-confirming if you
+  haven't released in a while (crates.io occasionally invalidates
+  unused tokens). See `### crates.io (OIDC Trusted Publishing)` below
+  for the exact field values.
 
 ### Cut the release
 
@@ -213,13 +222,20 @@ All commands from the repo root.
 Run **after** the GitHub release artifacts are visible at
 https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
 
-- [ ] **crates.io.** `runex-core` must publish before `runex` because
-  the latter depends on it:
+- [ ] **crates.io.** Automated. The `publish-crates` job in
+  `release.yml` fires on the same tag push as `build` / `release` and
+  publishes `runex-core` first, then `runex`, via OIDC Trusted
+  Publishing. See `### crates.io (OIDC Trusted Publishing)` below for
+  the one-time setup.
 
-  ```bash
-  RUNEX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) cargo publish -p runex-core
-  RUNEX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) cargo publish -p runex
-  ```
+  - To **skip** publishing on a particular tag (e.g. when re-tagging
+    a previously-published version because of a release-process
+    glitch), include `[skip publish]` in the bump commit's message.
+    The job's `if:` condition checks for it.
+  - There is **no `CARGO_REGISTRY_TOKEN` to manage** — the workflow
+    exchanges a short-lived GitHub OIDC token for an equally
+    short-lived crates.io token at job start, scoped to the
+    workflow + repository registered with crates.io.
 
 - [ ] **AUR `runex-bin`.** Use the helper:
 
@@ -286,6 +302,63 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
   brew info shortarrow/runex/runex        # Homebrew tap
   winget show ShortArrow.runex            # winget (after the PR merges)
   ```
+
+### crates.io (OIDC Trusted Publishing)
+
+`runex-core` and `runex` are published to crates.io via OIDC Trusted
+Publishing — no long-lived `CARGO_REGISTRY_TOKEN` is stored as a
+GitHub secret or in any local environment. The `publish-crates` job in
+`.github/workflows/release.yml` exchanges the workflow's GitHub OIDC
+token for a short-lived crates.io token at job start
+(`rust-lang/crates-io-auth-action@v1.0.4`), publishes `runex-core`,
+waits for the index to propagate, then publishes `runex`.
+
+#### One-time setup (per crate)
+
+For each of the two crates, register this repository's `release.yml`
+as a Trusted Publisher on crates.io:
+
+1. Sign in at https://crates.io as a crate owner.
+2. Go to https://crates.io/crates/runex-core/settings (then repeat for
+   `runex`).
+3. Under **Trusted Publishers**, click **Add** and choose
+   **GitHub Actions**.
+4. Fill in:
+   - **Repository owner**: `ShortArrow`
+   - **Repository name**: `runex`
+   - **Workflow filename**: `release.yml`
+   - **Environment**: leave blank (we don't gate publishing behind a
+     GitHub Environment for runex).
+5. Save.
+
+The same workflow file is used for both crates, so the entry is
+identical between the two `settings/` pages — only the crate URL
+differs. After both are saved, the next tag-pushed release will
+publish without any further manual action.
+
+#### Sanity check before relying on it
+
+If the `publish-crates` job has been failing at the
+`Exchange OIDC token` step or the `Publish runex-core` step, the
+usual cause is one of:
+
+- **Trusted Publisher not registered** for that crate yet (or for the
+  other crate). The error mentions the missing crate name. Re-run
+  the setup above for whichever crate is missing.
+- **Workflow filename mismatch.** If you renamed the workflow file
+  the registered entry no longer matches and crates.io won't issue a
+  token. Update the entry to the new filename.
+- **Repository was renamed/transferred.** Update the
+  `Repository owner` / `Repository name` fields to the current ones.
+
+If you ever need to publish manually as a fallback (e.g. crates.io
+OIDC issuer outage), you can still run
+`RUNEX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) cargo publish -p runex-core`
+followed by `cargo publish -p runex` from a checkout at the release
+tag, using a personal API token via
+`cargo login --registry crates-io`. **Don't commit the token
+anywhere; revoke it from your crates.io account once the manual run
+is complete.**
 
 ### winget submission
 
