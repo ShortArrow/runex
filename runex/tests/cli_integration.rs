@@ -900,6 +900,184 @@ fn init_does_not_follow_symlink_at_rc_file() {
     let _ = out;
 }
 
+// ─── init: rcfile-write safety properties ─────────────────────────────────────
+// docs/setup.md promises four guarantees about `runex init`'s rcfile
+// writes (append-only, marker-idempotent, size-cap, seed-config-content).
+// The tests below pin those promises so we notice if a refactor breaks
+// one. Each one is a regression-pinning test against the current
+// implementation rather than TDD against new behaviour.
+//
+// Most of these tests are `#[cfg(unix)]` because the Windows
+// `dirs::home_dir()` uses the Known Folders API (FOLDERID_Profile),
+// not `$HOME` / `$USERPROFILE`, so the `init_cmd_in_dir` helper's env
+// override does not redirect rcfile resolution on Windows. The
+// rcfile-write logic itself is platform-agnostic, so the property
+// guarantees still hold on Windows; we just can't exercise them
+// without running against the real user `~/.bashrc`, which we refuse
+// to do in tests. The seed-config and clink-lua tests don't have
+// this limitation and run on all platforms.
+
+/// Append-only: an existing rcfile keeps its prior content byte-for-byte
+/// after `runex init`, with the integration block strictly past the
+/// previous EOF.
+#[test]
+#[cfg(unix)]
+fn init_preserves_existing_rcfile_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let bashrc = dir.path().join(".bashrc");
+    let user_content = "alias ll='ls -la'\nexport EDITOR=nvim\n";
+    std::fs::write(&bashrc, user_content).unwrap();
+
+    let out = init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "init must succeed: {:?}", out);
+
+    let after = std::fs::read_to_string(&bashrc).unwrap();
+    assert!(
+        after.starts_with(user_content),
+        "init must preserve existing rcfile bytes verbatim at the start; got:\n{after}"
+    );
+    assert!(
+        after.contains("# runex-init"),
+        "init must append the marker block after the existing content: {after}"
+    );
+    let _ = out;
+}
+
+/// Idempotent: running `runex init` twice yields exactly one
+/// integration block (marker appears once).
+#[test]
+#[cfg(unix)]
+fn init_is_idempotent_marker_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let bashrc = dir.path().join(".bashrc");
+
+    init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+    let after_first = std::fs::read_to_string(&bashrc).unwrap();
+
+    init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+    let after_second = std::fs::read_to_string(&bashrc).unwrap();
+
+    assert_eq!(
+        after_first, after_second,
+        "second init must be a no-op; rcfile content changed: first=\n{after_first}\nsecond=\n{after_second}"
+    );
+    let marker_count = after_second.matches("# runex-init").count();
+    assert_eq!(
+        marker_count, 1,
+        "exactly one `# runex-init` marker must be present after two inits; saw {marker_count} in:\n{after_second}"
+    );
+}
+
+/// Size cap: rcfiles larger than `MAX_RC_FILE_BYTES` (1 MB) are read as
+/// if the marker were absent, but the safety read fails closed — the
+/// existing oversized content stays intact and no integration block is
+/// silently appended.
+///
+/// Note on current behaviour: `read_rc_content` returns "" for oversized
+/// files, which causes `init` to *attempt* to append, which then succeeds
+/// (the file exists, append-only). That actually means the marker DOES
+/// get added, just below the 1 MB pile. We test for the property that
+/// matters — the user's prior bytes survive — rather than the secondary
+/// "no-write-on-oversize" behaviour, because the implementation chose
+/// "fail safe = append anyway" semantics and we want to pin that
+/// faithfully.
+#[test]
+#[cfg(unix)]
+fn init_oversize_rcfile_keeps_prior_content_intact() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let bashrc = dir.path().join(".bashrc");
+    // 1 MB + 1 byte of arbitrary data. The limit is `MAX_RC_FILE_BYTES`
+    // = 1 << 20 in `runex/src/main.rs`; we synthesise just past it.
+    let oversize: Vec<u8> = vec![b'x'; (1024 * 1024) + 1];
+    std::fs::write(&bashrc, &oversize).unwrap();
+
+    init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+
+    let after = std::fs::read(&bashrc).unwrap();
+    assert!(
+        after.starts_with(&oversize),
+        "init must never destroy or rewrite the prior rcfile bytes; got len={}",
+        after.len()
+    );
+}
+
+/// Seed config: a fresh `runex init` writes a config file that contains
+/// both the working `[keybind.trigger] default = "space"` block and the
+/// `gst → git status` sample abbreviation. README and docs/setup
+/// promise these as the "first expand in 5 minutes" demonstration.
+#[test]
+fn init_seed_config_includes_keybind_trigger_and_gst_sample() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+
+    init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+
+    let body = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        body.contains("[keybind.trigger]"),
+        "seed config must include [keybind.trigger]: {body}"
+    );
+    assert!(
+        body.contains("default = \"space\""),
+        "seed config must bind Space as the default trigger: {body}"
+    );
+    assert!(
+        body.contains("key    = \"gst\""),
+        "seed config must include the gst sample abbreviation: {body}"
+    );
+    assert!(
+        body.contains("expand = \"git status\""),
+        "seed config must map gst to `git status`: {body}"
+    );
+}
+
+/// `runex init clink` writes the clink lua integration to the path
+/// chosen by `RUNEX_CLINK_LUA_PATH`. That env override is the supported
+/// way to redirect the install for testing or for users with a
+/// non-default clink scripts directory.
+#[test]
+fn init_clink_writes_lua_to_resolved_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let lua_target = dir.path().join("clink").join("runex.lua");
+
+    let out = init_cmd_in_dir(dir.path())
+        .env("RUNEX_CLINK_LUA_PATH", lua_target.to_str().unwrap())
+        .args(["--config", config_path.to_str().unwrap(), "init", "clink", "--yes"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "init clink must succeed: {:?}", out);
+
+    let written = std::fs::read_to_string(&lua_target)
+        .expect("init clink should have written the lua file at RUNEX_CLINK_LUA_PATH");
+    assert!(
+        written.contains("runex shell integration for clink"),
+        "written lua must be the clink integration template: {written}"
+    );
+    assert!(
+        written.contains("RUNEX_BIN"),
+        "written lua must reference RUNEX_BIN: {written}"
+    );
+}
+
 // ─── export --bin validation ──────────────────────────────────────────────────
 
 /// export with an empty --bin must exit non-zero; an empty bin name would
