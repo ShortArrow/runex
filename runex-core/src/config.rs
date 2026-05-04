@@ -517,18 +517,32 @@ pub(crate) fn xdg_config_home() -> Option<PathBuf> {
 /// and the read, eliminating the TOCTOU race that exists when `metadata()` and
 /// `read_to_string()` open the file separately.
 ///
-/// On Unix, `O_NOFOLLOW` rejects symlinks at the final path component, and `O_NONBLOCK`
-/// prevents `open()` from blocking on a named pipe with no writer. Non-regular files
-/// (device nodes, FIFOs) can bypass the size guard by reporting `len() == 0`, so they
-/// are rejected via `is_file()` immediately after open.
+/// On Unix, `O_NONBLOCK` prevents `open()` from blocking on a named pipe with
+/// no writer. Non-regular files (device nodes, FIFOs) can bypass the size guard
+/// by reporting `len() == 0`, so they are rejected via `is_file()` immediately
+/// after open.
+///
+/// ## Symlinks: deliberately allowed
+///
+/// `~/.config/runex/config.toml` is commonly a symlink into a dotfiles
+/// repository (`~/dotfiles/runex/config.toml`). We canonicalise the path
+/// before opening so this idiom keeps working — `O_NOFOLLOW` is then
+/// applied on the *resolved* path, which means it's effectively a no-op
+/// for this code path. The trade-off is documented: an attacker who can
+/// already write to the user's config directory can redirect this read
+/// to any file. That's a strictly weaker capability than what they
+/// already have (writing arbitrary commands into the abbreviation
+/// table), so we accept the risk in exchange for keeping the dotfiles
+/// pattern frictionless.
 pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     let content = read_config_source(path)?;
     parse_config(&content)
 }
 
 /// Read a config file into a string with the same safety guarantees as [`load_config`]:
-/// single fd for metadata+read (no TOCTOU), rejects symlinks at final path component on
-/// Unix, rejects non-regular files (FIFO / device nodes), and enforces the 10 MB size cap.
+/// single fd for metadata+read (no TOCTOU), rejects non-regular files
+/// (FIFO / device nodes), and enforces the 10 MB size cap. See
+/// [`load_config`] for the symlink-handling rationale.
 ///
 /// Use this when you need the raw TOML source (e.g. for `doctor --strict` unknown-field
 /// detection). For normal config loading, call `load_config` which parses the result.

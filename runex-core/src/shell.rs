@@ -1280,6 +1280,23 @@ mod tests {
         );
     }
 
+    /// Security: cmd.exe expands `%VAR%` even inside double-quoted argv,
+    /// and `!VAR!` if any caller has SETLOCAL ENABLEDELAYEDEXPANSION
+    /// active. The clink template must reject buffer content containing
+    /// either, to prevent shell-buffer-driven injection through io.popen.
+    /// See `runex-core/src/templates/clink.lua::runex_is_safe_line` for
+    /// the rationale.
+    #[test]
+    fn clink_safe_line_check_rejects_cmd_metachars() {
+        let s = export_script(Shell::Clink, "runex", None);
+        // The lua regex literal must contain `%%` (escaped `%` in lua
+        // pattern syntax) and `!` so both are rejected at the gate.
+        assert!(
+            s.contains("%%!") || s.contains("!%%"),
+            "clink safe-line regex must reject `%` and `!`: {s}"
+        );
+    }
+
     #[test]
     fn nu_quote_string_escapes_tab() {
         let s = nu_quote_string("run\tex");

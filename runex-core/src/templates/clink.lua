@@ -2,21 +2,32 @@
 
 local RUNEX_BIN = {CLINK_BIN}
 
--- Safe token check: only alphanumerics, dot, underscore, hyphen. We use this
--- to gate whether we pass user buffer content to the runex CLI. Even though
--- the child process is launched via io.popen with explicit quoting, this is a
--- belt-and-suspenders check — a token containing shell metacharacters would
--- have to be an abbreviation key to reach this path, and the config validator
--- already forbids those, but we don't rely on that here.
+-- Safe-line gate: reject buffers we shouldn't pass through io.popen.
+-- Two classes of content are rejected:
+--
+--   1. ASCII control characters (NUL, C0). These would either truncate
+--      cmd.exe's argv parsing or cause the runex CLI's clap parser to
+--      bail.
+--
+--   2. cmd.exe metacharacters that survive double-quote escaping:
+--      `%FOO%` is expanded inside *quoted* arguments by cmd.exe, and
+--      `!FOO!` is expanded when SETLOCAL ENABLEDELAYEDEXPANSION is in
+--      effect anywhere upstream. A buffer like `%PATH%` or
+--      `!cmd! & calc & !x!` would be rewritten by cmd before runex hook
+--      ever saw it, including being able to inject extra commands.
+--      runex_shell_quote escapes only `"` so it cannot defend against
+--      these by itself.
+--
+-- When the buffer contains either, fall through to the trigger key's
+-- normal behaviour (literal-space insertion). Users typing literal
+-- `%` or `!` lose the runex expansion on that keypress, which is a
+-- minor UX trade for closing a real injection class.
 --
 -- This stays in lua (rather than as a `runex validate-line` subcommand)
 -- because the whole point is to short-circuit *before* spending the cost
--- of spawning a cmd.exe + runex.exe. A roundtrip to validate the input
--- would defeat the gate.
+-- of spawning a cmd.exe + runex.exe.
 local function runex_is_safe_line(line)
-    -- Allow anything printable that's not control; io.popen goes through cmd.exe
-    -- so we still quote, but reject embedded nul and control chars outright.
-    return not line:find("[%z\1-\31]")
+    return not line:find("[%z\1-\31%%!]")
 end
 
 -- cmd.exe quoting: wrap in double quotes and escape embedded double quotes.
