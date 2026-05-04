@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-05-04
+
 ### Added
 - **`runex init <shell>`** — `init` now accepts an optional shell
   positional argument so users can target a specific shell (e.g.
@@ -34,8 +36,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status` `[[abbr]]` rule so a fresh install demonstrates expansion
   immediately. Existing configs are untouched (`init` still uses
   `OpenOptions::create_new` and refuses to overwrite).
+- **`docs/recipes.md` cookbook** — 12 use-case-driven, copy-pasteable
+  `config.toml` snippets covering Git shortcuts, per-shell command
+  variants (the `expand = { default = …, pwsh = … }` table form),
+  three-step fallback chains, cursor placeholders for fill-in-the-blank
+  templates, `[keybind.self_insert]` for skip-expansion-this-once,
+  Docker/kubectl bundles, and doctor-driven troubleshooting recipes.
+  Cross-linked from README and `docs/config-reference.md`. Japanese
+  mirror at `docs/recipes.ja.md`.
 
 ### Changed
+- **`release.yml` gates binary build on `cargo test --workspace`**
+  passing across ubuntu/windows/macOS. Previously, `build` started
+  in parallel with whatever CI workflow the bump commit had triggered,
+  so a tag push could in principle ship binaries from a commit whose
+  tests never finished. The new `test` job is `needs:`-required by
+  `build`, closing that race.
 - **README & docs/setup explicitly document rcfile-write safety.** New
   "What `runex init` will and won't do" section in `docs/setup.md`
   (and the Japanese mirror) lists the append-only / `O_NOFOLLOW` /
