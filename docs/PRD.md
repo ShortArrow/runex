@@ -171,11 +171,37 @@ See `docs/config-reference.md` for the full field reference.
 - `runex doctor` now reports environment-level health: Windows
   `effective_search_path` breakdown and `integration:<shell>` rcfile
   marker / clink-lua drift detection.
+- `runex init <shell>` accepts a shell positional and writes the clink
+  lua integration directly (no more manual `runex export clink > …`).
+  Seed config includes a working sample so `init` produces an
+  immediately verifiable setup. Per-shell "Next steps" guidance after
+  init.
+- crates.io publish moved into CI via OIDC Trusted Publishing — no
+  long-lived `CARGO_REGISTRY_TOKEN` anywhere. Test gate added so a
+  tag push can never ship binaries from a commit whose tests didn't
+  finish.
+- `docs/recipes.md` cookbook with 12 use-case-driven `config.toml`
+  snippets.
 
 ### Near-term
 
 - Continue refining diagnostics surfaced by `doctor` and `init` as
   new failure modes are observed in the wild.
+- **Strengthen end-to-end test coverage.** Today's CI exercises CLI
+  subcommands and shell-helper functions invoked directly, but does
+  not drive an actual key press through readline / clink / PSReadLine.
+  The 0.1.12 clink regression (silent fallback to literal space when
+  the cmd host's PATH was degraded) would have been caught by a
+  PTY-driven keystroke test. Concrete items:
+  - `runex init` rcfile-write property tests (append-only,
+    `O_NOFOLLOW`, marker-idempotent, size-cap) against a `tempdir`
+    HOME — low cost, codifies the safety guarantees the docs already
+    promise.
+  - PTY-based real-keystroke test using `expectrl` so a Space key
+    press through bash's bind table is asserted to mutate the buffer
+    as expected.
+  - clink and nu integration tests parallel to the existing
+    bash/zsh/pwsh ones (zero coverage today).
 
 ### Later
 

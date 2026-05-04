@@ -167,10 +167,17 @@ expand = "git commit -m"
 
 - 各キーストロークのロジックを `runex hook` サブコマンドに集約。シェルテンプレートは薄いラッパに縮小 (5 シェル合計 244 行)
 - `runex doctor` が環境レベルの健康診断を表示: Windows での `effective_search_path` 内訳、`integration:<shell>` (rcfile マーカー / clink lua のドリフト検知)
+- `runex init <shell>` がシェル引数を受け、clink lua も Rust 側で直接書き出す (ユーザーが `runex export clink > …` を手で打つ必要がなくなった)。デフォルト config に動作サンプル (`gst → git status`) を seed、`init` 後にシェル別の "Next steps" 案内を表示
+- crates.io publish を OIDC Trusted Publishing で CI 化 — 長寿命の `CARGO_REGISTRY_TOKEN` をどこにも置かない。tag push が test gate 通過後にしかバイナリを作らない構造に
+- `docs/recipes.md` (12 シナリオ別レシピ集)
 
 ### 直近
 
 - 実運用で見つかる新しい failure mode に応じて `doctor` / `init` の診断を継続的に強化
+- **e2e テストカバレッジ強化**。現状の CI は CLI サブコマンドや shell helper の直接呼び出しを検証するが、**実際のキー押下 (readline / clink / PSReadLine 経由)** は走らせていない。0.1.12 で踏んだ clink バグ (PATH 縮退で literal space に無音 fallback) は PTY ベースの keystroke test があれば検出できた。具体項目:
+  - `runex init` の rcfile 書き込みプロパティテスト (append-only / `O_NOFOLLOW` / marker-idempotent / size-cap) を `tempdir` HOME 上で。docs で約束している安全保証をコード化する低コスト施策
+  - `expectrl` などで PTY ベースの real-keystroke テスト。bash の bind 経由で Space キー押下 → buffer 変化を assert
+  - clink / nu の integration test (現在ゼロ。bash/zsh/pwsh と並行する形で)
 
 ### 後回し
 
