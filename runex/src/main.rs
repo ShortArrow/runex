@@ -1048,14 +1048,81 @@ fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
         }
     }
 
-    if let Some(parent) = install_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&install_path, new_content.as_bytes())?;
+    write_clink_lua_safely(&install_path, &new_content)?;
     println!(
         "Wrote clink integration to {}",
         sanitize_for_display(&install_path.display().to_string())
     );
+    Ok(())
+}
+
+/// Write `contents` to `install_path` with two safety properties the
+/// previous `std::fs::write` call did not give us:
+///
+///   1. **Refuse to follow a symlink at `install_path`.** An attacker
+///      who can place a symlink in the user's clink scripts directory
+///      could otherwise redirect the write to any file the runex
+///      process can write (same threat model as the rcfile path). The
+///      check uses `symlink_metadata`, which on Windows also catches
+///      directory junctions and other reparse points.
+///   2. **Atomic replace via sibling temp + rename.** A crash partway
+///      through `std::fs::write` would leave a half-written lua file
+///      that clink would then load and fail to parse on the next cmd
+///      window. Writing to a sibling temp first and renaming on
+///      success gives the user either the old content or the new
+///      content, never something between.
+fn write_clink_lua_safely(install_path: &Path, contents: &str) -> CmdResult {
+    use std::io::Write;
+
+    let parent = install_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| {
+            Box::<dyn std::error::Error>::from(format!(
+                "clink lua install path has no parent directory: {}",
+                sanitize_for_display(&install_path.display().to_string())
+            ))
+        })?;
+    std::fs::create_dir_all(parent)?;
+
+    if let Ok(meta) = std::fs::symlink_metadata(install_path) {
+        if meta.file_type().is_symlink() {
+            return Err(Box::<dyn std::error::Error>::from(format!(
+                "refusing to write through a symlink at {}",
+                sanitize_for_display(&install_path.display().to_string())
+            )));
+        }
+    }
+
+    let file_name = install_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| {
+            Box::<dyn std::error::Error>::from(format!(
+                "clink lua install path has no file name: {}",
+                sanitize_for_display(&install_path.display().to_string())
+            ))
+        })?;
+    let tmp_path = parent.join(format!(".{file_name}.runex.tmp"));
+    // Best-effort cleanup of a stale temp from a previous crash.
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let mut tmp_opts = std::fs::OpenOptions::new();
+    tmp_opts.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        tmp_opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut tmp_file = tmp_opts.open(&tmp_path)?;
+    tmp_file.write_all(contents.as_bytes())?;
+    tmp_file.sync_all()?;
+    drop(tmp_file);
+
+    if let Err(e) = std::fs::rename(&tmp_path, install_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(Box::new(e));
+    }
     Ok(())
 }
 

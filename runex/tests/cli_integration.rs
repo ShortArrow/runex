@@ -1049,6 +1049,35 @@ fn init_seed_config_includes_keybind_trigger_and_gst_sample() {
     );
 }
 
+/// `runex init clink` must refuse to write through a symlink at the
+/// install path. An attacker who can create a symlink in the user's
+/// clink scripts directory could otherwise redirect runex's write to
+/// any file the runex process can write — same threat model as the
+/// rcfile write side, where `O_NOFOLLOW` already protects.
+#[test]
+#[cfg(unix)]
+fn init_clink_refuses_symlink_at_install_path() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let target = dir.path().join("sensitive.txt");
+    std::fs::write(&target, b"secret").unwrap();
+    let lua_link = dir.path().join("runex.lua");
+    symlink(&target, &lua_link).unwrap();
+
+    let _out = init_cmd_in_dir(dir.path())
+        .env("RUNEX_CLINK_LUA_PATH", lua_link.to_str().unwrap())
+        .args(["--config", config_path.to_str().unwrap(), "init", "clink", "--yes"])
+        .output()
+        .unwrap();
+
+    let after = std::fs::read(&target).unwrap();
+    assert_eq!(
+        after, b"secret",
+        "init clink must refuse to follow a symlink at the install path; the target file got rewritten"
+    );
+}
+
 /// `runex init clink` writes the clink lua integration to the path
 /// chosen by `RUNEX_CLINK_LUA_PATH`. That env override is the supported
 /// way to redirect the install for testing or for users with a
