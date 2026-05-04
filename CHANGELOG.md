@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **clink (cmd.exe) integration: rejected `%` and `!` in shell buffer
+  content to block cmd.exe injection.** The clink template's
+  `runex_is_safe_line` gate previously rejected only ASCII control
+  characters. cmd.exe expands `%FOO%` even inside double-quoted
+  argv, and `!FOO!` when SETLOCAL ENABLEDELAYEDEXPANSION is in
+  effect anywhere upstream — so a buffer containing `%PATH%` or
+  worse `%X%" & calc & "%Y%` was rewritten by cmd before runex hook
+  saw it, including being able to inject extra commands. The gate
+  now drops on either of those metacharacters; users typing literal
+  `%` or `!` lose the runex expansion on that keypress (the trigger
+  key's plain literal-space fallback applies instead) but cmd
+  itself still executes the typed command normally.
+- **`runex init clink` now writes the lua via atomic-temp + rename**
+  and refuses to follow a symlink at the install path. Previously a
+  pre-existing symlink would silently redirect the export to
+  whatever the symlink pointed at, and a crash mid-write left a
+  half-written lua file that clink would parse-fail on the next cmd
+  window.
+- **`runex init`'s rcfile marker check now uses `O_NOFOLLOW`** on
+  Unix, matching the policy of the rcfile write side. Previously
+  the read could decide "marker already present" by following a
+  symlink target while the write would refuse to follow — confusing
+  at minimum and potentially usable for information leakage about
+  the target file's contents via init's stdout.
+- **Windows registry `Environment\Path` reads are now bounded** to
+  64 KiB and 256 entries per hive, preventing an attacker (or a
+  runaway installer) who can write to HKCU from making every
+  `runex hook` keystroke spend extra CPU on a giant PATH walk.
+- **Documented why `read_config_source` allows symlinks at the final
+  path component** — the dotfiles pattern
+  (`~/.config/runex/config.toml -> ~/dotfiles/...`) is widely used
+  and a deliberate trade-off; the previous docstring claimed
+  stricter behaviour than the code delivered.
+
 ## [0.1.13] - 2026-05-04
 
 ### Added
