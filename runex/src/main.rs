@@ -398,10 +398,17 @@ fn read_rc_content(path: &Path) -> String {
     use std::io::Read;
     #[cfg(unix)]
     let mut file = {
+        // `O_NOFOLLOW` matches the policy of the write side
+        // (`install_rcfile_integration`). Without it, the marker check
+        // here could decide "already present" by reading through a
+        // symlink target, while the write side would refuse to follow
+        // and try to append. Pin both sides to "no symlinks at the
+        // final path component" so init's read decision and write
+        // decision agree.
         use std::os::unix::fs::OpenOptionsExt;
         match std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NONBLOCK)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(path)
         {
             Ok(f) => f,

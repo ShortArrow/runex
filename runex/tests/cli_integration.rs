@@ -1049,6 +1049,47 @@ fn init_seed_config_includes_keybind_trigger_and_gst_sample() {
     );
 }
 
+/// `read_rc_content` (the marker-presence check used by `init`) must
+/// also refuse to follow symlinks. The write side already has
+/// `O_NOFOLLOW`; if the read side reports "marker present" by reading
+/// through a symlink, init makes a different decision than the write
+/// would, which is at minimum confusing and potentially usable for
+/// information leakage. Pin them to the same policy.
+///
+/// We observe the read decision via init's stdout: if the symlink was
+/// followed, init reports `Shell integration already present in <path>`
+/// (it saw the marker in the decoy target). If the symlink was
+/// rejected, init either tries to append (and fails at the write-side
+/// O_NOFOLLOW) or reports a different message — anything that does
+/// NOT contain "already present" proves the read didn't follow.
+#[test]
+#[cfg(unix)]
+fn init_marker_check_does_not_follow_symlink() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+
+    // Decoy that contains the runex marker. If `read_rc_content`
+    // follows the bashrc symlink, init will see this marker.
+    let target = dir.path().join("decoy_with_marker.txt");
+    std::fs::write(&target, "# runex-init\nfake\n").unwrap();
+    let bashrc = dir.path().join(".bashrc");
+    symlink(&target, &bashrc).unwrap();
+
+    let out = init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stdout.contains("already present"),
+        "init reported the marker as already present, which means \
+         read_rc_content followed the symlink. stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+}
+
 /// `runex init clink` must refuse to write through a symlink at the
 /// install path. An attacker who can create a symlink in the user's
 /// clink scripts directory could otherwise redirect runex's write to
