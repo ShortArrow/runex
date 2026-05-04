@@ -31,3 +31,10 @@ winreg = "0.55"
 [dev-dependencies]
 tempfile = "3"
 base64 = "0.22"
+
+# PTY-driven keystroke tests for the bash integration. Linux only;
+# the only consumer is `runex/tests/bash_pty_integration.rs`. expectrl
+# 0.7 ships a Windows backend via ConPTY but it is unstable, so we
+# gate the dependency to unix targets to keep Windows builds lean.
+[target.'cfg(unix)'.dev-dependencies]
+expectrl = "0.7"
