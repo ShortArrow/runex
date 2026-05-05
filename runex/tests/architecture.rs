@@ -218,30 +218,50 @@ fn src_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-/// `infra` must not import from `app`. The Phase D split moved
-/// `RUNEX_INIT_MARKER` and `rc_file_for*` out of `app::init` into
-/// `infra` precisely so this rule can hold; if it ever fires again
-/// we have a cycle (`app → infra → app`).
+/// `infra` must not import behaviour from `app`. Type-only imports
+/// (an error enum, a DTO struct) are allowed because they don't
+/// introduce a behavior cycle — `infra` constructs the variants,
+/// `app` consumes them. The exempt list below pins exactly which
+/// type names cross the layer; any other `use crate::app::…` line
+/// is treated as a violation. If the exempt list grows past two or
+/// three entries, the right move is to lift those types into
+/// `domain/` rather than relax the rule further.
+///
+/// The Phase D D1b/D3b splits moved `RUNEX_INIT_MARKER`,
+/// `rc_file_for*`, and the config file I/O out of `app/` into
+/// `infra/` precisely so this rule can hold; if it ever fires on a
+/// non-exempt symbol we have a cycle (`app → infra → app`).
 #[test]
 fn no_infra_to_app_imports() {
     let infra_dir = src_root().join("infra");
+    // Type-only re-imports that don't constitute a behavior cycle.
+    // Each one must be a leaf type (enum/struct/trait), not a
+    // function. `ConfigError` is an enum constructed by
+    // `infra::config_store` and consumed by callers in `app::config`;
+    // it's a leaf data type even though it's defined in `app/`.
+    let exempt_substrings = ["crate::app::config::ConfigError"];
     let mut violations = Vec::new();
     for (path, content) in collect_rs_files(&infra_dir) {
         for (lineno, line) in use_lines(&content) {
-            if line.contains("crate::app") {
-                violations.push(format!(
-                    "{}:{lineno}: {}",
-                    path.strip_prefix(src_root().parent().unwrap())
-                        .unwrap_or(&path)
-                        .display(),
-                    line.trim()
-                ));
+            if !line.contains("crate::app") {
+                continue;
             }
+            if exempt_substrings.iter().any(|s| line.contains(s)) {
+                continue;
+            }
+            violations.push(format!(
+                "{}:{lineno}: {}",
+                path.strip_prefix(src_root().parent().unwrap())
+                    .unwrap_or(&path)
+                    .display(),
+                line.trim()
+            ));
         }
     }
     assert!(
         violations.is_empty(),
-        "infra/ must not import from app/. Found:\n  {}",
+        "infra/ must not import from app/ (other than the exempt type-only \
+         imports). Found:\n  {}",
         violations.join("\n  ")
     );
 }

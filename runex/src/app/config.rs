@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use crate::domain::model::Config;
 use crate::domain::sanitize::is_deceptive_unicode;
 
-const MAX_CONFIG_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 const MAX_ABBR_RULES: usize = 10_000;
 const MAX_KEY_BYTES: usize = 1_024;
 const MAX_EXPAND_BYTES: usize = 4_096;
@@ -487,178 +486,35 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-/// Default config file path: `$XDG_CONFIG_HOME/runex/config.toml`,
-/// falling back to `~/.config/runex/config.toml` when `XDG_CONFIG_HOME` is unset.
-/// All platforms use this same resolution order.
-/// Overridden by `RUNEX_CONFIG` env var.
+/// Default config file path. Re-exported wrapper around
+/// [`crate::infra::config_store::default_config_path`] so existing
+/// `crate::app::config::default_config_path` call sites keep working
+/// after the D3 split. Phase D D4 / future cleanup may inline these
+/// shims; the function itself lives in `infra` because it touches
+/// `RUNEX_CONFIG` env / `XDG_CONFIG_HOME` resolution.
 pub fn default_config_path() -> Result<PathBuf, ConfigError> {
-    if let Ok(p) = std::env::var("RUNEX_CONFIG") {
-        if !p.is_empty() {
-            return Ok(PathBuf::from(p));
-        }
-    }
-    let dir = xdg_config_home();
-    Ok(dir.ok_or(ConfigError::NoConfigDir)?.join("runex").join("config.toml"))
+    crate::infra::config_store::default_config_path()
 }
 
-/// Resolve `$XDG_CONFIG_HOME`, falling back to `~/.config`.
-pub(crate) fn xdg_config_home() -> Option<PathBuf> {
-    xdg_config_home_with(&crate::infra::env::SystemHomeDir)
-}
-
-/// Resolver-injectable variant of [`xdg_config_home`]. The non-`_with`
-/// version forwards here with the production [`SystemHomeDir`].
+/// Load config from a file path. The I/O happens in `infra`; this
+/// function pairs the read with `parse_config` so callers get a typed
+/// `Config` back.
 ///
-/// Visibility is `pub` (not `pub(crate)`) so other crates in the
-/// workspace — currently the `runex` binary's `init` handler tests —
-/// can pass an [`crate::infra::env::EnvHomeDir`] for hermetic test runs.
-pub fn xdg_config_home_with(env: &dyn crate::infra::env::HomeDirResolver) -> Option<PathBuf> {
-    if let Some(p) = env.env_var("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(p));
-    }
-    env.home_dir().map(|h| h.join(".config"))
-}
-
-/// Load config from a file path.
-///
-/// Opens the file once and uses the same file descriptor for both the size check
-/// and the read, eliminating the TOCTOU race that exists when `metadata()` and
-/// `read_to_string()` open the file separately.
-///
-/// On Unix, `O_NONBLOCK` prevents `open()` from blocking on a named pipe with
-/// no writer. Non-regular files (device nodes, FIFOs) can bypass the size guard
-/// by reporting `len() == 0`, so they are rejected via `is_file()` immediately
-/// after open.
-///
-/// ## Symlinks: deliberately allowed
-///
-/// `~/.config/runex/config.toml` is commonly a symlink into a dotfiles
-/// repository (`~/dotfiles/runex/config.toml`). We canonicalise the path
-/// before opening so this idiom keeps working — `O_NOFOLLOW` is then
-/// applied on the *resolved* path, which means it's effectively a no-op
-/// for this code path. The trade-off is documented: an attacker who can
-/// already write to the user's config directory can redirect this read
-/// to any file. That's a strictly weaker capability than what they
-/// already have (writing arbitrary commands into the abbreviation
-/// table), so we accept the risk in exchange for keeping the dotfiles
-/// pattern frictionless.
+/// Symlink handling, size cap, and TOCTOU avoidance are all enforced
+/// inside [`crate::infra::config_store::read_config_source`]. The
+/// rationale (dotfiles symlink idiom etc.) is documented there.
 pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
-    let content = read_config_source(path)?;
+    let content = crate::infra::config_store::read_config_source(path)?;
     parse_config(&content)
-}
-
-/// Read a config file into a string with the same safety guarantees as [`load_config`]:
-/// single fd for metadata+read (no TOCTOU), rejects non-regular files
-/// (FIFO / device nodes), and enforces the 10 MB size cap. See
-/// [`load_config`] for the symlink-handling rationale.
-///
-/// Use this when you need the raw TOML source (e.g. for `doctor --strict` unknown-field
-/// detection). For normal config loading, call `load_config` which parses the result.
-pub fn read_config_source(path: &std::path::Path) -> Result<String, ConfigError> {
-    use std::io::Read;
-    #[cfg(unix)]
-    let mut file = {
-        use std::os::unix::fs::OpenOptionsExt;
-        let resolved = path.canonicalize()?;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&resolved)?
-    };
-    #[cfg(not(unix))]
-    let mut file = std::fs::File::open(path)?;
-    let meta = file.metadata()?;
-    if !meta.is_file() {
-        return Err(ConfigError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "config path must be a regular file",
-        )));
-    }
-    if meta.len() > MAX_CONFIG_FILE_BYTES {
-        return Err(ConfigError::FileTooLarge);
-    }
-    let mut content = String::new();
-    file.read_to_string(&mut content)?;
-    Ok(content)
-}
-
-/// Open a config file for append/write, rejecting symlinks at the final path
-/// component on Unix. Prevents an attacker who controls the config directory
-/// from redirecting writes to a sensitive file via a swapped symlink.
-#[cfg(unix)]
-fn open_config_for_append_safely(path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_config_for_append_safely(path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    // Windows has no portable O_NOFOLLOW equivalent at open() time; rely on
-    // NTFS permissions at the config dir level.
-    std::fs::OpenOptions::new().create(true).append(true).open(path)
-}
-
-/// Atomically replace a config file: write to a sibling temp file then rename.
-/// On Unix the temp file is created with O_NOFOLLOW so a pre-existing symlink
-/// at the temp path cannot redirect the write.
-fn atomically_write_config(path: &std::path::Path, contents: &str) -> Result<(), ConfigError> {
-    use std::io::Write;
-    let parent = path.parent().ok_or_else(|| {
-        ConfigError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "config path has no parent directory",
-        ))
-    })?;
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| {
-            ConfigError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "config path has no file name",
-            ))
-        })?;
-    let tmp = parent.join(format!(".{file_name}.runex.tmp"));
-
-    // Best-effort cleanup of a stale temp file from a previous crash.
-    let _ = std::fs::remove_file(&tmp);
-
-    #[cfg(unix)]
-    let mut file = {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)
-            .map_err(ConfigError::Io)?
-    };
-    #[cfg(not(unix))]
-    let mut file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&tmp)
-        .map_err(ConfigError::Io)?;
-
-    file.write_all(contents.as_bytes()).map_err(ConfigError::Io)?;
-    file.sync_all().map_err(ConfigError::Io)?;
-    drop(file);
-
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        ConfigError::Io(e)
-    })
 }
 
 /// Append an abbreviation rule to a config file.
 ///
-/// Appends a `[[abbr]]` block at the end of the file, preserving existing
-/// content and formatting. Validates the new rule before appending. Rejects
-/// symlinks at the final path component on Unix.
+/// Validates the new rule (using the pure `check_*` helpers), then
+/// delegates the file append to
+/// [`crate::infra::config_store::append_abbr_block`]. Phase D D4
+/// will move this wrapper to `app::abbr` and have `cmd/add_remove`
+/// call that instead.
 pub fn append_abbr_to_file(
     path: &std::path::Path,
     key: &str,
@@ -679,70 +535,22 @@ pub fn append_abbr_to_file(
             }
         }
     }
-
-    let mut block = String::from("\n[[abbr]]\n");
-    block.push_str(&format!("key = {}\n", toml_quote(key)));
-    block.push_str(&format!("expand = {}\n", toml_quote(expand)));
-    if let Some(cmds) = when_command_exists {
-        let quoted: Vec<String> = cmds.iter().map(|c| toml_quote(c)).collect();
-        block.push_str(&format!("when_command_exists = [{}]\n", quoted.join(", ")));
-    }
-
-    use std::io::Write;
-    let mut file = open_config_for_append_safely(path).map_err(ConfigError::Io)?;
-    file.write_all(block.as_bytes()).map_err(ConfigError::Io)?;
-    Ok(())
+    crate::infra::config_store::append_abbr_block(path, key, expand, when_command_exists)
 }
 
-/// Remove all abbreviation rules with the given key from a config file.
-///
-/// Uses `toml_edit` to parse and edit the file while preserving formatting.
-/// Writes atomically via a sibling temp file + rename. Returns the number of
-/// rules removed.
+/// Remove all abbreviation rules with the given key from a config
+/// file. Thin wrapper around
+/// [`crate::infra::config_store::remove_abbr_block`]; kept here for
+/// call-site continuity until Phase D D4 routes `cmd/add_remove`
+/// through `app::abbr`.
 pub fn remove_abbr_from_file(path: &std::path::Path, key: &str) -> Result<usize, ConfigError> {
-    let content = read_config_source(path)?;
-    let mut doc = content.parse::<toml_edit::DocumentMut>().map_err(|_| {
-        ConfigError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "failed to parse config as editable TOML"))
-    })?;
-
-    let removed = if let Some(toml_edit::Item::ArrayOfTables(arr)) = doc.get_mut("abbr") {
-        let before = arr.len();
-        let mut i = 0;
-        while i < arr.len() {
-            let matches = arr.get(i)
-                .and_then(|t| t.get("key"))
-                .and_then(|v| v.as_str())
-                .map(|k| k == key)
-                .unwrap_or(false);
-            if matches {
-                arr.remove(i);
-            } else {
-                i += 1;
-            }
-        }
-        before - arr.len()
-    } else {
-        0
-    };
-
-    if removed > 0 {
-        atomically_write_config(path, &doc.to_string())?;
-    }
-    Ok(removed)
-}
-
-/// Quote a string value for TOML output.
-fn toml_quote(s: &str) -> String {
-    // Use basic string with escaping for control chars
-    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{}\"", escaped)
+    crate::infra::config_store::remove_abbr_block(path, key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::model::TriggerKey;
-    use serial_test::serial;
 
     mod parsing {
         use super::*;
@@ -872,129 +680,10 @@ expand = "git commit -m"
         assert!(config.abbr.is_empty());
     }
 
-    #[test]
-    fn load_config_from_file() {
-        let dir = std::env::temp_dir().join("runex_test_load");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
-        std::fs::write(
-            &path,
-            r#"
-version = 1
-
-[[abbr]]
-key = "gcm"
-expand = "git commit -m"
-"#,
-        )
-        .unwrap();
-
-        let config = load_config(&path).unwrap();
-        assert_eq!(config.version, 1);
-        assert_eq!(config.abbr[0].key, "gcm");
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// Safety: env mutation is serialized via `#[serial]`; no concurrent
-    /// env access within this test suite. External concurrent access is
-    /// not fully excluded but acceptable in test context.
-    #[test]
-    #[serial]
-    fn default_config_path_env_override() {
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        unsafe { std::env::set_var("RUNEX_CONFIG", "/tmp/custom.toml") };
-        let path = default_config_path().unwrap();
-        unsafe { std::env::remove_var("RUNEX_CONFIG") };
-        assert_eq!(path, PathBuf::from("/tmp/custom.toml"));
-    }
-
-    /// Safety: see `default_config_path_env_override`.
-    #[test]
-    #[serial]
-    fn xdg_config_home_uses_env_var() {
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-test") };
-        let dir = xdg_config_home().unwrap();
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        assert_eq!(dir, PathBuf::from("/tmp/xdg-test"));
-    }
-
-    /// Safety: see `default_config_path_env_override`.
-    #[test]
-    #[serial]
-    fn xdg_config_home_empty_env_falls_back_to_home() {
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", "") };
-        let dir = xdg_config_home().unwrap();
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        assert!(dir.ends_with(".config"), "expected ~/.config fallback, got {dir:?}");
-    }
-
-    /// `xdg_config_home_with` is the resolver-injectable variant
-    /// added in Phase B Step B3. Unlike the non-`_with` variant
-    /// these tests need no `#[serial]` because they don't touch
-    /// process env state.
-    #[test]
-    fn xdg_config_home_with_resolver_honours_env_var() {
-        use crate::infra::env::EnvHomeDir;
-        use std::collections::HashMap;
-        let owned: HashMap<String, String> = HashMap::from([
-            ("XDG_CONFIG_HOME".to_string(), "/test/xdg".to_string()),
-        ]);
-        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
-        assert_eq!(xdg_config_home_with(&env), Some(PathBuf::from("/test/xdg")));
-    }
-
-    #[test]
-    fn xdg_config_home_with_resolver_falls_back_to_home_when_unset() {
-        use crate::infra::env::EnvHomeDir;
-        use std::collections::HashMap;
-        let owned: HashMap<String, String> = HashMap::from([
-            ("HOME".to_string(), "/test/home".to_string()),
-        ]);
-        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
-        assert_eq!(
-            xdg_config_home_with(&env),
-            Some(PathBuf::from("/test/home/.config"))
-        );
-    }
-
-    #[test]
-    fn xdg_config_home_with_resolver_returns_none_when_neither_set() {
-        use crate::infra::env::EnvHomeDir;
-        use std::collections::HashMap;
-        let env = EnvHomeDir::new(|_| -> Option<String> {
-            let _: HashMap<String, String> = HashMap::new();
-            None
-        });
-        assert_eq!(xdg_config_home_with(&env), None);
-    }
-
-    /// Safety: see `default_config_path_env_override`.
-    #[test]
-    #[serial]
-    fn default_config_path_uses_xdg_config_home() {
-        unsafe { std::env::remove_var("RUNEX_CONFIG") };
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-runex-test") };
-        let path = default_config_path().unwrap();
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        assert_eq!(path, PathBuf::from("/tmp/xdg-runex-test/runex/config.toml"));
-    }
-
-    /// Safety: see `default_config_path_env_override`.
-    #[test]
-    #[serial]
-    fn default_config_path_ignores_empty_runex_config() {
-        unsafe { std::env::set_var("RUNEX_CONFIG", "") };
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-empty-test") };
-        let path = default_config_path().unwrap();
-        unsafe { std::env::remove_var("RUNEX_CONFIG") };
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        assert_eq!(
-            path,
-            PathBuf::from("/tmp/xdg-empty-test/runex/config.toml"),
-            "empty RUNEX_CONFIG must fall through to XDG resolution"
-        );
-    }
+    // File I/O tests for `load_config` / `default_config_path`
+    // moved to `infra::config_store::tests` in Phase D D3b along
+    // with the underlying functions. `xdg_config_home_*` tests
+    // moved to `infra::env::tests`.
 
     #[test]
     fn parse_config_rejects_too_many_abbr() {
@@ -1014,55 +703,9 @@ expand = "git commit -m"
         assert!(parse_config(&s).is_ok(), "must accept exactly 10,000 abbr rules");
     }
 
-    #[test]
-    fn load_config_rejects_oversized_file() {
-        use std::io::Write;
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        f.write_all(&vec![b'x'; 11 * 1024 * 1024]).unwrap();
-        f.flush().unwrap();
-        assert!(load_config(f.path()).is_err(), "must reject files larger than 10 MB");
-    }
-
-    /// On Linux, a symlink to /dev/zero reports metadata().len() == 0, bypassing the
-    /// size guard. load_config must reject non-regular files.
-    #[test]
-    #[cfg(unix)]
-    fn load_config_rejects_symlink_to_dev_zero() {
-        let dir = tempfile::tempdir().unwrap();
-        let link = dir.path().join("fake_config.toml");
-        std::os::unix::fs::symlink("/dev/zero", &link).unwrap();
-        let err = load_config(&link);
-        assert!(err.is_err(), "load_config must reject a symlink to /dev/zero");
-    }
-
-    /// A symlink pointing to a regular TOML file must be followed.
-    /// This supports the common dotfiles pattern where ~/.config/runex/config.toml
-    /// is a symlink into a dotfiles repository.
-    #[test]
-    #[cfg(unix)]
-    fn load_config_follows_symlink_to_regular_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("target.toml");
-        std::fs::write(&target, b"version = 1\n").unwrap();
-        let link = dir.path().join("link_config.toml");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        let result = load_config(&link);
-        assert!(result.is_ok(), "load_config must follow a symlink to a regular file: {result:?}");
-    }
-
-    /// A named pipe reports metadata().len() == 0 and read_to_string() blocks.
-    /// load_config must reject non-regular files before attempting to read.
-    #[test]
-    #[cfg(unix)]
-    fn load_config_rejects_named_pipe() {
-        use std::ffi::CString;
-        let dir = tempfile::tempdir().unwrap();
-        let pipe = dir.path().join("fake_config.toml");
-        let path_c = CString::new(pipe.to_str().unwrap()).unwrap();
-        unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) };
-        let err = load_config(&pipe);
-        assert!(err.is_err(), "load_config must reject a named pipe");
-    }
+    // `load_config_rejects_*` and `load_config_follows_symlink_*`
+    // tests moved to `infra::config_store::tests` in Phase D D3b
+    // (they exercise the `read_config_source` filesystem layer).
 
     } // mod parsing
 

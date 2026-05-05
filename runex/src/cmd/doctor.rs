@@ -96,7 +96,7 @@ pub fn handle(
         add_shell_alias_conflicts(&mut result, config.as_ref());
     }
     // Read config source once (O_NOFOLLOW, size-capped) and share across checks.
-    let source = crate::app::config::read_config_source(&config_path).ok();
+    let source = crate::infra::config_store::read_config_source(&config_path).ok();
 
     // Always: report every rule rejected by per-field validation so users know
     // *all* the invalid fields, not just the first one that tripped parse_config.

@@ -1,4 +1,4 @@
-use crate::app::config::xdg_config_home;
+use crate::infra::env::{xdg_config_home_with, SystemHomeDir};
 use crate::domain::sanitize::{double_quote_escape, is_nu_drop_char};
 use crate::domain::shell::{bash_quote_string, lua_quote_string, nu_quote_string, pwsh_quote_string, Shell};
 
@@ -85,7 +85,7 @@ pub fn integration_line(shell: Shell, bin: &str) -> String {
             pwsh_quote_string(bin)
         ),
         Shell::Nu => {
-            let cfg_dir = xdg_config_home()
+            let cfg_dir = xdg_config_home_with(&SystemHomeDir)
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "~/.config".to_string());
             let nu_bin = nu_quote_string(bin);

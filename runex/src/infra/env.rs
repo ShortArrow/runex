@@ -230,6 +230,42 @@ mod tests {
         assert_eq!(r.env_var("XDG_CONFIG_HOME"), Some("/etc/xdg".to_string()));
     }
 
+    /// `xdg_config_home_with` was moved here from `app::config` in
+    /// Phase D D3b along with the function itself. The three tests
+    /// pin resolver-injectable behaviour without touching process
+    /// env state.
+    mod xdg_config_home_with_tests {
+        use super::*;
+        use std::collections::HashMap;
+
+        #[test]
+        fn honours_env_var() {
+            let owned: HashMap<String, String> = HashMap::from([
+                ("XDG_CONFIG_HOME".to_string(), "/test/xdg".to_string()),
+            ]);
+            let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+            assert_eq!(xdg_config_home_with(&env), Some(PathBuf::from("/test/xdg")));
+        }
+
+        #[test]
+        fn falls_back_to_home_when_xdg_unset() {
+            let owned: HashMap<String, String> = HashMap::from([
+                ("HOME".to_string(), "/test/home".to_string()),
+            ]);
+            let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+            assert_eq!(
+                xdg_config_home_with(&env),
+                Some(PathBuf::from("/test/home/.config"))
+            );
+        }
+
+        #[test]
+        fn returns_none_when_neither_set() {
+            let env = EnvHomeDir::new(|_| -> Option<String> { None });
+            assert_eq!(xdg_config_home_with(&env), None);
+        }
+    }
+
     /// `rc_file_for` (formerly `app::init::rc_file_for_with`) was
     /// moved here in Phase D D1b. The tests came along.
     mod rc_file_for_tests {
