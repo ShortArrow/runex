@@ -15,13 +15,19 @@ use std::path::{Path, PathBuf};
 use crate::app::init as runex_init;
 use crate::domain::sanitize::sanitize_for_display;
 use crate::domain::shell::Shell;
+use crate::infra::env::HomeDirResolver;
 
 use crate::resolve_config_opt;
 use crate::util::prompt::{prompt_confirm, read_rc_content};
 use crate::util::shell::detect_shell;
 use crate::{CmdOutcome, CmdResult};
 
-pub fn handle(config_path: PathBuf, shell_override: Option<&str>, yes: bool) -> CmdResult {
+pub fn handle(
+    config_path: PathBuf,
+    shell_override: Option<&str>,
+    yes: bool,
+    env: &dyn HomeDirResolver,
+) -> CmdResult {
     let msg = format!("Create config at {}?", sanitize_for_display(&config_path.display().to_string()));
     if yes || prompt_confirm(&msg) {
         if let Some(parent) = config_path.parent() {
@@ -61,10 +67,10 @@ pub fn handle(config_path: PathBuf, shell_override: Option<&str>, yes: bool) -> 
 
     let rc_path_for_next_steps = match shell {
         Shell::Clink => {
-            install_clink_lua(yes, &config_path)?;
+            install_clink_lua(yes, &config_path, env)?;
             None
         }
-        _ => install_rcfile_integration(shell, yes)?,
+        _ => install_rcfile_integration(shell, yes, env)?,
     };
 
     println!();
@@ -85,8 +91,12 @@ pub fn handle(config_path: PathBuf, shell_override: Option<&str>, yes: bool) -> 
 /// - Idempotent: if `RUNEX_INIT_MARKER` is already present in the
 ///   file, we skip the append entirely (no duplicate blocks).
 /// - User confirmation per write unless `--yes`.
-fn install_rcfile_integration(shell: Shell, yes: bool) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
-    let Some(rc_path) = crate::infra::env::rc_file_for(shell, &crate::infra::env::SystemHomeDir) else {
+fn install_rcfile_integration(
+    shell: Shell,
+    yes: bool,
+    env: &dyn HomeDirResolver,
+) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    let Some(rc_path) = crate::infra::env::rc_file_for(shell, env) else {
         println!(
             "Shell integration for {:?} must be added manually. \
              Run `runex export {:?}` for the script.",
@@ -140,7 +150,7 @@ fn install_rcfile_integration(shell: Shell, yes: bool) -> Result<Option<PathBuf>
 /// keybind / abbr config (clink's lua bakes a `RUNEX_BIN` reference,
 /// not abbreviation tables, so the dependency is light — but still
 /// correct to thread through).
-fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
+fn install_clink_lua(yes: bool, config_path: &Path, env: &dyn HomeDirResolver) -> CmdResult {
     use crate::infra::integration_check::{check_clink_lua_freshness, IntegrationCheck};
 
     // Compute the canonical export content for *this* runex binary.
@@ -151,7 +161,7 @@ fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
     let (_path, config, _err) = resolve_config_opt(Some(config_path));
     let new_content = crate::app::shell_export::export_script(Shell::Clink, &bin, config.as_ref());
 
-    let install_path = runex_init::default_clink_lua_install_path();
+    let install_path = runex_init::clink_lua_install_path_with_resolver(env);
 
     // Decide what to do based on what's already on disk at any of the
     // probe paths. We only write to `install_path`; the freshness check
@@ -262,4 +272,71 @@ fn write_clink_lua_safely(install_path: &Path, contents: &str) -> CmdResult {
         return Err(Box::new(e));
     }
     Ok(CmdOutcome::Ok)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Inline integration of `cmd::init::handle` with an
+    //! [`EnvHomeDir`] resolver. Exercises the production code path
+    //! end-to-end without touching the real filesystem outside the
+    //! test's tempdir, and without mutating process env vars.
+    //!
+    //! Phase D D5 added these tests to prove the resolver is wired
+    //! through *production* `handle`, not just the underlying app
+    //! helpers. Before D5 the resolver only entered through `_with`
+    //! suffix functions that the binary itself never called, so the
+    //! cmd-level handler was effectively un-injected.
+
+    use super::*;
+    use crate::infra::env::EnvHomeDir;
+    use std::collections::HashMap;
+
+    fn env_with(home: &std::path::Path) -> EnvHomeDir<impl Fn(&str) -> Option<String> + Send + Sync> {
+        let owned: HashMap<String, String> = HashMap::from([(
+            "HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        )]);
+        EnvHomeDir::new(move |n| owned.get(n).cloned())
+    }
+
+    #[test]
+    fn handle_writes_bashrc_under_env_home_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        let env = env_with(home);
+        let cfg_path = home.join("config.toml");
+
+        let outcome = handle(cfg_path.clone(), Some("bash"), true, &env)
+            .expect("handle must succeed");
+        assert!(matches!(outcome, CmdOutcome::Ok));
+
+        assert!(cfg_path.is_file(), "config file must be created at {:?}", cfg_path);
+        let bashrc = home.join(".bashrc");
+        assert!(bashrc.is_file(), "bashrc must be created at {:?}", bashrc);
+        let body = std::fs::read_to_string(&bashrc).unwrap();
+        assert!(
+            body.contains(crate::infra::integration_check::RUNEX_INIT_MARKER),
+            "bashrc must contain the runex marker: {body}"
+        );
+    }
+
+    #[test]
+    fn handle_is_idempotent_for_rcfile_integration() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        let env = env_with(home);
+        let cfg_path = home.join("config.toml");
+
+        handle(cfg_path.clone(), Some("zsh"), true, &env).expect("first handle");
+        let zshrc = home.join(".zshrc");
+        let first = std::fs::read_to_string(&zshrc).unwrap();
+
+        handle(cfg_path.clone(), Some("zsh"), true, &env).expect("second handle");
+        let second = std::fs::read_to_string(&zshrc).unwrap();
+
+        assert_eq!(
+            first, second,
+            "rerunning handle must not duplicate the integration block"
+        );
+    }
 }

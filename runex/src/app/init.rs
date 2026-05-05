@@ -116,29 +116,21 @@ pub fn integration_line(shell: Shell, bin: &str) -> String {
 /// scripts directory: that would invert the dependency direction
 /// (Rust → shell tool) for one path lookup, and the env-var override
 /// already lets users with non-standard installs cope.
-pub fn default_clink_lua_install_path() -> std::path::PathBuf {
-    clink_lua_install_path_with(|k| std::env::var(k).ok(), dirs::home_dir)
-}
-
-/// Pure variant of [`default_clink_lua_install_path`] for testing —
-/// env access and the home-dir lookup are injected so tests can pin
-/// the result without racing other threads on `std::env::set_var`.
-pub(crate) fn clink_lua_install_path_with<E, H>(env_get: E, home_dir: H) -> std::path::PathBuf
-where
-    E: Fn(&str) -> Option<String>,
-    H: Fn() -> Option<std::path::PathBuf>,
-{
-    if let Some(p) = env_get("RUNEX_CLINK_LUA_PATH") {
-        if !p.is_empty() {
-            return std::path::PathBuf::from(p);
-        }
+/// Resolver-injectable factory for the clink lua install path.
+/// Production callers pass [`SystemHomeDir`]; tests pass an
+/// [`crate::infra::env::EnvHomeDir`] so a hermetic `cmd::init::handle`
+/// run can verify the chosen install path without touching real env
+/// vars or `dirs::home_dir()`.
+pub(crate) fn clink_lua_install_path_with_resolver(
+    env: &dyn crate::infra::env::HomeDirResolver,
+) -> std::path::PathBuf {
+    if let Some(p) = env.env_var("RUNEX_CLINK_LUA_PATH") {
+        return std::path::PathBuf::from(p);
     }
-    if let Some(local) = env_get("LOCALAPPDATA") {
-        if !local.is_empty() {
-            return std::path::PathBuf::from(local).join("clink").join("runex.lua");
-        }
+    if let Some(local) = env.env_var("LOCALAPPDATA") {
+        return std::path::PathBuf::from(local).join("clink").join("runex.lua");
     }
-    if let Some(home) = home_dir() {
+    if let Some(home) = env.home_dir() {
         return home.join(".local").join("share").join("clink").join("runex.lua");
     }
     std::path::PathBuf::from("runex.lua")
@@ -241,32 +233,35 @@ mod tests {
             "pwsh next_steps must explain reload: {msg}");
     }
 
-    /// `clink_lua_install_path_with` decides where `runex init clink`
-    /// writes the lua file. Honours `RUNEX_CLINK_LUA_PATH` first, then
-    /// `LOCALAPPDATA` (Windows convention), then a POSIX-style fallback
-    /// for clink forks on Linux. Tests use the closure-injected variant
-    /// to avoid racing on the global env from parallel test threads.
+    /// `clink_lua_install_path_with_resolver` decides where `runex
+    /// init clink` writes the lua file. Honours
+    /// `RUNEX_CLINK_LUA_PATH` first, then `LOCALAPPDATA` (Windows
+    /// convention), then a POSIX-style fallback for clink forks on
+    /// Linux. Tests pass an `EnvHomeDir` for hermetic resolution
+    /// without racing on `std::env::set_var`.
     #[test]
     fn clink_install_path_honors_env_override() {
-        let p = clink_lua_install_path_with(
-            |k| match k {
-                "RUNEX_CLINK_LUA_PATH" => Some("/tmp/runex_test_clink.lua".into()),
-                _ => None,
-            },
-            || None,
-        );
+        use crate::infra::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let owned: HashMap<String, String> = HashMap::from([(
+            "RUNEX_CLINK_LUA_PATH".to_string(),
+            "/tmp/runex_test_clink.lua".to_string(),
+        )]);
+        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+        let p = clink_lua_install_path_with_resolver(&env);
         assert_eq!(p, std::path::PathBuf::from("/tmp/runex_test_clink.lua"));
     }
 
     #[test]
     fn clink_install_path_uses_localappdata_when_set() {
-        let p = clink_lua_install_path_with(
-            |k| match k {
-                "LOCALAPPDATA" => Some("/tmp/local_appdata_test".into()),
-                _ => None,
-            },
-            || None,
-        );
+        use crate::infra::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let owned: HashMap<String, String> = HashMap::from([(
+            "LOCALAPPDATA".to_string(),
+            "/tmp/local_appdata_test".to_string(),
+        )]);
+        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+        let p = clink_lua_install_path_with_resolver(&env);
         assert_eq!(
             p,
             std::path::PathBuf::from("/tmp/local_appdata_test/clink/runex.lua")
@@ -275,28 +270,35 @@ mod tests {
 
     #[test]
     fn clink_install_path_falls_back_to_home() {
-        let p = clink_lua_install_path_with(
-            |_| None,
-            || Some(std::path::PathBuf::from("/home/user")),
-        );
+        use crate::infra::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let owned: HashMap<String, String> =
+            HashMap::from([("HOME".to_string(), "/home/user".to_string())]);
+        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+        let p = clink_lua_install_path_with_resolver(&env);
         assert_eq!(
             p,
             std::path::PathBuf::from("/home/user/.local/share/clink/runex.lua")
         );
     }
 
-    /// An empty env var must be ignored (treated as if unset). Otherwise
-    /// `RUNEX_CLINK_LUA_PATH=` would silently anchor writes to "" which
-    /// either fails outright or hits an unintended cwd.
+    /// An empty env var must be treated as unset; otherwise
+    /// `RUNEX_CLINK_LUA_PATH=` would anchor writes to "" which either
+    /// fails outright or hits an unintended cwd.
+    /// `EnvHomeDir::env_var` already returns `None` for empty strings,
+    /// so this test pins both the closure semantics and the
+    /// resolver's empty-string handling.
     #[test]
     fn clink_install_path_treats_empty_env_as_unset() {
-        let p = clink_lua_install_path_with(
-            |k| match k {
-                "RUNEX_CLINK_LUA_PATH" | "LOCALAPPDATA" => Some(String::new()),
-                _ => None,
-            },
-            || Some(std::path::PathBuf::from("/home/u")),
-        );
+        use crate::infra::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let owned: HashMap<String, String> = HashMap::from([
+            ("RUNEX_CLINK_LUA_PATH".to_string(), String::new()),
+            ("LOCALAPPDATA".to_string(), String::new()),
+            ("HOME".to_string(), "/home/u".to_string()),
+        ]);
+        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+        let p = clink_lua_install_path_with_resolver(&env);
         assert!(p.starts_with("/home/u"), "expected home fallback, got {p:?}");
     }
 

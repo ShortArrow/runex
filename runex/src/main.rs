@@ -520,7 +520,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 default_config_path()?
             };
-            cmd::init::handle(config_path, shell.as_deref(), yes)?
+            cmd::init::handle(
+                config_path,
+                shell.as_deref(),
+                yes,
+                &infra::env::SystemHomeDir,
+            )?
         }
         Commands::Hook { shell, line, cursor, paste_pending } => cmd::hook::handle(
             &shell,
