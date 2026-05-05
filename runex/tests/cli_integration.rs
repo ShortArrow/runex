@@ -487,20 +487,62 @@ fn explicit_config_parse_error_exits_nonzero() {
     assert!(!ok, "list with broken config must exit non-zero");
 }
 
-/// `doctor` reports `config_file` as Error when the file doesn't exist and exits non-zero.
-#[test]
-fn doctor_with_missing_explicit_config_exits_nonzero() {
-    let (_, _, ok) = run(&["doctor"], Some(std::path::Path::new("/nonexistent/config.toml")), None);
-    assert!(!ok, "doctor must exit non-zero when config file is missing");
+// Doctor output has two consumers with different stability needs:
+//   * `--json` is the *contract* — name/status pairs are the API that
+//     editor plugins / dashboards / scripts parse. Pin those by parsing
+//     JSON.
+//   * Plain stdout is the *UX* — wording, ordering, emoji are tuned for
+//     human readability and may change. Assert only the bare minimum
+//     (exit code, presence of the check's machine name) so doctor
+//     copy-edits don't ripple into test failures.
+
+/// Helper: locate a doctor check by name from `--json` output.
+fn doctor_check<'a>(json: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+    json.as_array()?.iter().find(|c| c["name"].as_str() == Some(name))
 }
 
 #[test]
-fn doctor_shows_parse_error_in_output() {
+fn doctor_with_missing_explicit_config_marks_config_file_error() {
+    let (stdout, _, ok) = run(
+        &["doctor", "--json"],
+        Some(std::path::Path::new("/nonexistent/config.toml")),
+        None,
+    );
+    assert!(!ok, "doctor must exit non-zero when config file is missing");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}\nstdout: {stdout}"));
+    let cf = doctor_check(&parsed, "config_file")
+        .expect("doctor --json must include a 'config_file' check");
+    assert_eq!(
+        cf["status"].as_str(),
+        Some("error"),
+        "config_file status must be 'error' when the path is missing: {cf}"
+    );
+}
+
+#[test]
+fn doctor_reports_parse_error_via_json_contract() {
     let cfg = write_config("[keybind]\ntrigger = \"space\"\n");
-    let (stdout, _, ok) = run(&["doctor"], Some(cfg.path()), None);
-    assert!(!ok, "doctor must exit non-zero with broken config");
-    assert!(stdout.contains("config_parse"), "stdout must contain config_parse check: {stdout}");
-    assert!(stdout.contains("failed to load config"), "stdout must contain error message: {stdout}");
+    let (stdout_json, _, ok_json) = run(&["doctor", "--json"], Some(cfg.path()), None);
+    assert!(!ok_json, "doctor must exit non-zero with broken config");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout_json)
+        .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}\nstdout: {stdout_json}"));
+    let parse = doctor_check(&parsed, "config_parse")
+        .expect("doctor --json must include a 'config_parse' check");
+    assert_eq!(parse["status"].as_str(), Some("error"));
+    assert!(
+        parse["detail"].as_str().is_some_and(|d| !d.is_empty()),
+        "config_parse error must carry a non-empty detail: {parse}"
+    );
+
+    // Plain stdout: only check the *machine* name appears so users can
+    // grep for it. Don't pin specific wording — that's UX surface.
+    let (stdout_plain, _, ok_plain) = run(&["doctor"], Some(cfg.path()), None);
+    assert!(!ok_plain);
+    assert!(
+        stdout_plain.contains("config_parse"),
+        "plain stdout must reference 'config_parse' check name: {stdout_plain}"
+    );
 }
 
 #[test]
@@ -517,20 +559,26 @@ fn doctor_verbose_shows_multiline_parse_error() {
 #[test]
 fn doctor_parse_error_unsupported_version() {
     let cfg = write_config("version = 99\n");
-    let (stdout, _, ok) = run(&["doctor"], Some(cfg.path()), None);
+    let (stdout, _, ok) = run(&["doctor", "--json"], Some(cfg.path()), None);
     assert!(!ok, "doctor must exit non-zero for unsupported version");
-    assert!(stdout.contains("config_parse"), "stdout must contain config_parse check: {stdout}");
-    assert!(stdout.contains("failed to load config"), "stdout must mention the error: {stdout}");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}\nstdout: {stdout}"));
+    let parse = doctor_check(&parsed, "config_parse")
+        .expect("doctor --json must include a 'config_parse' check");
+    assert_eq!(parse["status"].as_str(), Some("error"));
 }
 
 #[test]
 fn doctor_parse_error_key_too_long() {
     let long_key = "a".repeat(1025);
     let cfg = write_config(&format!("version = 1\n[[abbr]]\nkey = \"{long_key}\"\nexpand = \"x\"\n"));
-    let (stdout, _, ok) = run(&["doctor"], Some(cfg.path()), None);
+    let (stdout, _, ok) = run(&["doctor", "--json"], Some(cfg.path()), None);
     assert!(!ok, "doctor must exit non-zero for key too long");
-    assert!(stdout.contains("config_parse"), "stdout must contain config_parse check: {stdout}");
-    assert!(stdout.contains("failed to load config"), "stdout must mention the error: {stdout}");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}\nstdout: {stdout}"));
+    let parse = doctor_check(&parsed, "config_parse")
+        .expect("doctor --json must include a 'config_parse' check");
+    assert_eq!(parse["status"].as_str(), Some("error"));
 }
 
 #[test]
@@ -570,7 +618,12 @@ fn json_list_is_array_with_key_and_expand() {
 }
 
 #[test]
-fn json_doctor_is_array_with_name_and_status() {
+fn json_doctor_contract_pins_name_and_status_enum() {
+    // The `--json` output is the contract for editor plugins / dashboards.
+    // Pin every check's shape (name: string, status: one of the known
+    // enum values) so a refactor that introduces a new status value or
+    // drops `name` from a check fails this test loudly. Wording, order,
+    // and human-readable detail are intentionally not pinned.
     let cfg = write_config("version = 1\n");
     let (stdout, _, ok) = run(&["doctor", "--json"], Some(cfg.path()), None);
     assert!(ok);
@@ -578,8 +631,20 @@ fn json_doctor_is_array_with_name_and_status() {
         .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}"));
     let arr = v.as_array().expect("doctor --json must be an array");
     assert!(!arr.is_empty());
-    assert!(arr[0].get("name").is_some(), "each check must have 'name'");
-    assert!(arr[0].get("status").is_some(), "each check must have 'status'");
+    // Mirrors `runex_core::doctor::CheckStatus`. If a new variant is
+    // added there, add it here too — that's the whole point of pinning.
+    const ALLOWED_STATUS: &[&str] = &["ok", "warn", "error"];
+    for check in arr {
+        let name = check["name"].as_str()
+            .unwrap_or_else(|| panic!("each check must have a string 'name': {check}"));
+        assert!(!name.is_empty(), "check 'name' must be non-empty: {check}");
+        let status = check["status"].as_str()
+            .unwrap_or_else(|| panic!("each check must have a string 'status': {check}"));
+        assert!(
+            ALLOWED_STATUS.contains(&status),
+            "check '{name}' status '{status}' is not in {ALLOWED_STATUS:?}"
+        );
+    }
 }
 
 // ─── init --config ────────────────────────────────────────────────────────────
