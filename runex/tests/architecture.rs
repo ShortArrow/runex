@@ -231,7 +231,18 @@ fn no_cmd_to_domain_behavior_imports() {
     // simple substring catches both. Phase D D2 will remove the
     // need for this needle entirely — once `export_script` lives in
     // `app`, no `cmd/*` will reference it from `domain`.
-    let forbidden = ["crate::domain::expand", "crate::domain::hook"];
+    let forbidden = [
+        "crate::domain::expand",
+        "crate::domain::hook",
+        // `export_script` is the only orchestration symbol that
+        // historically lived in `domain::shell`. Phase D D2 moves it
+        // to `app::shell_export`; this rule enforces that cmd
+        // callers go through `app` from then on. The substring
+        // catches both the explicit `use crate::domain::shell::
+        // export_script` form and the bracket form
+        // `use crate::domain::shell::{export_script, Shell}`.
+        "crate::domain::shell::export_script",
+    ];
     let mut violations = Vec::new();
     for (path, content) in collect_rs_files(&cmd_dir) {
         for (lineno, line) in use_lines(&content) {
