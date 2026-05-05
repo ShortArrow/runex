@@ -552,7 +552,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "runex"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "base64",
  "clap",
@@ -568,22 +568,6 @@ dependencies = [
  "toml_edit",
  "which",
  "winreg",
-]
-
-[[package]]
-name = "runex-core"
-version = "0.1.13"
-dependencies = [
- "dirs",
- "libc",
- "serde",
- "serde_json",
- "serial_test",
- "tempfile",
- "thiserror",
- "toml",
- "toml_edit",
- "which",
 ]
 
 [[package]]

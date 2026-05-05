@@ -59,7 +59,7 @@ The core concept is **"rune-to-cast expansion"**.
 ```text
 config.toml
     ↓
-runex core (Rust library crate: runex-core)
+runex (single Rust crate, internal modules: domain / app / infra)
     ↓
 shell adapters
 ├─ pwsh  (PSReadLine)
@@ -68,6 +68,25 @@ shell adapters
 ├─ clink (Lua)
 └─ nu    (script)
 ```
+
+Internal layering since 0.1.14:
+
+- **`domain/`** — pure logic (model, expand, hook, sanitize,
+  timings, shell quoting + templates). No I/O, no env reads.
+- **`app/`** — orchestration / parse / validate / generate
+  (config, doctor, init, precache).
+- **`infra/`** — file / registry / env access (env with
+  `HomeDirResolver`, integration_check).
+- **`cmd/`** — CLI subcommand handlers (one file per `Commands`
+  enum variant).
+- **`util/`** — leaf helpers (shell detection, command_exists
+  factory, prompt).
+
+Dependency direction: `cmd → app → domain`, `cmd → util/infra`,
+`infra → domain` (one-way, no cycles). Pre-0.1.14 the same code
+lived in two crates (`runex-core` + `runex`); the split was
+removed in Phase C because the internal `pub` boundary it carried
+served no external consumer.
 
 ---
 
@@ -147,7 +166,7 @@ See `docs/config-reference.md` for the full field reference.
 
 - Fast: expansion path completes in <1 ms
 - Cross-platform: Windows / Linux / macOS
-- Shell-independent core logic (runex-core crate)
+- Shell-independent core logic (`runex/src/domain/` modules)
 - Safe: self-loop guard prevents infinite expansion
 - Testable: `command_exists` injected via dependency injection
 

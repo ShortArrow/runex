@@ -20,8 +20,9 @@ cargo build
 # Run all tests
 cargo test --workspace
 
-# Run tests for a specific crate
-cargo test -p runex-core
+# (`runex` is the only crate in the workspace as of 0.1.14; the
+# previous `runex-core` crate was absorbed into `runex/src/{domain,
+# app, infra}/` and removed from the workspace member list.)
 cargo test -p runex
 ```
 
@@ -88,7 +89,7 @@ The rule: if new code does not need to spawn a process or write to stdout, it be
 ### Shell templates: what stays in the shell
 
 The `runex hook` migration moved every per-keystroke decision into Rust.
-The shell-side templates in `runex-core/src/templates/*.{sh,zsh,ps1,lua,nu}`
+The shell-side templates in `runex/src/domain/templates/*.{sh,zsh,ps1,lua,nu}`
 are now thin wrappers (244 lines total across five shells) that read
 buffer state, call `runex hook`, and apply the eval-able output. When
 deciding whether new logic belongs in Rust or in a template, ask
@@ -105,8 +106,9 @@ whether the work *requires* state only the live shell process holds:
 - **Belongs in Rust** — everything else. Token extraction,
   command-position detection, cursor placeholder substitution, shell
   escaping, output formatting, command-existence checks. New rules
-  that don't depend on live buffer state should be added to
-  `runex-core` and exposed through `runex hook`'s output.
+  that don't depend on live buffer state should be added under
+  `runex/src/domain/` (or `app/`, depending on whether they're pure)
+  and exposed through `runex hook`'s output.
 
 The remaining shell code is small, stable, and self-justifying. Avoid
 rewriting it for the sake of consistency — read the comment at the top
@@ -139,8 +141,9 @@ binary while everything else looks fine. Follow the checklist in order.
 - `0.x.y` — current phase; no stability guarantees.
 - Bump **patch** (`0.1.x`) for bug fixes, docs, additive features.
 - Bump **minor** (`0.x.0`) for breaking changes to the CLI surface or
-  config schema. (`runex-core` is treated as an internal API; library
-  callers should pin exact versions.)
+  config schema. The `runex` crate's `[lib]` is internal-only;
+  external library callers should not exist (and there are none on
+  crates.io as of 0.1.14).
 
 ### Pre-flight
 
@@ -161,15 +164,15 @@ Before touching any version number:
   integration drift that unit tests don't see (e.g. clink lua
   outdated). Especially important if the release touches shell
   templates.
-- [ ] **crates.io Trusted Publisher is registered for both
-  `runex-core` and `runex`.** Sanity check at
-  https://crates.io/crates/runex-core/settings/ and
-  https://crates.io/crates/runex/settings/ — both crates need a
-  GitHub Actions trusted publisher entry pointing at this repo +
-  `release.yml`. One-time setup, but worth re-confirming if you
-  haven't released in a while (crates.io occasionally invalidates
-  unused tokens). See `### crates.io (OIDC Trusted Publishing)` below
-  for the exact field values.
+- [ ] **crates.io Trusted Publisher is registered for `runex`.**
+  Sanity check at https://crates.io/crates/runex/settings/ — the
+  crate needs a GitHub Actions trusted publisher entry pointing at
+  this repo + `release.yml`. One-time setup, but worth re-confirming
+  if you haven't released in a while (crates.io occasionally
+  invalidates unused tokens). The legacy `runex-core` Trusted
+  Publisher entry can stay registered (harmless; the crate publishes
+  nothing as of 0.1.14). See `### crates.io (OIDC Trusted
+  Publishing)` below for the exact field values.
 
 ### Cut the release
 
@@ -183,10 +186,11 @@ All commands from the repo root.
   git merge --no-ff develop
   ```
 
-- [ ] **Bump the version in three places.** `runex-core/Cargo.toml`
-  `version`, `runex/Cargo.toml` `version`, and the
-  `runex-core = { version = "..." }` dependency line in
-  `runex/Cargo.toml`. All three must match.
+- [ ] **Bump the version.** Edit `runex/Cargo.toml` `version` to
+  the new value. (As of 0.1.14 there is only one crate; the
+  pre-0.1.14 three-place bump across `runex-core/Cargo.toml`,
+  `runex/Cargo.toml`, and the `runex-core` path-dep line is no
+  longer needed.)
 
 - [ ] **Promote the CHANGELOG `[Unreleased]` heading** to
   `## [X.Y.Z] - YYYY-MM-DD`, then add a fresh empty `## [Unreleased]`
@@ -197,7 +201,7 @@ All commands from the repo root.
 - [ ] **Single bump commit:**
 
   ```bash
-  git add runex-core/Cargo.toml runex/Cargo.toml Cargo.lock CHANGELOG.md
+  git add runex/Cargo.toml Cargo.lock CHANGELOG.md
   git commit -m "chore: bump version to X.Y.Z"
   git push origin main
   ```
@@ -224,9 +228,11 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
 
 - [ ] **crates.io.** Automated. The `publish-crates` job in
   `release.yml` fires on the same tag push as `build` / `release` and
-  publishes `runex-core` first, then `runex`, via OIDC Trusted
-  Publishing. See `### crates.io (OIDC Trusted Publishing)` below for
-  the one-time setup.
+  publishes `runex` via OIDC Trusted Publishing. (Pre-0.1.14 it
+  also published `runex-core`, but that crate was absorbed into
+  `runex` in 0.1.14 and no longer exists in the workspace.) See
+  `### crates.io (OIDC Trusted Publishing)` below for the one-time
+  setup.
 
   - To **skip** publishing on a particular tag (e.g. when re-tagging
     a previously-published version because of a release-process
@@ -305,22 +311,29 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
 
 ### crates.io (OIDC Trusted Publishing)
 
-`runex-core` and `runex` are published to crates.io via OIDC Trusted
-Publishing — no long-lived `CARGO_REGISTRY_TOKEN` is stored as a
-GitHub secret or in any local environment. The `publish-crates` job in
+`runex` is published to crates.io via OIDC Trusted Publishing — no
+long-lived `CARGO_REGISTRY_TOKEN` is stored as a GitHub secret or in
+any local environment. The `publish-crates` job in
 `.github/workflows/release.yml` exchanges the workflow's GitHub OIDC
 token for a short-lived crates.io token at job start
-(`rust-lang/crates-io-auth-action@v1.0.4`), publishes `runex-core`,
-waits for the index to propagate, then publishes `runex`.
+(`rust-lang/crates-io-auth-action@v1.0.4`), runs `cargo publish
+--dry-run` as a packaging sanity check, then publishes the real
+crate.
 
-#### One-time setup (per crate)
+(Pre-0.1.14 the same workflow also published `runex-core` first and
+waited for the sparse index to propagate before `runex`. Phase C
+absorbed `runex-core` into `runex`, so the workflow now publishes a
+single crate. The legacy `runex-core` Trusted Publisher entry on
+crates.io stays registered — harmless because the workflow no longer
+calls `cargo publish -p runex-core`.)
 
-For each of the two crates, register this repository's `release.yml`
-as a Trusted Publisher on crates.io:
+#### One-time setup
+
+Register this repository's `release.yml` as a Trusted Publisher on
+crates.io for the `runex` crate:
 
 1. Sign in at https://crates.io as a crate owner.
-2. Go to https://crates.io/crates/runex-core/settings (then repeat for
-   `runex`).
+2. Go to https://crates.io/crates/runex/settings.
 3. Under **Trusted Publishers**, click **Add** and choose
    **GitHub Actions**.
 4. Fill in:
@@ -331,20 +344,17 @@ as a Trusted Publisher on crates.io:
      GitHub Environment for runex).
 5. Save.
 
-The same workflow file is used for both crates, so the entry is
-identical between the two `settings/` pages — only the crate URL
-differs. After both are saved, the next tag-pushed release will
-publish without any further manual action.
+After saving, the next tag-pushed release will publish without any
+further manual action.
 
 #### Sanity check before relying on it
 
 If the `publish-crates` job has been failing at the
-`Exchange OIDC token` step or the `Publish runex-core` step, the
-usual cause is one of:
+`Exchange OIDC token` step or the `Publish runex` step, the usual
+cause is one of:
 
-- **Trusted Publisher not registered** for that crate yet (or for the
-  other crate). The error mentions the missing crate name. Re-run
-  the setup above for whichever crate is missing.
+- **Trusted Publisher not registered** for `runex` yet. Re-run the
+  setup above.
 - **Workflow filename mismatch.** If you renamed the workflow file
   the registered entry no longer matches and crates.io won't issue a
   token. Update the entry to the new filename.
@@ -353,9 +363,8 @@ usual cause is one of:
 
 If you ever need to publish manually as a fallback (e.g. crates.io
 OIDC issuer outage), you can still run
-`RUNEX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) cargo publish -p runex-core`
-followed by `cargo publish -p runex` from a checkout at the release
-tag, using a personal API token via
+`RUNEX_GIT_COMMIT=$(git rev-parse --short=12 HEAD) cargo publish -p runex`
+from a checkout at the release tag, using a personal API token via
 `cargo login --registry crates-io`. **Don't commit the token
 anywhere; revoke it from your crates.io account once the manual run
 is complete.**

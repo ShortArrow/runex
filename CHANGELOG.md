@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.14] - 2026-05-05
 
 ### Security
 
@@ -100,6 +100,42 @@ doctor --json` are all unchanged from 0.1.13.
   `HomeDirResolver` trait and the `_with` variants
   (`rc_file_for_with`, `default_clink_lua_paths_with`,
   `xdg_config_home_with`).
+
+### Changed
+
+Phase C refactor — workspace single-crate switch, **no user-visible
+behaviour change**: config schema, hook output format, and `runex
+doctor --json` are all unchanged from 0.1.13. `cargo install runex`
+keeps working exactly as before.
+
+- **`runex-core` absorbed into `runex`.** The two-crate workspace
+  the project shipped since 0.1.0 collapses to a single crate.
+  Every module that lived under `runex-core/src/` is now under
+  `runex/src/{domain,app,infra}/`:
+  - `domain/` (pure logic, no I/O): `model`, `expand`, `hook`,
+    `sanitize`, `timings`, `shell` (+ embedded shell-script
+    templates).
+  - `app/` (orchestration / parse / validate / generate):
+    `config`, `doctor`, `init`, `precache`.
+  - `infra/` (file / registry / env access): `env` (with
+    `HomeDirResolver`), `integration_check`.
+  Rationale: `runex-core` had zero external reverse dependencies
+  on crates.io but was published every release because `cargo
+  publish` requires version-pinned path-deps to be on the index.
+  The internal `pub` boundary it carried was inappropriate (the
+  crate was always internal-only — see the
+  "Not a public API" disclaimer the 0.1.13 docstring carried).
+  Folding the modules into the bin crate removes the publish
+  ceremony and lets the dependency direction (`cmd → app →
+  domain`, `cmd → util/infra`, `infra → domain`) be enforced by
+  module visibility instead of crate boundaries.
+- **crates.io publish reduced to one crate.** The release
+  workflow's `publish-crates` job no longer publishes
+  `runex-core`; only `runex` ships. The Trusted Publisher
+  registration for `runex-core` on crates.io is left in place
+  (harmless), and `runex-core 0.1.13` (the last published
+  version) stays on crates.io un-yanked for any cargo lockfile
+  that still pins it.
 
 ## [0.1.13] - 2026-05-04
 

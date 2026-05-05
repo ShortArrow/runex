@@ -152,18 +152,19 @@ jobs:
             artifacts/*
 
   publish-crates:
-    # Publish runex-core then runex to crates.io via OIDC Trusted
-    # Publishing. No long-lived CARGO_REGISTRY_TOKEN is stored anywhere
-    # — every run exchanges a short-lived GitHub OIDC token for an
-    # equally short-lived crates.io token via
-    # `rust-lang/crates-io-auth-action`.
+    # Publish runex to crates.io via OIDC Trusted Publishing. No
+    # long-lived CARGO_REGISTRY_TOKEN is stored anywhere — every run
+    # exchanges a short-lived GitHub OIDC token for an equally short-
+    # lived crates.io token via `rust-lang/crates-io-auth-action`.
     #
-    # Requires Trusted Publisher to be registered on crates.io for both
-    # `runex-core` and `runex` (one-time setup, see CONTRIBUTING.md
-    # `### crates.io (OIDC Trusted Publishing)`). Until that's done,
-    # this job will fail at the auth step but everything else
-    # (test/build/release) still completes and the GitHub Release is
-    # published as usual.
+    # Phase C absorbed the previous `runex-core` crate into `runex`,
+    # so this job now publishes a single crate. The Trusted Publisher
+    # registration on crates.io for `runex-core` is left in place
+    # (harmless; future republish would no-op since the crate now
+    # builds nothing) — only the `runex` publish actually fires.
+    # `runex-core 0.1.13` (the last version before absorption) stays
+    # on crates.io un-yanked for any cargo lockfile that still pins
+    # it; no new versions will appear.
     #
     # Set `[skip publish]` in the bump commit message to bypass this
     # job — useful for re-tagging after a release-process glitch where
@@ -190,36 +191,12 @@ jobs:
         uses: rust-lang/crates-io-auth-action@v1.0.4
 
       - name: Dry-run publish (sanity check)
-        # Catches packaging issues (missing files, dirty workdir, manifest
-        # rejection) before we burn the OIDC token on a real publish.
-        # Uses the same token the live publish step will use, so any
-        # auth-side problem also surfaces here. Cheap insurance — adds
-        # ~30 s to the job and saves a manual yank when packaging breaks.
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-          RUNEX_GIT_COMMIT: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          # Skip dry-run for crates already published — `cargo publish
-          # --dry-run` still rejects "version exists", which would mask
-          # the real failure mode we want this step to catch.
-          for crate in runex-core runex; do
-            status=$(curl -fsS -o /dev/null -w '%{http_code}' \
-              "https://crates.io/api/v1/crates/$crate/$version" || echo "000")
-            if [ "$status" = "200" ]; then
-              echo "$crate $version already on crates.io — skipping dry-run"
-            else
-              cargo publish -p "$crate" --dry-run
-            fi
-          done
-
-      - name: Publish runex-core
-        # Skip when this version is already on crates.io. Reruns of a
-        # partially-failed publish-crates job would otherwise abort
-        # here with "crate already exists on crates.io index" — that
-        # bit us on 0.1.13 where the wait step timed out and the
-        # rerun couldn't proceed past this step.
+        # Catches packaging issues (missing files, dirty workdir,
+        # manifest rejection) before we burn the OIDC token on a real
+        # publish. Uses the same token the live publish step will
+        # use, so any auth-side problem also surfaces here. Cheap
+        # insurance — adds ~30 s to the job and saves a manual yank
+        # when packaging breaks.
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
           RUNEX_GIT_COMMIT: ${{ github.sha }}
@@ -227,46 +204,19 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           status=$(curl -fsS -o /dev/null -w '%{http_code}' \
-            "https://crates.io/api/v1/crates/runex-core/$version" || echo "000")
+            "https://crates.io/api/v1/crates/runex/$version" || echo "000")
           if [ "$status" = "200" ]; then
-            echo "runex-core $version already on crates.io — skipping publish"
+            echo "runex $version already on crates.io — skipping dry-run"
           else
-            cargo publish -p runex-core
+            cargo publish -p runex --dry-run
           fi
 
-      - name: Wait for runex-core to appear on the index
-        # cargo publish returns as soon as the upload succeeds, but the
-        # sparse index can take 30–90 s (sometimes more) to propagate.
-        # The `runex` publish below verifies its own dep graph against
-        # the index and would fail with "no matching package named
-        # runex-core" if we don't wait.
-        #
-        # Probe the registry HTTP API directly (`/api/v1/crates/<name>/<version>`)
-        # rather than `cargo search`, which depends on the sparse index
-        # cache being populated and gave inconsistent timing on
-        # 0.1.13's first publish (returned no rows for >5 minutes
-        # despite the crate being live in the API).
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          for i in $(seq 1 30); do
-            status=$(curl -fsS -o /dev/null -w '%{http_code}' \
-              "https://crates.io/api/v1/crates/runex-core/$version" || echo "000")
-            if [ "$status" = "200" ]; then
-              echo "runex-core $version visible on the registry API"
-              # Give the sparse index one more breath so cargo's own
-              # verify step picks it up too on the next call.
-              sleep 5
-              exit 0
-            fi
-            echo "waiting for runex-core $version on the API... ($i/30, last status=$status)"
-            sleep 10
-          done
-          echo "runex-core $version did not appear on the registry API in 5 minutes" >&2
-          exit 1
-
       - name: Publish runex
-        # Same skip-if-exists guard as runex-core above.
+        # Skip when this version is already on crates.io. Reruns of a
+        # partially-failed publish-crates job would otherwise abort
+        # here with "crate already exists on crates.io index" — that
+        # bit us on 0.1.13 (back when there were two crates) and the
+        # guard pattern is worth keeping for the same reason.
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
           RUNEX_GIT_COMMIT: ${{ github.sha }}

@@ -647,8 +647,10 @@ fn json_doctor_contract_pins_name_and_status_enum() {
     }
 
     // (3) + (4) per-check types and the status enum.
-    //     Mirrors `runex_core::doctor::CheckStatus`. If a new variant
-    //     is added there, add it here too — that's the whole point.
+    //     Mirrors `runex::app::doctor::CheckStatus` in the bin's
+    //     module tree (this is an external test crate so the path
+    //     is informational, not import-able). If a new variant is
+    //     added there, add it here too — that's the whole point.
     const ALLOWED_STATUS: &[&str] = &["ok", "warn", "error"];
     for check in arr {
         let name = check["name"].as_str()
