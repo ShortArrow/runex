@@ -43,6 +43,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a deliberate trade-off; the previous docstring claimed
   stricter behaviour than the code delivered.
 
+### Internal
+
+Phase B refactor — internal-only restructure, **no user-visible
+behaviour change**: config schema, hook output format, and `runex
+doctor --json` are all unchanged from 0.1.13.
+
+- **`runex/src/main.rs` split into per-subcommand handlers under
+  `runex/src/cmd/`** (one file per `Commands` enum variant). The
+  pre-Phase-B 1542-line `main.rs` shrinks to dispatch + `Cli` /
+  `Commands` derives + the runtime builder. Each handler is now
+  unit-testable from inside the process — `cmd::which::handle("a"
+  .repeat(1025), …)` returns `CmdOutcome::ExitCode(1)` instead of
+  killing the test process.
+- **`std::process::exit` calls collapsed from 8 sites to 1.**
+  Handlers report failures by returning `Ok(CmdOutcome::ExitCode(n))`
+  through the new `CmdResult` type; only `main()` ever calls
+  `process::exit`.
+- **`AppContext` runtime builder** centralises the
+  `resolve_config + resolve_shell + compute_precache_fingerprint
+  + make_command_exists` four-line dance that used to be open-
+  coded in five handlers. `AppContext::build` for the strict
+  path; `AppContext::build_optional` (returning `OptionalContext`)
+  for hook / doctor where missing config is non-fatal.
+- **Leaf utilities extracted to `runex/src/util/`**
+  (`shell` / `path` / `prompt`). Command-specific policy stays
+  with the owning handler — `validate_bin` in `cmd/export.rs`,
+  `install_rcfile_integration` in `cmd/init.rs`, etc.
+- **Shared PTY/subprocess test harness** at
+  `runex/tests/support/`. `PtySession::spawn(PtyShell::Bash | Zsh
+  | Pwsh, …)` factors out the per-shell launch flags and prompt
+  setup that were previously open-coded in each shell test.
+- **`runex-core::env::HomeDirResolver`** — new resolver trait with
+  `SystemHomeDir` (production) and `EnvHomeDir` (test, closure-
+  driven) implementations. `_with` variants of `rc_file_for`,
+  `xdg_config_home`, and `default_clink_lua_paths` accept a
+  resolver so init-handler tests can be hermetic without touching
+  process env. The non-`_with` variants remain as thin wrappers
+  over `SystemHomeDir`; **public API is additive only**.
+
+### Tests
+
+- New `bash_pty_integration.rs` (rewritten via the support
+  harness — 1 scenario), `zsh_pty_integration.rs` (1 scenario),
+  `pwsh_pty_integration.rs` (1 scenario). Linux only: expectrl's
+  Windows ConPTY backend is still flagged unstable in the dep
+  declaration, so Windows continues to rely on the existing
+  `*_integration.rs` subprocess tests.
+- `tests::handler_outcomes` (7 unit tests) pin the new
+  `CmdOutcome::ExitCode(1)` contract for `handle_which`,
+  `handle_expand`, and `validate_bin`.
+- `tests::app_context` (3 unit tests) pin fingerprint stability
+  (same args → same fingerprint) and the missing-config branches
+  for both builder variants.
+- 18 new unit tests in `runex-core` covering the
+  `HomeDirResolver` trait and the `_with` variants
+  (`rc_file_for_with`, `default_clink_lua_paths_with`,
+  `xdg_config_home_with`).
+
 ## [0.1.13] - 2026-05-04
 
 ### Added
