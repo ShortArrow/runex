@@ -86,7 +86,7 @@ pub fn handle(config_path: PathBuf, shell_override: Option<&str>, yes: bool) -> 
 ///   file, we skip the append entirely (no duplicate blocks).
 /// - User confirmation per write unless `--yes`.
 fn install_rcfile_integration(shell: Shell, yes: bool) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
-    let Some(rc_path) = runex_init::rc_file_for(shell) else {
+    let Some(rc_path) = crate::infra::env::rc_file_for(shell, &crate::infra::env::SystemHomeDir) else {
         println!(
             "Shell integration for {:?} must be added manually. \
              Run `runex export {:?}` for the script.",
@@ -95,7 +95,7 @@ fn install_rcfile_integration(shell: Shell, yes: bool) -> Result<Option<PathBuf>
         return Ok(None);
     };
     let existing = read_rc_content(&rc_path);
-    if existing.contains(runex_init::RUNEX_INIT_MARKER) {
+    if existing.contains(crate::infra::integration_check::RUNEX_INIT_MARKER) {
         println!(
             "Shell integration already present in {}",
             sanitize_for_display(&rc_path.display().to_string())
@@ -111,7 +111,7 @@ fn install_rcfile_integration(shell: Shell, yes: bool) -> Result<Option<PathBuf>
         return Ok(Some(rc_path));
     }
     let line = runex_init::integration_line(shell, "runex");
-    let block = format!("\n{}\n{}\n", runex_init::RUNEX_INIT_MARKER, line);
+    let block = format!("\n{}\n{}\n", crate::infra::integration_check::RUNEX_INIT_MARKER, line);
     if let Some(parent) = rc_path.parent() {
         std::fs::create_dir_all(parent)?;
     }

@@ -20,9 +20,17 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::app::init::{rc_file_for, RUNEX_INIT_MARKER};
 use crate::domain::sanitize::sanitize_for_display;
 use crate::domain::shell::Shell;
+use crate::infra::env::{rc_file_for, SystemHomeDir};
+
+/// Marker comment written into rc files by `runex init` to enable
+/// idempotent re-runs. Living in `infra::integration_check` rather
+/// than `app::init` because both the *write side* (`cmd::init`) and
+/// the *read side* (`check_rcfile_marker`) need it, and the latter
+/// lives here in `infra`. Phase D moved the constant to break the
+/// `app → infra → app` cycle the prior layout had.
+pub(crate) const RUNEX_INIT_MARKER: &str = "# runex-init";
 
 /// Maximum bytes any of the rcfile / clink-lua probes will read.
 /// Matches `config::MAX_CONFIG_FILE_BYTES` so the safety story is
@@ -178,12 +186,13 @@ pub fn check_clink_lua_freshness(current_export: &str, search_paths: &[PathBuf])
 
 /// Confirm that the rcfile for `shell` mentions the runex init marker.
 /// `rcfile_override` is for tests; production callers pass `None` and
-/// fall back to [`crate::app::init::rc_file_for`].
+/// fall back to [`crate::infra::env::rc_file_for`] with the
+/// production [`SystemHomeDir`] resolver.
 pub fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) -> IntegrationCheck {
     let name = format!("integration:{}", shell_short_name(shell));
     let path = match rcfile_override {
         Some(p) => p.to_path_buf(),
-        None => match rc_file_for(shell) {
+        None => match rc_file_for(shell, &SystemHomeDir) {
             Some(p) => p,
             None => {
                 return IntegrationCheck::Skipped {
