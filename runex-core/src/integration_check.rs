@@ -24,6 +24,49 @@ use crate::init::{rc_file_for, RUNEX_INIT_MARKER};
 use crate::sanitize::sanitize_for_display;
 use crate::shell::Shell;
 
+/// Maximum bytes any of the rcfile / clink-lua probes will read.
+/// Matches `config::MAX_CONFIG_FILE_BYTES` so the safety story is
+/// uniform across the three doctor file-reads.
+///
+/// 10 MiB is plenty for a real rcfile (multi-megabyte rcfiles are
+/// pathological) and for a `runex.lua` (the template renders to a
+/// few hundred lines). Anything bigger is treated as if the file
+/// could not be read.
+const MAX_PROBE_FILE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Read a file with the same safety guarantees as
+/// `config::read_config_source`: refuses non-regular files (FIFO /
+/// device nodes), refuses oversized content, and on Unix uses
+/// `O_NOFOLLOW | O_NONBLOCK` so a symlink at the final path
+/// component is rejected and `open()` cannot block on a named pipe
+/// with no writer. Returns `None` for any failure mode (the doctor
+/// callers all treat a `None` read as "skip / missing", which is
+/// the correct fail-safe outcome).
+fn read_capped_regular_file(path: &Path) -> Option<String> {
+    use std::io::Read;
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+            .ok()?
+    };
+    #[cfg(not(unix))]
+    let mut file = std::fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    if meta.len() > MAX_PROBE_FILE_BYTES {
+        return None;
+    }
+    let mut content = String::new();
+    file.read_to_string(&mut content).ok()?;
+    Some(content)
+}
+
 /// Outcome of a single integration check, deliberately small so the
 /// caller can convert it into a `doctor::Check` without coupling this
 /// module to `doctor`.
@@ -73,7 +116,7 @@ impl IntegrationCheck {
 /// callers decide policy (env var override, default location, …).
 pub fn check_clink_lua_freshness(current_export: &str, search_paths: &[PathBuf]) -> IntegrationCheck {
     for candidate in search_paths {
-        if let Ok(on_disk) = std::fs::read_to_string(candidate) {
+        if let Some(on_disk) = read_capped_regular_file(candidate) {
             return if normalize_newlines(&on_disk) == normalize_newlines(current_export) {
                 IntegrationCheck::Ok {
                     name: "integration:clink".into(),
@@ -131,13 +174,13 @@ pub fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) -> Inte
             ),
         };
     }
-    let content = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => {
+    let content = match read_capped_regular_file(&path) {
+        Some(s) => s,
+        None => {
             return IntegrationCheck::Missing {
                 name,
                 detail: format!(
-                    "could not read {} — `runex init {}` may not have been run",
+                    "could not read {} — `runex init {}` may not have been run, or the file is not a regular file or exceeds the safety cap",
                     sanitize_for_display(&path.display().to_string()),
                     shell_short_name(shell)
                 ),
@@ -302,6 +345,45 @@ mod tests {
         assert!(
             matches!(r, IntegrationCheck::Skipped { .. }),
             "clink without override must skip; got {r:?}"
+        );
+    }
+
+    /// An rcfile larger than the safety cap must not cause `runex doctor`
+    /// to read the whole thing into memory. The check should treat
+    /// oversized content the same as missing — `Missing` if the file
+    /// exists but exceeds the cap (we can't know if the marker is
+    /// inside without reading, and we refuse to read).
+    #[test]
+    fn rcfile_marker_check_skips_oversized_file() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join(".bashrc");
+        // Write 11 MB; cap is 10 MB.
+        let big: Vec<u8> = vec![b'x'; 11 * 1024 * 1024];
+        std::fs::write(&p, &big).unwrap();
+        let r = check_rcfile_marker(Shell::Bash, Some(&p));
+        assert!(
+            matches!(r, IntegrationCheck::Missing { .. }),
+            "oversized rcfile must be treated as Missing (bypass cap), got {r:?}"
+        );
+    }
+
+    /// Same DoS/safety property for the clink lua freshness check.
+    /// An attacker who controls the clink scripts directory could
+    /// otherwise make `runex doctor` read an arbitrarily large file
+    /// every invocation.
+    #[test]
+    fn clink_lua_freshness_skips_oversized_file() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("runex.lua");
+        let big: Vec<u8> = vec![b'x'; 11 * 1024 * 1024];
+        std::fs::write(&p, &big).unwrap();
+        let r = check_clink_lua_freshness("anything\n", &[p]);
+        // Treated as if the file weren't readable at all: Skipped /
+        // Missing — the important thing is that we don't load the
+        // 11 MB into a String.
+        assert!(
+            matches!(r, IntegrationCheck::Skipped { .. } | IntegrationCheck::Missing { .. }),
+            "oversized clink lua must skip the comparison, got {r:?}"
         );
     }
 }
