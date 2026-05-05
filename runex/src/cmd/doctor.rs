@@ -44,7 +44,7 @@ pub fn build_doctor_env_info(config: Option<&Config>) -> doctor::DoctorEnvInfo {
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "runex".to_string());
-    info.clink_export_for_drift_check = Some(crate::domain::shell::export_script(
+    info.clink_export_for_drift_check = Some(crate::app::shell_export::export_script(
         Shell::Clink,
         &clink_bin,
         config,

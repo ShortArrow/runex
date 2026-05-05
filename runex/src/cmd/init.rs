@@ -149,7 +149,7 @@ fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "runex".to_string());
     let (_path, config, _err) = resolve_config_opt(Some(config_path));
-    let new_content = crate::domain::shell::export_script(Shell::Clink, &bin, config.as_ref());
+    let new_content = crate::app::shell_export::export_script(Shell::Clink, &bin, config.as_ref());
 
     let install_path = runex_init::default_clink_lua_install_path();
 

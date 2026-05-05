@@ -20,3 +20,4 @@ pub mod config;
 pub mod doctor;
 pub mod init;
 pub mod precache;
+pub mod shell_export;

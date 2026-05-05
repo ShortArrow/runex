@@ -83,6 +83,6 @@ pub fn handle(shell: String, bin: String, config_flag: Option<&Path>) -> CmdResu
     } else {
         bin
     };
-    print!("{}", crate::domain::shell::export_script(s, &effective_bin, config.as_ref()));
+    print!("{}", crate::app::shell_export::export_script(s, &effective_bin, config.as_ref()));
     Ok(CmdOutcome::Ok)
 }
