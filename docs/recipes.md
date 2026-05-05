@@ -162,6 +162,32 @@ hatch.
 
 ---
 
+## 6b. nu: avoid the paste-eats-content issue
+
+**Use case:** in nu (≥ 0.111 / reedline), pasting text that contains
+spaces causes the runex binding to fire mid-paste, and the
+`executehostcommand` event nu uses for keybinds resets the command
+line at fire time. Everything after the first triggering space gets
+dropped. This is upstream nu behaviour, not specific to runex.
+
+If you regularly paste shell snippets into nu, switch nu's trigger
+to a chord that paste streams won't contain:
+
+```toml
+[keybind.trigger]
+default = "space"
+nu      = "shift-space"
+```
+
+**Try it:** paste `echo a b c d` into nu — the whole line stays
+intact. Type `gst<Shift+Space>` to expand. Bash/zsh/pwsh/clink keep
+plain Space as their trigger because they handle paste-time chord
+events correctly (pwsh sets a paste-pending flag, clink only fires
+the lua binding on standalone keypresses, bash/zsh have no
+trigger-on-paste race in the first place).
+
+---
+
 ## 7. Different commands on Windows and Unix
 
 **Use case:** `rm -i` on Unix, `Remove-Item` in PowerShell.

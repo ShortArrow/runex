@@ -5,7 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.14] - 2026-05-05
+## [0.1.14] - 2026-05-06
+
+### Known limitations
+
+- **nu (`nushell` 0.111): pasting content that contains the trigger
+  space drops everything after the first triggering space.** nu's
+  reedline delivers paste characters one keystroke at a time, and the
+  `executehostcommand` event the runex binding uses resets the
+  command line at fire time, so paste content arriving after the
+  triggering space is lost. Workarounds:
+  1. Configure a non-space trigger for nu in `config.toml`:
+     ```toml
+     [keybind.trigger]
+     nu = "shift+space"
+     ```
+  2. Quote/escape paste content, or paste it in pieces.
+  This is upstream behaviour and applies to every nu keymap binding,
+  not just runex; the generated `runex.nu` template documents it
+  inline. Other shells (bash, zsh, pwsh, clink) handle paste
+  correctly: bash/zsh have no trigger-on-paste race, pwsh sets
+  `paste_pending` so the hook short-circuits, and clink's lua
+  binding only fires on standalone keypresses.
 
 ### Security
 
