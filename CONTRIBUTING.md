@@ -141,9 +141,10 @@ binary while everything else looks fine. Follow the checklist in order.
 - `0.x.y` — current phase; no stability guarantees.
 - Bump **patch** (`0.1.x`) for bug fixes, docs, additive features.
 - Bump **minor** (`0.x.0`) for breaking changes to the CLI surface or
-  config schema. The `runex` crate's `[lib]` is internal-only;
-  external library callers should not exist (and there are none on
-  crates.io as of 0.1.14).
+  config schema. The `runex` crate ships only a binary (`[[bin]]`),
+  not a library — every internal symbol is `pub(crate)`, so there is
+  no library API to break. External callers should embed the bin
+  rather than depending on internal types.
 
 ### Pre-flight
 

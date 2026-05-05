@@ -1,6 +1,6 @@
 //! Test-injectable environment façade.
 //!
-//! Several modules in `runex-core` need to know "where is the user's
+//! Several modules in this crate need to know "where is the user's
 //! home directory" or "what is `$XDG_CONFIG_HOME`" to compute paths
 //! like `~/.bashrc`, `~/.config/runex/config.toml`, or
 //! `~/AppData/Local/clink/runex.lua`. The natural answers come from
@@ -19,20 +19,20 @@
 //! and resolves `home_dir` from `$HOME` (or `$USERPROFILE` on
 //! Windows) inside the closure.
 //!
-//! ## Public API stability
+//! ## Layering
 //!
-//! This trait is `pub` because it has to cross the `runex-core` →
-//! `runex` boundary so the binary can build a context for handlers
-//! to use. It is *not* part of any external semver guarantee — see
-//! the crate-level docstring on [`crate`]. Phase C (which absorbs
-//! this whole module into `runex/src/infra/env.rs`) will move the
-//! trait without renaming it.
+//! `infra → domain` only. The trait + resolvers live in `infra`
+//! because they're filesystem/env adapters; the things they hand
+//! back (path arithmetic, `Shell` enum) are pure domain types.
+//! Both `app` (e.g. `app::init` for the next-steps blurb) and
+//! `cmd` (`cmd::init::handle` propagation) consume the resolver,
+//! so it has to be reachable from above.
 
 use std::path::PathBuf;
 
 /// Look up the user's home directory and arbitrary environment
 /// variables. The two lookups are bundled in one trait because every
-/// caller in `runex-core` that wants one wants the other (config-
+/// caller in this crate that wants one wants the other (config-
 /// home resolution starts from `$XDG_CONFIG_HOME` and falls back to
 /// `home_dir().join(".config")`, etc.).
 pub(crate) trait HomeDirResolver: Send + Sync {
@@ -78,7 +78,7 @@ impl HomeDirResolver for SystemHomeDir {
 ///
 /// Constructed by `EnvHomeDir::new(|name| match name { ... })`. The
 /// closure is `Send + Sync` so `&dyn HomeDirResolver` can cross
-/// thread boundaries (none of the runex-core callers spawn threads
+/// thread boundaries (none of the in-crate callers spawn threads
 /// today, but the trait bound future-proofs the public API).
 ///
 /// `#[allow(dead_code)]` because every concrete construction is

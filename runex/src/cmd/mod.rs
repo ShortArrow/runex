@@ -21,9 +21,14 @@
 //! command-specific policy (shell detection, the
 //! `command_exists` factory, the y/N prompt). See `util/mod.rs`.
 //!
-//! Phase C will fold this directory under `runex/src/app/` once
-//! `runex-core` is absorbed; nothing in here will need a rename
-//! at that point — only the parent module will move.
+//! ## Layering
+//!
+//! `cmd → app → {domain, infra}`. Handlers must not import
+//! `crate::domain::expand` / `crate::domain::hook` / orchestration
+//! symbols from `domain::shell` directly — go through `app::*`
+//! use-case wrappers instead. The
+//! `runex/tests/architecture.rs::no_cmd_to_domain_behavior_imports`
+//! test pins the contract.
 
 pub mod add_remove;
 pub mod doctor;

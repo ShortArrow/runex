@@ -137,6 +137,66 @@ keeps working exactly as before.
   version) stays on crates.io un-yanked for any cargo lockfile
   that still pins it.
 
+### Refactor
+
+Phase D — strict Clean Architecture cleanup on top of the Phase C
+single-crate layout. **No user-visible behaviour change**: config
+schema, hook output, and `runex doctor --json` remain identical to
+0.1.13.
+
+- **`infra → app` import cycle removed.** `RUNEX_INIT_MARKER` and
+  `rc_file_for*` moved out of `app::init` into
+  `infra::integration_check` and `infra::env` respectively. The
+  former cycle (`app::doctor → infra::integration_check →
+  app::init`) is now gone.
+- **`domain::shell` split.** Orchestration symbols
+  (`export_script`, `trigger_for`, `*_bind_lines`, etc.) moved to
+  `app::shell_export`. `domain::shell` retains only the `Shell`
+  enum and pure quoting helpers — no `Config` dependency.
+- **`app::config` file I/O moved to `infra::config_store`.**
+  `default_config_path`, `read_config_source`, `load_config`'s
+  body, `append_abbr_block`, `remove_abbr_block`, and the atomic
+  write/symlink-reject helpers all live under `infra/` now.
+  `app::config` keeps parse + validate; thin wrappers preserve the
+  call-site API.
+- **`app::expand` and `app::hook` use-case wrappers added.** Every
+  `cmd/*` handler that used to import `crate::domain::expand` or
+  `crate::domain::hook` now goes through `app/`. The
+  `HookAction` type is re-exported from `app::hook` so cmd code
+  doesn't reach into `domain` for it either.
+- **`HomeDirResolver` injection wired to the production
+  `cmd::init::handle` path.** The handler now accepts
+  `&dyn HomeDirResolver`; main dispatch passes `&SystemHomeDir`.
+  Inline `cmd::init::tests` drive the handler with `EnvHomeDir` for
+  hermetic end-to-end coverage. The standalone `_with` /
+  resolver-less helper variants are removed in favour of the single
+  resolver-injectable form.
+- **Architecture rules pinned in CI.**
+  `runex/tests/architecture.rs` adds four compile-time-ish tests:
+  `no_infra_to_app_imports` (with a small exempt list for
+  type-only imports), `no_domain_to_anyone_else_imports`,
+  `no_cmd_to_domain_behavior_imports`,
+  `no_filesystem_calls_in_app_layer`. Future regressions surface
+  in CI rather than in code review.
+
+### Internal
+
+- **Visibility tightened crate-wide: every `pub` item is now
+  `pub(crate)`.** `runex` is bin-only; there is no library API to
+  preserve. The narrower visibility makes accidental cross-layer
+  reach harder and shrinks the surface clippy needs to lint.
+- **Dropped unused `IntegrationCheck::{name, detail}` accessors.**
+  Every consumer destructures via `match`; the methods had zero
+  callers and were carried over from the dropped runex-core public
+  surface.
+- **`Cargo.toml` `[lib] deferred` comment removed**, replaced with
+  the actual bin-only contract (no `[lib]` is intentional).
+- **`util/`, `cmd/`, `infra/env`, `app/` module docstrings updated**
+  to describe the post-Phase-D layering instead of the
+  Phase-C-future tense they were written in. `main.rs` crate-root
+  docstring documents the layering diagram and points at the
+  architecture test.
+
 ## [0.1.13] - 2026-05-04
 
 ### Added

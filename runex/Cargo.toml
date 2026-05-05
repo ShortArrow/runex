@@ -15,13 +15,12 @@ readme = "README.md"
 name = "runex"
 path = "src/main.rs"
 
-# `[lib]` declaration deferred to Phase C2b. The C1 commit added one
-# pointing at an empty `src/lib.rs`, but enabling a sibling lib
-# target before any modules move means bin and lib see different
-# `crate::CmdOutcome` etc. — every `pub(crate)` symbol the bin's
-# handlers reach for is invisible to the lib half. The cleaner
-# sequence is: absorb runex-core into lib first (C2b), then have
-# `main.rs` call into the lib through one entry point.
+# Bin-only crate. There is intentionally no `[lib]` target — the
+# absorbed runex-core code from Phase C lives entirely under the bin's
+# `domain`/`app`/`infra` modules and is `pub(crate)`. External users
+# install the CLI via `cargo install runex`; programmatic consumers
+# would need to embed the bin or the source. See `runex/src/main.rs`
+# crate-root docstring for the layering contract.
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

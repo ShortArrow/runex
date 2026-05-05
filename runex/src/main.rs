@@ -1,3 +1,38 @@
+//! `runex` — cross-shell abbreviation expansion CLI.
+//!
+//! ## Layering
+//!
+//! ```text
+//!   cmd  → app  → domain
+//!     ↓     ↓
+//!   util   infra → domain
+//! ```
+//!
+//! - `domain/`  — pure data types and rule-evaluation logic. No I/O,
+//!   no env, no time. Imports from sibling layers are forbidden.
+//! - `app/`     — orchestration / use-case wrappers. Composes
+//!   `domain` types with `infra` adapters to answer "what should
+//!   `runex doctor` actually check?", "what should `expand` return
+//!   for this token?". No `std::fs::*` calls.
+//! - `infra/`   — file system, environment, registry adapters.
+//!   Implements injection traits (`HomeDirResolver`) for `app/`.
+//!   `infra → domain` only.
+//! - `cmd/`     — per-subcommand handlers. Reach behaviour through
+//!   `app/`; reach leaf utilities through `util/`. The architecture
+//!   test forbids `cmd → domain::{expand, hook}` and
+//!   `cmd → domain::shell::export_script`.
+//! - `util/`    — leaf helpers shared by `cmd/*` (shell detection,
+//!   prompt confirmation, command-existence factory). No
+//!   command-specific policy.
+//! - `format` / `shell_alias` / `win_path` — single-purpose modules
+//!   pre-dating the layering split; safe in their current location.
+//!
+//! Cycles are prevented at compile-time by
+//! `runex/tests/architecture.rs` (`no_infra_to_app_imports`,
+//! `no_domain_to_anyone_else_imports`,
+//! `no_cmd_to_domain_behavior_imports`,
+//! `no_filesystem_calls_in_app_layer`).
+
 mod app;
 mod cmd;
 mod domain;
