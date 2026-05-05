@@ -188,8 +188,11 @@ when_command_exists = { default = ["rm"], pwsh = ["Remove-Item"] }
 
 ## 8. Platform-specific dependency check
 
-**Use case:** the abbreviation depends on a tool that's named differently
-per platform — `wsl` from inside Windows pwsh, `lsb_release` on Linux.
+**Use case:** the abbreviation depends on a tool that's only available
+on certain platforms — `wslpath` only exists inside WSL, for example.
+On the platform that doesn't need a precondition (here pwsh, where the
+expansion uses native PowerShell variables), an empty
+`when_command_exists` list says "no precondition, always expand".
 
 ```toml
 [[abbr]]
@@ -199,9 +202,9 @@ when_command_exists = { default = ["wslpath"], pwsh = [] }
 ```
 
 **Try it:** in WSL bash, `winhome<Space>` expands only when `wslpath`
-exists. In pwsh the empty list means "no precondition" — always
-expand. An empty `when_command_exists` list is treated as "no
-condition", not "fail".
+is on PATH (i.e. you really are inside WSL). In pwsh the empty list
+short-circuits the precondition — always expand. An empty
+`when_command_exists` list is treated as "no condition", not "fail".
 
 ---
 
