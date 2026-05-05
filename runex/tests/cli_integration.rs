@@ -1485,3 +1485,59 @@ fn init_prompt_confirm_huge_stdin_is_treated_as_no() {
         "huge 'yyy...' blob without newline must not be treated as 'yes': stdout={stdout}"
     );
 }
+
+// ─── hook: oversized --line cap ──────────────────────────────────────────────
+//
+// `runex hook` runs on every keystroke. If the shell wrapper passes a
+// pathologically large `--line` value, the per-keystroke cost should
+// stay bounded — we'd rather emit the trigger key's literal-space
+// fallback than chew CPU on token extraction. The handler enforces an
+// `MAX_HOOK_LINE_BYTES` cap (16 KiB) and emits InsertSpace without
+// running any expansion logic.
+//
+// We pick 16 KiB rather than something larger because Windows
+// `CreateProcess` caps argv at ~32 KiB; the cap value has to leave
+// room for the rest of the command line and for tests to feed an
+// oversize input through argv.
+
+/// `runex hook --shell bash --line <oversize>` must finish quickly
+/// and emit a syntactically-valid InsertSpace directive. The shell
+/// wrapper would `eval` the output as a no-op buffer mutation. The
+/// time budget assertion catches accidental O(n) regressions where
+/// the handler walks the giant buffer instead of short-circuiting.
+///
+/// We don't pin "doesn't expand `gcm`" here because the hook's
+/// command-position logic already prevents expansion in many
+/// arrangements of an oversize buffer. The unit-level cap behaviour
+/// is pinned by `hook_oversized_line_short_circuits_to_insertspace`
+/// in main.rs's test module.
+#[test]
+fn hook_with_oversized_line_returns_promptly() {
+    let cfg = write_config(
+        "version = 1\n\n[[abbr]]\nkey = \"gcm\"\nexpand = \"echo EXPANDED\"\n",
+    );
+    let huge = "a".repeat(16 * 1024);
+    let cursor = huge.len().to_string();
+
+    let start = std::time::Instant::now();
+    let out = Command::new(bin())
+        .args(["hook", "--shell", "bash", "--line"])
+        .arg(&huge)
+        .args(["--cursor"])
+        .arg(&cursor)
+        .env("RUNEX_CONFIG", cfg.path())
+        .output()
+        .expect("runex hook must spawn");
+    let elapsed = start.elapsed();
+
+    assert!(out.status.success(), "hook must succeed: {:?}", out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("READLINE_LINE="),
+        "expected a READLINE_LINE assignment: {stdout}"
+    );
+    assert!(
+        elapsed.as_secs() < 1,
+        "hook with oversized --line must return promptly, took {elapsed:?}"
+    );
+}

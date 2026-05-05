@@ -1138,6 +1138,21 @@ fn write_clink_lua_safely(install_path: &Path, contents: &str) -> CmdResult {
 /// on success. On config-load failure we silently emit nothing and return
 /// exit code 2; the shell wrapper treats that as "insert a literal space"
 /// (so runex never breaks the user's terminal even with a broken config).
+/// Maximum byte length of the `--line` value `runex hook` will
+/// process. The hook runs on every keystroke, so the worst-case cost
+/// of token extraction and is_command_position scanning has to stay
+/// bounded. 16 KiB is far above any realistic shell buffer (a long
+/// pasted command is typically a few KiB at most) and comfortably
+/// below the Windows `CreateProcess` ~32 KiB argv limit, which lets
+/// integration tests feed an oversize value through argv without
+/// exceeding the OS cap before our own.
+///
+/// When the cap is exceeded the handler short-circuits to InsertSpace
+/// at the cursor and returns. This is the same fall-back the trigger
+/// key would have produced anyway, so the user only loses expansion
+/// on that single keypress.
+const MAX_HOOK_LINE_BYTES: usize = 16 * 1024;
+
 fn handle_hook(
     shell_str: &str,
     line: &str,
@@ -1148,6 +1163,22 @@ fn handle_hook(
 ) -> CmdResult {
     let shell = Shell::from_str(shell_str)
         .map_err(|e| format!("{}", e))?;
+
+    // Per-keystroke cost guard. An oversize --line short-circuits to
+    // a literal-space InsertSpace before any expansion logic runs.
+    if line.len() > MAX_HOOK_LINE_BYTES {
+        let cursor_safe = cursor.min(line.len());
+        let mut s = String::with_capacity(line.len() + 1);
+        s.push_str(&line[..cursor_safe]);
+        s.push(' ');
+        s.push_str(&line[cursor_safe..]);
+        let action = runex_core::hook::HookAction::InsertSpace {
+            line: s,
+            cursor: cursor_safe + 1,
+        };
+        println!("{}", runex_core::hook::render_action(shell, &action));
+        return Ok(());
+    }
 
     // If the user pasted a block, the pwsh wrapper sets this flag so we skip
     // expansion entirely and behave like a normal space keypress.
