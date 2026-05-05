@@ -27,6 +27,71 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Return every non-comment, non-`use`, non-test-mod source line in
+/// `content` together with its 1-indexed number. Mirrors `use_lines`'s
+/// `#[cfg(test)] mod` skipping so layering rules apply only to the
+/// production code that ships in the binary.
+///
+/// Comment-only lines and lines whose first non-whitespace token is
+/// `//` are dropped. Trailing `// foo` comments stay in the line — the
+/// substring rules below check for the *call site* (`std::fs::write(`)
+/// which won't appear inside a comment by accident.
+fn production_lines(content: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut depth: usize = 0;
+    let mut test_mod_depths: Vec<usize> = Vec::new();
+    let mut prev_line_marks_test_mod = false;
+    for (i, raw_line) in content.lines().enumerate() {
+        let line = raw_line;
+        let trimmed = line.trim_start();
+        let attr_marks_test = trimmed.starts_with("#[cfg(test)]")
+            || trimmed.starts_with("#[cfg(any(test")
+            || trimmed.starts_with("#[cfg(all(test");
+        if test_mod_depths.is_empty() && !trimmed.starts_with("//") {
+            out.push((i + 1, line.to_string()));
+        }
+        for (col, ch) in line.char_indices() {
+            if ch == '/' && line.as_bytes().get(col + 1) == Some(&b'/') {
+                break;
+            }
+            match ch {
+                '{' => {
+                    depth += 1;
+                    if prev_line_marks_test_mod
+                        && (trimmed.starts_with("mod ") || trimmed.contains(" mod "))
+                    {
+                        test_mod_depths.push(depth);
+                        prev_line_marks_test_mod = false;
+                    }
+                }
+                '}' => {
+                    if let Some(&top) = test_mod_depths.last() {
+                        if depth == top {
+                            test_mod_depths.pop();
+                        }
+                    }
+                    depth = depth.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
+        if attr_marks_test {
+            if trimmed.contains("mod ") && trimmed.contains('{') {
+                test_mod_depths.push(depth);
+            } else {
+                prev_line_marks_test_mod = true;
+            }
+        } else if !attr_marks_test
+            && !trimmed.is_empty()
+            && !trimmed.starts_with("//")
+            && !trimmed.starts_with("#[")
+        {
+            prev_line_marks_test_mod = false;
+        }
+    }
+    out
+}
+
 /// Recursively collect every `.rs` file under `dir`, returning
 /// `(repo-relative path, contents)` pairs.
 fn collect_rs_files(dir: &Path) -> Vec<(PathBuf, String)> {
@@ -263,6 +328,58 @@ fn no_cmd_to_domain_behavior_imports() {
         violations.is_empty(),
         "cmd/ must not import domain behavior modules (expand/hook). \
          Use the app/* usecase wrappers instead. Found:\n  {}",
+        violations.join("\n  ")
+    );
+}
+
+/// `app/` must stay file-system-free in production code: every
+/// destructive `std::fs::*` call (`write`, `rename`, `remove_file`,
+/// `OpenOptions`, `File::open`, `create_dir_all`, …) belongs in
+/// `infra/`. Phase D D3 moves the config-file I/O from
+/// `app/config.rs` into `infra/config_store.rs` precisely so this
+/// rule can hold.
+///
+/// Only production lines are checked — `#[cfg(test)] mod` blocks are
+/// allowed to touch the file system because the tests build their
+/// own fixtures. The substring set is intentionally narrow to avoid
+/// false positives on `std::fs::Metadata` (a type) or
+/// `std::os::unix::fs::*` (a re-export trait).
+#[test]
+fn no_filesystem_calls_in_app_layer() {
+    let app_dir = src_root().join("app");
+    let needles = [
+        "std::fs::write",
+        "std::fs::read",
+        "std::fs::rename",
+        "std::fs::remove_file",
+        "std::fs::create_dir",
+        "std::fs::OpenOptions",
+        "std::fs::File::open",
+        "std::fs::File::create",
+        "std::fs::canonicalize",
+        "std::fs::symlink_metadata",
+    ];
+    let mut violations = Vec::new();
+    for (path, content) in collect_rs_files(&app_dir) {
+        for (lineno, line) in production_lines(&content) {
+            for needle in needles {
+                if line.contains(needle) {
+                    violations.push(format!(
+                        "{}:{lineno}: {}",
+                        path.strip_prefix(src_root().parent().unwrap())
+                            .unwrap_or(&path)
+                            .display(),
+                        line.trim()
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "app/ must not perform file-system calls in production code. \
+         Move the I/O into infra/config_store.rs (or another infra/* \
+         module). Found:\n  {}",
         violations.join("\n  ")
     );
 }
