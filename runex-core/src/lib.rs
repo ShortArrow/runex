@@ -15,8 +15,10 @@
 //!   `docs/config-reference.md`).
 //! - The `runex hook` per-keystroke RPC output format (line / cursor
 //!   directives the shell wrappers eval).
-//! - The `runex doctor --json` output (`checks[].name`,
-//!   `checks[].status`, exit code).
+//! - The `runex doctor --json` output: a top-level JSON array of
+//!   check objects, each with at least `name` (string) and `status`
+//!   (one of `"ok" | "warn" | "error"`); exit code is `0` iff no
+//!   check has status `"error"`.
 //!
 //! If you have a use case that would benefit from a stable lib
 //! interface, please open an issue at
