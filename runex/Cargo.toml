@@ -15,6 +15,13 @@ readme = "README.md"
 name = "runex"
 path = "src/main.rs"
 
+# Sibling library target so `runex/tests/*.rs` can `use runex::…`
+# directly. Phase C-and-beyond detail; see crate-level docstring on
+# `runex/src/lib.rs` for the not-a-public-API disclaimer.
+[lib]
+name = "runex"
+path = "src/lib.rs"
+
 [dependencies]
 runex-core = { version = "0.1.13", path = "../runex-core" }
 clap = { version = "4", features = ["derive"] }
