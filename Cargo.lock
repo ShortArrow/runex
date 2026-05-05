@@ -561,6 +561,7 @@ dependencies = [
  "runex-core",
  "serde",
  "serde_json",
+ "serial_test",
  "tempfile",
  "which",
  "winreg",

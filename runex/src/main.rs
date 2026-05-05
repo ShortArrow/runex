@@ -267,6 +267,194 @@ fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> String {
     runex_core::precache::compute_fingerprint(&path_env, mtime, shell)
 }
 
+/// Per-invocation runtime context shared by every command handler
+/// that needs config + resolved shell + a `command_exists` probe.
+///
+/// Pre-B2 the `(config_path, config) = resolve_config(...);
+/// shell = resolve_shell(...).unwrap_or(Shell::Bash); fp =
+/// compute_precache_fingerprint(...); command_exists =
+/// make_command_exists(path_prepend, Some(&fp));` four-line dance
+/// was open-coded in `which`, `expand`, `timings`, `precache`,
+/// `hook`, and `doctor` (5+ sites, all subtly different in fp /
+/// command_exists tuning). Putting it behind one constructor
+/// removes the "five places to change" tax on any future runtime
+/// change and turns the precache-fingerprint policy (`Some(fp)` vs
+/// `None`) into a single decision per command rather than five
+/// scattered ones.
+///
+/// `command_exists` is `Box<dyn Fn>` so the context is movable;
+/// the underlying closure owns its `path_prepend` so the context
+/// has no lifetime parameter.
+pub struct AppContext {
+    pub config_path: PathBuf,
+    pub config: Config,
+    /// `None` only when `--shell` was omitted *and* the command is
+    /// shell-agnostic (e.g. `list` shows all shells). Most handlers
+    /// fall back to `Shell::Bash` themselves; `AppContext` keeps the
+    /// raw `Option` so each handler can decide.
+    pub shell: Option<Shell>,
+    pub fingerprint: String,
+    pub command_exists: Box<dyn Fn(&str) -> bool>,
+}
+
+impl AppContext {
+    /// Build a context for commands that *require* a loadable config
+    /// (`which`, `expand`, `timings`, `precache`). Fails fast if the
+    /// config is missing or unparseable.
+    ///
+    /// `precache_enabled` controls whether the `command_exists`
+    /// closure consults the on-disk precache hint. Most commands
+    /// pass `true`; the historical `make_command_exists(.., None)`
+    /// callers (precache itself, doctor) pass `false`.
+    pub fn build(
+        config_flag: Option<&Path>,
+        shell_flag: Option<&str>,
+        path_prepend: Option<&Path>,
+        precache_enabled: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let (config_path, config) = resolve_config(config_flag)?;
+        Ok(Self::assemble(config_path, config, shell_flag, path_prepend, precache_enabled)?)
+    }
+
+    /// Graceful variant: missing/unparseable config is *not* a hard
+    /// error; callers (`hook`, `doctor`) want to keep running and
+    /// surface the error themselves rather than abort. Returns the
+    /// parse-error message in `parse_error` when applicable.
+    ///
+    /// `OptionalContext` is the same shape as `AppContext` but with
+    /// `Option<Config>` so the caller can branch on absence.
+    pub fn build_optional(
+        config_flag: Option<&Path>,
+        shell_flag: Option<&str>,
+        path_prepend: Option<&Path>,
+        precache_enabled: bool,
+    ) -> OptionalContext {
+        let (config_path, config_opt, parse_error) = resolve_config_opt(config_flag);
+        let shell = resolve_shell(shell_flag).ok().flatten();
+        let resolved_shell = shell.unwrap_or(Shell::Bash);
+        let fingerprint = compute_precache_fingerprint(
+            &config_path,
+            &format!("{resolved_shell:?}").to_lowercase(),
+        );
+        let path_prepend_owned = path_prepend.map(|p| p.to_path_buf());
+        let command_exists: Box<dyn Fn(&str) -> bool> = if precache_enabled {
+            Box::new(make_command_exists_owned(path_prepend_owned, Some(fingerprint.clone())))
+        } else {
+            Box::new(make_command_exists_owned(path_prepend_owned, None))
+        };
+        OptionalContext {
+            config_path,
+            config: config_opt,
+            parse_error,
+            shell,
+            fingerprint,
+            command_exists,
+        }
+    }
+
+    fn assemble(
+        config_path: PathBuf,
+        config: Config,
+        shell_flag: Option<&str>,
+        path_prepend: Option<&Path>,
+        precache_enabled: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let shell = resolve_shell(shell_flag)?;
+        let resolved_shell = shell.unwrap_or(Shell::Bash);
+        let fingerprint = compute_precache_fingerprint(
+            &config_path,
+            &format!("{resolved_shell:?}").to_lowercase(),
+        );
+        let path_prepend_owned = path_prepend.map(|p| p.to_path_buf());
+        let command_exists: Box<dyn Fn(&str) -> bool> = if precache_enabled {
+            Box::new(make_command_exists_owned(path_prepend_owned, Some(fingerprint.clone())))
+        } else {
+            Box::new(make_command_exists_owned(path_prepend_owned, None))
+        };
+        Ok(Self {
+            config_path,
+            config,
+            shell,
+            fingerprint,
+            command_exists,
+        })
+    }
+}
+
+/// Same fields as [`AppContext`] but `config` is optional and a
+/// `parse_error` is carried forward — used by commands that must
+/// survive a missing or broken config (`hook`, `doctor`).
+pub struct OptionalContext {
+    pub config_path: PathBuf,
+    pub config: Option<Config>,
+    pub parse_error: Option<String>,
+    pub shell: Option<Shell>,
+    pub fingerprint: String,
+    pub command_exists: Box<dyn Fn(&str) -> bool>,
+}
+
+/// Owning variant of [`make_command_exists`]. The non-owning version
+/// is still used by tests that pin per-call lifetimes; this version
+/// exists so [`AppContext`] can hold a `'static`-bounded closure.
+fn make_command_exists_owned(
+    path_prepend: Option<PathBuf>,
+    precache_fingerprint: Option<String>,
+) -> impl Fn(&str) -> bool + 'static {
+    use runex_core::precache;
+
+    let hint = precache_fingerprint
+        .as_deref()
+        .and_then(precache::load_cache);
+    let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
+    #[cfg(windows)]
+    let effective_path = win_path::effective_search_path();
+
+    move |cmd: &str| -> bool {
+        if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
+            return false;
+        }
+
+        if let Some(&cached) = cache.borrow().get(cmd) {
+            return cached;
+        }
+
+        if let Some(ref h) = hint {
+            if let Some(&cached) = h.commands.get(cmd) {
+                if cached {
+                    cache.borrow_mut().insert(cmd.to_owned(), true);
+                    return true;
+                }
+            }
+        }
+
+        let live_check = |c: &str| -> bool {
+            #[cfg(windows)]
+            {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                which::which_in(c, Some(&effective_path.combined), &cwd).is_ok()
+            }
+            #[cfg(not(windows))]
+            {
+                which::which(c).is_ok()
+            }
+        };
+
+        let exists = if let Some(dir) = path_prepend.as_deref() {
+            #[cfg(windows)]
+            let direct = dir.join(cmd).is_file()
+                || dir.join(format!("{cmd}.exe")).is_file();
+            #[cfg(not(windows))]
+            let direct = dir.join(cmd).is_file();
+            direct || live_check(cmd)
+        } else {
+            live_check(cmd)
+        };
+
+        cache.borrow_mut().insert(cmd.to_owned(), exists);
+        exists
+    }
+}
+
 /// Build a `command_exists` closure with precache hint layer.
 ///
 /// When `path_prepend` is `Some(dir)`, files inside `dir` are checked first
@@ -859,9 +1047,17 @@ fn handle_doctor(
     strict: bool,
     json: bool,
 ) -> CmdResult {
-    let (config_path, config, parse_error) = resolve_config_opt(config_flag);
-    // Doctor checks live command existence — no precache (intentional)
-    let command_exists = make_command_exists(path_prepend, None);
+    // Doctor surfaces config errors rather than aborting on them, so
+    // we use the graceful builder. precache_enabled = false because
+    // doctor must always check live to surface stale-cache issues.
+    let ctx = AppContext::build_optional(config_flag, None, path_prepend, false);
+    let OptionalContext {
+        config_path,
+        config,
+        parse_error,
+        command_exists,
+        ..
+    } = ctx;
     let spinner = Spinner::start("Checking environment...");
     // Build informational env-info that doctor renders alongside the
     // config checks: Windows effective_search_path breakdown (see
@@ -1226,9 +1422,16 @@ fn handle_hook(
 
     // Config load failures are treated as "no expansion" — we still return the
     // InsertSpace action so the wrapper inserts a literal space on behalf of
-    // the user.
-    let (config_path, config_opt, _err) = resolve_config_opt(config_override);
-    let Some(config) = config_opt else {
+    // the user. Pass the shell explicitly via shell_flag so the fingerprint
+    // matches the shell the keystroke is for, not whatever `resolve_shell`
+    // would default to.
+    let ctx = AppContext::build_optional(
+        config_override,
+        Some(shell_str),
+        path_prepend,
+        true,
+    );
+    let Some(config) = ctx.config else {
         // No valid config: emit a plain InsertSpace and return. This avoids
         // making every keypress a no-op (which would swallow the trigger key)
         // when a user has a malformed config they haven't fixed yet.
@@ -1242,9 +1445,7 @@ fn handle_hook(
         return Ok(CmdOutcome::Ok);
     };
 
-    let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
-    let command_exists = make_command_exists(path_prepend, Some(&fp));
-    let action = runex_core::hook::hook(&config, shell, line, cursor, command_exists);
+    let action = runex_core::hook::hook(&config, shell, line, cursor, ctx.command_exists);
     println!("{}", runex_core::hook::render_action(shell, &action));
     Ok(CmdOutcome::Ok)
 }
@@ -1260,18 +1461,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             handle_list(&config, shell, cli.json)?
         }
         Commands::Which { token, why, shell: shell_str } => {
-            let (config_path, config) = resolve_config(cli.config.as_deref())?;
-            let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
-            let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
-            let command_exists = make_command_exists(cli.path_prepend.as_deref(), Some(&fp));
-            handle_which(token, &config, shell, &command_exists, cli.json, why)?
+            let ctx = AppContext::build(
+                cli.config.as_deref(),
+                shell_str.as_deref(),
+                cli.path_prepend.as_deref(),
+                true,
+            )?;
+            handle_which(
+                token,
+                &ctx.config,
+                ctx.shell.unwrap_or(Shell::Bash),
+                &*ctx.command_exists,
+                cli.json,
+                why,
+            )?
         }
         Commands::Expand { token, dry_run, shell: shell_str } => {
-            let (config_path, config) = resolve_config(cli.config.as_deref())?;
-            let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
-            let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
-            let command_exists = make_command_exists(cli.path_prepend.as_deref(), Some(&fp));
-            handle_expand(token, &config, shell, &command_exists, cli.json, dry_run)?
+            let ctx = AppContext::build(
+                cli.config.as_deref(),
+                shell_str.as_deref(),
+                cli.path_prepend.as_deref(),
+                true,
+            )?;
+            handle_expand(
+                token,
+                &ctx.config,
+                ctx.shell.unwrap_or(Shell::Bash),
+                &*ctx.command_exists,
+                cli.json,
+                dry_run,
+            )?
         }
         Commands::Export { shell, bin } => handle_export(shell, bin, cli.config.as_deref())?,
         Commands::Doctor { no_shell_aliases, verbose, strict } => handle_doctor(
@@ -1391,7 +1610,16 @@ mod tests {
     /// binary by consulting the registry's User PATH.
     #[test]
     #[cfg(windows)]
+    #[serial_test::serial(env_path)]
     fn make_command_exists_finds_user_path_binary_when_process_path_is_minimal() {
+        // `serial(env_path)` shares an exclusion group with the
+        // AppContext fingerprint stability test: both mutate / read
+        // $PATH and would otherwise produce flakes when run in
+        // parallel on Windows. The comment about "tests run
+        // sequentially within this test module" below predates B2 —
+        // that's no longer true crate-wide, hence the explicit
+        // `serial` attribute.
+
         // Probe whether cargo is on the registry User PATH; if not, this test
         // can't reliably assert anything (e.g. CI without cargo in user PATH).
         let user_path = read_user_path_for_test();
@@ -1644,6 +1872,67 @@ mod tests {
     }
 
     } // mod rc_file_non_regular
+
+    /// `AppContext` collapses the `resolve_config + resolve_shell +
+    /// compute_precache_fingerprint + make_command_exists` four-line
+    /// dance that used to live in five handlers. These tests pin the
+    /// builder's contract: same inputs produce same fingerprints
+    /// (cache stability), graceful builder survives missing config.
+    mod app_context {
+        use super::*;
+        use std::io::Write;
+
+        fn write_minimal_config(toml: &str) -> tempfile::NamedTempFile {
+            let mut f = tempfile::NamedTempFile::new().unwrap();
+            f.write_all(toml.as_bytes()).unwrap();
+            f.flush().unwrap();
+            f
+        }
+
+        #[test]
+        #[cfg_attr(windows, serial_test::serial(env_path))]
+        fn build_returns_same_fingerprint_for_identical_args() {
+            // The fingerprint depends on $PATH (via
+            // `compute_precache_fingerprint`). The Windows-only
+            // `make_command_exists_finds_user_path_binary_…` test
+            // also mutates $PATH; without the `serial` attribute on
+            // both, the two can interleave on a multi-threaded test
+            // runner and the fingerprints diverge. Linux has no
+            // equivalent mutator so the gating is Windows-only.
+            let cfg = write_minimal_config("version = 1\n");
+            let a = AppContext::build(Some(cfg.path()), Some("bash"), None, true)
+                .expect("build must succeed for a valid config");
+            let b = AppContext::build(Some(cfg.path()), Some("bash"), None, true)
+                .expect("build must succeed twice");
+            assert_eq!(
+                a.fingerprint, b.fingerprint,
+                "two builds with the same inputs must produce the same fingerprint, \
+                 otherwise on-disk precache hits would alternate between calls"
+            );
+        }
+
+        #[test]
+        fn build_optional_returns_none_config_when_path_missing() {
+            let nonexistent = std::path::Path::new("/nonexistent/runex/config.toml");
+            let ctx = AppContext::build_optional(Some(nonexistent), Some("bash"), None, true);
+            assert!(
+                ctx.config.is_none(),
+                "build_optional must return None config (not an Err) when the file is missing — \
+                 hook depends on this so it can fall back to InsertSpace"
+            );
+        }
+
+        #[test]
+        fn build_fails_when_config_path_missing() {
+            let nonexistent = std::path::Path::new("/nonexistent/runex/config.toml");
+            let result = AppContext::build(Some(nonexistent), Some("bash"), None, true);
+            assert!(
+                result.is_err(),
+                "build (non-graceful) must Err on missing config — \
+                 which/expand depend on this to surface the error"
+            );
+        }
+    }
 
     /// Handlers that previously called `std::process::exit(1)`
     /// directly are now testable from inside the process. These

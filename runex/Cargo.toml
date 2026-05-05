@@ -31,6 +31,11 @@ winreg = "0.55"
 [dev-dependencies]
 tempfile = "3"
 base64 = "0.22"
+# `serial_test` is needed for tests that mutate process-global state
+# ($PATH on Windows). Without it, the multi-threaded test runner can
+# interleave a $PATH-mutating test with a $PATH-reading test and
+# produce non-deterministic failures.
+serial_test = "3"
 
 # PTY-driven keystroke tests for the bash integration. Linux only;
 # the only consumer is `runex/tests/bash_pty_integration.rs`. expectrl
