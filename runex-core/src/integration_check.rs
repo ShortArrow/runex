@@ -36,14 +36,34 @@ const MAX_PROBE_FILE_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Read a file with the same safety guarantees as
 /// `config::read_config_source`: refuses non-regular files (FIFO /
-/// device nodes), refuses oversized content, and on Unix uses
-/// `O_NOFOLLOW | O_NONBLOCK` so a symlink at the final path
-/// component is rejected and `open()` cannot block on a named pipe
-/// with no writer. Returns `None` for any failure mode (the doctor
-/// callers all treat a `None` read as "skip / missing", which is
-/// the correct fail-safe outcome).
+/// device nodes), refuses oversized content, and refuses symlinks at
+/// the final path component on every platform.
+///
+/// * **Unix:** `O_NOFOLLOW | O_NONBLOCK` make `open()` itself fail
+///   on a final-component symlink and prevent a named pipe with no
+///   writer from blocking the doctor scan.
+/// * **Windows:** `OpenOptions::open()` follows symlinks/reparse
+///   points by default, so the protection is layered on by checking
+///   `symlink_metadata().file_type().is_symlink()` *before* opening.
+///   This covers ordinary symlinks; directory junctions and other
+///   reparse-point variants typically fail the `is_file()` check
+///   below, but we don't rely on that and the explicit symlink reject
+///   keeps policy parity with the clink write path in `main.rs`.
+///
+/// Returns `None` for any failure mode (the doctor callers all
+/// treat a `None` read as "skip / missing", which is the correct
+/// fail-safe outcome — never block, never panic, never read).
 fn read_capped_regular_file(path: &Path) -> Option<String> {
     use std::io::Read;
+
+    // Cross-platform symlink reject. Cheap (metadata-only) and runs
+    // before we call open(). On Unix this is redundant with O_NOFOLLOW
+    // but guards against future refactors of the open() flags.
+    let lmeta = std::fs::symlink_metadata(path).ok()?;
+    if lmeta.file_type().is_symlink() {
+        return None;
+    }
+
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt;
@@ -349,41 +369,142 @@ mod tests {
     }
 
     /// An rcfile larger than the safety cap must not cause `runex doctor`
-    /// to read the whole thing into memory. The check should treat
-    /// oversized content the same as missing — `Missing` if the file
-    /// exists but exceeds the cap (we can't know if the marker is
-    /// inside without reading, and we refuse to read).
+    /// to read the whole thing into memory. The file *exists* (so we
+    /// can't `Skipped` the way we do for an absent file), but we
+    /// refuse to inspect it — that maps to `Missing` ("we can't
+    /// confirm the marker is in there"). Tightly pinned: the
+    /// alternative would be silently treating the file as
+    /// marker-present, which would be a false-negative for the
+    /// "drift / not initialised" check.
     #[test]
-    fn rcfile_marker_check_skips_oversized_file() {
+    fn rcfile_marker_check_oversized_file_is_missing() {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join(".bashrc");
         // Write 11 MB; cap is 10 MB.
         let big: Vec<u8> = vec![b'x'; 11 * 1024 * 1024];
         std::fs::write(&p, &big).unwrap();
         let r = check_rcfile_marker(Shell::Bash, Some(&p));
+        // Pin Missing exactly. The contrast with the clink test below
+        // (which pins Skipped) is intentional and matches each
+        // check's "we can't read this" semantics.
         assert!(
             matches!(r, IntegrationCheck::Missing { .. }),
-            "oversized rcfile must be treated as Missing (bypass cap), got {r:?}"
+            "oversized rcfile must be reported as Missing — path.exists() \
+             but content can't be inspected; got {r:?}"
+        );
+    }
+
+    /// A symlink at the final path component must be rejected on
+    /// every platform — both for the clink-lua freshness check and
+    /// for the rcfile-marker check. Without this, an attacker who
+    /// can drop a symlink under `~/.local/share/clink/` (or under
+    /// `$HOME` for an rcfile) could redirect doctor's read to any
+    /// file the runex process can access — `~/.ssh/id_ed25519` etc.
+    /// We `None`-out the read so callers see the safe outcome
+    /// (Skipped for clink, Missing for rcfile).
+    #[cfg(unix)]
+    #[test]
+    fn rcfile_marker_check_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new().unwrap();
+        let real = tmp.path().join("real.bashrc");
+        write(&real, "alias ll=ls\n# runex-init\neval \"$(runex export bash)\"\n");
+        let link = tmp.path().join(".bashrc");
+        symlink(&real, &link).unwrap();
+        let r = check_rcfile_marker(Shell::Bash, Some(&link));
+        // Without the symlink reject, the marker would be found via
+        // the symlink and we'd return Ok — masking the redirection.
+        assert!(
+            matches!(r, IntegrationCheck::Missing { .. }),
+            "rcfile_marker must reject a symlink rcfile (return Missing); got {r:?}"
+        );
+    }
+
+    /// Windows mirror of `rcfile_marker_check_rejects_symlink`.
+    /// `symlink_file` requires Developer Mode or admin on Windows;
+    /// when the test runner can't create a symlink we *skip the test
+    /// silently* rather than fail — there's no way to assert the
+    /// guard without first creating a symlink, and forcing every
+    /// developer to enable Dev Mode would be hostile. CI's
+    /// windows-latest runners do allow it.
+    #[cfg(windows)]
+    #[test]
+    fn rcfile_marker_check_rejects_symlink_windows() {
+        use std::os::windows::fs::symlink_file;
+        let tmp = TempDir::new().unwrap();
+        let real = tmp.path().join("real.bashrc");
+        write(&real, "alias ll=ls\n# runex-init\neval \"$(runex export bash)\"\n");
+        let link = tmp.path().join(".bashrc");
+        if symlink_file(&real, &link).is_err() {
+            eprintln!("skipping: symlink creation requires Developer Mode / admin");
+            return;
+        }
+        let r = check_rcfile_marker(Shell::Bash, Some(&link));
+        assert!(
+            matches!(r, IntegrationCheck::Missing { .. }),
+            "rcfile_marker (Windows) must reject a symlink rcfile; got {r:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clink_lua_freshness_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new().unwrap();
+        let real = tmp.path().join("real.lua");
+        write(&real, "anything\n");
+        let link = tmp.path().join("runex.lua");
+        symlink(&real, &link).unwrap();
+        let r = check_clink_lua_freshness("anything\n", &[link]);
+        // Without the reject, content match would yield Ok via the
+        // symlink. With it, the only candidate is unreadable → Skipped.
+        assert!(
+            matches!(r, IntegrationCheck::Skipped { .. }),
+            "clink_lua_freshness must reject a symlink lua (return Skipped); got {r:?}"
+        );
+    }
+
+    /// Windows mirror of `clink_lua_freshness_rejects_symlink`. Same
+    /// silent-skip behavior when symlink creation requires elevated
+    /// privileges.
+    #[cfg(windows)]
+    #[test]
+    fn clink_lua_freshness_rejects_symlink_windows() {
+        use std::os::windows::fs::symlink_file;
+        let tmp = TempDir::new().unwrap();
+        let real = tmp.path().join("real.lua");
+        write(&real, "anything\n");
+        let link = tmp.path().join("runex.lua");
+        if symlink_file(&real, &link).is_err() {
+            eprintln!("skipping: symlink creation requires Developer Mode / admin");
+            return;
+        }
+        let r = check_clink_lua_freshness("anything\n", &[link]);
+        assert!(
+            matches!(r, IntegrationCheck::Skipped { .. }),
+            "clink_lua_freshness (Windows) must reject a symlink lua; got {r:?}"
         );
     }
 
     /// Same DoS/safety property for the clink lua freshness check.
     /// An attacker who controls the clink scripts directory could
     /// otherwise make `runex doctor` read an arbitrarily large file
-    /// every invocation.
+    /// every invocation. Unlike the rcfile check, the clink scan
+    /// loops over candidate paths and falls through to `Skipped`
+    /// when no candidate yields readable content — so an oversize
+    /// file at the only candidate looks the same as no file at all,
+    /// which is the right outcome (clink may not be installed).
     #[test]
-    fn clink_lua_freshness_skips_oversized_file() {
+    fn clink_lua_freshness_oversized_file_is_skipped() {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("runex.lua");
         let big: Vec<u8> = vec![b'x'; 11 * 1024 * 1024];
         std::fs::write(&p, &big).unwrap();
         let r = check_clink_lua_freshness("anything\n", &[p]);
-        // Treated as if the file weren't readable at all: Skipped /
-        // Missing — the important thing is that we don't load the
-        // 11 MB into a String.
         assert!(
-            matches!(r, IntegrationCheck::Skipped { .. } | IntegrationCheck::Missing { .. }),
-            "oversized clink lua must skip the comparison, got {r:?}"
+            matches!(r, IntegrationCheck::Skipped { .. }),
+            "oversized clink lua at the only candidate must be Skipped \
+             (drift undetectable, treat as no integration installed), got {r:?}"
         );
     }
 }
