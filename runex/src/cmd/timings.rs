@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use crate::domain::expand;
+use crate::app::expand;
 use crate::domain::shell::Shell;
 
 use crate::format;

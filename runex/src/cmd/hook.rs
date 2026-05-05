@@ -32,18 +32,18 @@ pub fn handle(
         s.push_str(&line[..cursor_safe]);
         s.push(' ');
         s.push_str(&line[cursor_safe..]);
-        let action = crate::domain::hook::HookAction::InsertSpace {
+        let action = crate::app::hook::HookAction::InsertSpace {
             line: s,
             cursor: cursor_safe + 1,
         };
-        println!("{}", crate::domain::hook::render_action(shell, &action));
+        println!("{}", crate::app::hook::render(shell, &action));
         return Ok(CmdOutcome::Ok);
     }
 
     // If the user pasted a block, the pwsh wrapper sets this flag so we skip
     // expansion entirely and behave like a normal space keypress.
     if paste_pending {
-        let action = crate::domain::hook::HookAction::InsertSpace {
+        let action = crate::app::hook::HookAction::InsertSpace {
             line: {
                 let mut s = String::with_capacity(line.len() + 1);
                 let cursor = cursor.min(line.len());
@@ -54,7 +54,7 @@ pub fn handle(
             },
             cursor: cursor.min(line.len()) + 1,
         };
-        println!("{}", crate::domain::hook::render_action(shell, &action));
+        println!("{}", crate::app::hook::render(shell, &action));
         return Ok(CmdOutcome::Ok);
     }
 
@@ -73,12 +73,12 @@ pub fn handle(
         s.push_str(&line[..cursor_safe]);
         s.push(' ');
         s.push_str(&line[cursor_safe..]);
-        let action = crate::domain::hook::HookAction::InsertSpace { line: s, cursor: cursor_safe + 1 };
-        println!("{}", crate::domain::hook::render_action(shell, &action));
+        let action = crate::app::hook::HookAction::InsertSpace { line: s, cursor: cursor_safe + 1 };
+        println!("{}", crate::app::hook::render(shell, &action));
         return Ok(CmdOutcome::Ok);
     };
 
-    let action = crate::domain::hook::hook(&config, shell, line, cursor, ctx.command_exists);
-    println!("{}", crate::domain::hook::render_action(shell, &action));
+    let action = crate::app::hook::run(&config, shell, line, cursor, ctx.command_exists);
+    println!("{}", crate::app::hook::render(shell, &action));
     Ok(CmdOutcome::Ok)
 }

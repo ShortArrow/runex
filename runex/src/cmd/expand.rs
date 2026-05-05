@@ -1,7 +1,7 @@
 //! `runex expand --token …` — emit the expansion (or pass-through).
 //! `--dry-run` prints diagnostic info instead of the final cast.
 
-use crate::domain::expand;
+use crate::app::expand;
 use crate::domain::model::{Config, ExpandResult};
 use crate::domain::shell::Shell;
 

@@ -1,6 +1,6 @@
 //! `runex which <token>` — show the rule that would match the token.
 
-use crate::domain::expand;
+use crate::app::expand;
 use crate::domain::model::Config;
 use crate::domain::shell::Shell;
 
