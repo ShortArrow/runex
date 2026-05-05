@@ -503,12 +503,20 @@ pub fn default_config_path() -> Result<PathBuf, ConfigError> {
 
 /// Resolve `$XDG_CONFIG_HOME`, falling back to `~/.config`.
 pub(crate) fn xdg_config_home() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("XDG_CONFIG_HOME") {
-        if !p.is_empty() {
-            return Some(PathBuf::from(p));
-        }
+    xdg_config_home_with(&crate::env::SystemHomeDir)
+}
+
+/// Resolver-injectable variant of [`xdg_config_home`]. The non-`_with`
+/// version forwards here with the production [`SystemHomeDir`].
+///
+/// Visibility is `pub` (not `pub(crate)`) so other crates in the
+/// workspace — currently the `runex` binary's `init` handler tests —
+/// can pass an [`crate::env::EnvHomeDir`] for hermetic test runs.
+pub fn xdg_config_home_with(env: &dyn crate::env::HomeDirResolver) -> Option<PathBuf> {
+    if let Some(p) = env.env_var("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(p));
     }
-    dirs::home_dir().map(|h| h.join(".config"))
+    env.home_dir().map(|h| h.join(".config"))
 }
 
 /// Load config from a file path.
@@ -919,6 +927,46 @@ expand = "git commit -m"
         let dir = xdg_config_home().unwrap();
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
         assert!(dir.ends_with(".config"), "expected ~/.config fallback, got {dir:?}");
+    }
+
+    /// `xdg_config_home_with` is the resolver-injectable variant
+    /// added in Phase B Step B3. Unlike the non-`_with` variant
+    /// these tests need no `#[serial]` because they don't touch
+    /// process env state.
+    #[test]
+    fn xdg_config_home_with_resolver_honours_env_var() {
+        use crate::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let owned: HashMap<String, String> = HashMap::from([
+            ("XDG_CONFIG_HOME".to_string(), "/test/xdg".to_string()),
+        ]);
+        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+        assert_eq!(xdg_config_home_with(&env), Some(PathBuf::from("/test/xdg")));
+    }
+
+    #[test]
+    fn xdg_config_home_with_resolver_falls_back_to_home_when_unset() {
+        use crate::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let owned: HashMap<String, String> = HashMap::from([
+            ("HOME".to_string(), "/test/home".to_string()),
+        ]);
+        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+        assert_eq!(
+            xdg_config_home_with(&env),
+            Some(PathBuf::from("/test/home/.config"))
+        );
+    }
+
+    #[test]
+    fn xdg_config_home_with_resolver_returns_none_when_neither_set() {
+        use crate::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let env = EnvHomeDir::new(|_| -> Option<String> {
+            let _: HashMap<String, String> = HashMap::new();
+            None
+        });
+        assert_eq!(xdg_config_home_with(&env), None);
     }
 
     /// Safety: see `default_config_path_env_override`.

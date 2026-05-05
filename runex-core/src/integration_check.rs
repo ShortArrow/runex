@@ -230,16 +230,24 @@ pub fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) -> Inte
 /// Default ordered list of paths to probe for the clink lua file on
 /// this platform. Callers may extend or override this list.
 pub fn default_clink_lua_paths() -> Vec<PathBuf> {
+    default_clink_lua_paths_with(&crate::env::SystemHomeDir)
+}
+
+/// Resolver-injectable variant of [`default_clink_lua_paths`]. The
+/// non-`_with` version forwards here with a [`SystemHomeDir`].
+///
+/// Used by tests that need to probe behaviour with a known set of
+/// `RUNEX_CLINK_LUA_PATH` / `LOCALAPPDATA` / `home_dir` values
+/// without leaking into the process env.
+pub fn default_clink_lua_paths_with(env: &dyn crate::env::HomeDirResolver) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    if let Ok(p) = std::env::var("RUNEX_CLINK_LUA_PATH") {
-        if !p.is_empty() {
-            out.push(PathBuf::from(p));
-        }
+    if let Some(p) = env.env_var("RUNEX_CLINK_LUA_PATH") {
+        out.push(PathBuf::from(p));
     }
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+    if let Some(local) = env.env_var("LOCALAPPDATA") {
         out.push(PathBuf::from(local).join("clink").join("runex.lua"));
     }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = env.home_dir() {
         // Linux clink fork (rare): keeps state under ~/.local/share/clink.
         out.push(home.join(".local").join("share").join("clink").join("runex.lua"));
     }
@@ -505,6 +513,72 @@ mod tests {
             matches!(r, IntegrationCheck::Skipped { .. }),
             "oversized clink lua at the only candidate must be Skipped \
              (drift undetectable, treat as no integration installed), got {r:?}"
+        );
+    }
+
+    /// `default_clink_lua_paths_with` (Phase B Step B3) is the
+    /// resolver-injectable variant. These tests pin its honour for
+    /// each env knob a real install consults: explicit
+    /// `RUNEX_CLINK_LUA_PATH` first, then `LOCALAPPDATA`-derived,
+    /// then `home_dir`-derived (Linux clink fork).
+    #[test]
+    fn default_clink_lua_paths_with_includes_explicit_override() {
+        use crate::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let owned: HashMap<String, String> = HashMap::from([
+            ("RUNEX_CLINK_LUA_PATH".to_string(), "/explicit/runex.lua".to_string()),
+        ]);
+        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+        let paths = default_clink_lua_paths_with(&env);
+        assert_eq!(
+            paths.first().map(|p| p.as_path()),
+            Some(std::path::Path::new("/explicit/runex.lua")),
+            "RUNEX_CLINK_LUA_PATH must be the first probed path"
+        );
+    }
+
+    #[test]
+    fn default_clink_lua_paths_with_uses_localappdata_when_set() {
+        use crate::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let owned: HashMap<String, String> = HashMap::from([
+            ("LOCALAPPDATA".to_string(), r"C:\Users\test\AppData\Local".to_string()),
+        ]);
+        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+        let paths = default_clink_lua_paths_with(&env);
+        assert!(
+            paths.iter().any(|p| p.ends_with("clink/runex.lua") || p.ends_with(r"clink\runex.lua")),
+            "LOCALAPPDATA-derived path missing from {paths:?}"
+        );
+    }
+
+    #[test]
+    fn default_clink_lua_paths_with_includes_home_for_linux_fork() {
+        use crate::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let owned: HashMap<String, String> = HashMap::from([
+            ("HOME".to_string(), "/test/home".to_string()),
+        ]);
+        let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+        let paths = default_clink_lua_paths_with(&env);
+        assert!(
+            paths.iter().any(|p| p == std::path::Path::new("/test/home/.local/share/clink/runex.lua")),
+            "Linux clink fork path missing from {paths:?}"
+        );
+    }
+
+    #[test]
+    fn default_clink_lua_paths_with_empty_resolver_returns_empty() {
+        use crate::env::EnvHomeDir;
+        use std::collections::HashMap;
+        let env = EnvHomeDir::new(|_| -> Option<String> {
+            let _: HashMap<String, String> = HashMap::new();
+            None
+        });
+        let paths = default_clink_lua_paths_with(&env);
+        assert!(
+            paths.is_empty(),
+            "no env vars set + no home → no paths probed; got {paths:?}"
         );
     }
 }

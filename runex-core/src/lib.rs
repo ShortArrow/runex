@@ -43,6 +43,7 @@
 //! - [`shell`] — shell-specific quoting and integration script generation.
 //! - [`timings`] — timing record types for `runex timings`.
 //! - [`config`] — TOML parse/validate + file I/O.
+//! - [`env`] — `HomeDirResolver` trait and adapters for tests.
 //! - [`init`] — `runex init` helpers (config seed, integration line).
 //! - [`doctor`] — environment health checks.
 //! - [`integration_check`] — rcfile-marker / clink-lua probes.
@@ -51,6 +52,7 @@
 
 pub mod config;
 pub mod doctor;
+pub mod env;
 pub mod expand;
 pub mod hook;
 pub mod init;

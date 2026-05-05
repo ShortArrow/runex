@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::config::xdg_config_home;
+use crate::env::{HomeDirResolver, SystemHomeDir};
 use crate::sanitize::{double_quote_escape, is_nu_drop_char};
 use crate::shell::{bash_quote_string, lua_quote_string, nu_quote_string, pwsh_quote_string, Shell};
 
@@ -173,8 +174,28 @@ pub fn next_steps_message(shell: Shell, rc_path: Option<&std::path::Path>) -> St
 ///
 /// For PowerShell, `$PROFILE` is a runtime variable and cannot be resolved statically,
 /// so the conventional filesystem path is used instead.
+///
+/// Production callers want the system home directory and inherit
+/// `$XDG_CONFIG_HOME` from the process env; this thin wrapper
+/// delegates to [`rc_file_for_with`] with the production
+/// [`SystemHomeDir`] resolver. Tests should call `rc_file_for_with`
+/// directly with an [`EnvHomeDir`] resolver — see the trait
+/// rationale in [`crate::env`].
 pub fn rc_file_for(shell: Shell) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
+    rc_file_for_with(shell, &SystemHomeDir)
+}
+
+/// Resolver-injectable variant of [`rc_file_for`]. The non-`_with`
+/// version forwards here with a [`SystemHomeDir`].
+///
+/// Phase B Step B3 added this so the Linux-sandbox failure mode
+/// (where `dirs::home_dir()` returns a path the test can't write
+/// to, and `$HOME` overrides are ignored on Windows) becomes
+/// testable: `rc_file_for_with(Shell::Bash, &EnvHomeDir::new(|n|
+/// match n { "HOME" => Some(tmpdir), _ => None }))` is fully
+/// hermetic.
+pub fn rc_file_for_with(shell: Shell, env: &dyn HomeDirResolver) -> Option<PathBuf> {
+    let home = env.home_dir()?;
     match shell {
         Shell::Bash => Some(home.join(".bashrc")),
         Shell::Zsh => Some(home.join(".zshrc")),
@@ -187,7 +208,12 @@ pub fn rc_file_for(shell: Shell) -> Option<PathBuf> {
             Some(base.join("Microsoft.PowerShell_profile.ps1"))
         }
         Shell::Nu => {
-            let cfg = xdg_config_home().unwrap_or_else(|| home.join(".config"));
+            // `xdg_config_home_with` shares the same resolver so
+            // `$XDG_CONFIG_HOME` is honoured before falling back to
+            // `~/.config`. Tests can drive both knobs from one
+            // closure.
+            let cfg = crate::config::xdg_config_home_with(env)
+                .unwrap_or_else(|| home.join(".config"));
             Some(cfg.join("nushell").join("env.nu"))
         }
         Shell::Clink => None,
@@ -609,5 +635,72 @@ mod tests {
     }
 
     } // mod nu_quote_path_deceptive
+
+    /// `rc_file_for_with` is the test-injectable variant added in
+    /// Phase B Step B3. These tests pin the contract codex flagged:
+    /// rc-file resolution must be hermetic when given an
+    /// `EnvHomeDir`, regardless of the platform's `dirs::home_dir`
+    /// fallback chain.
+    mod rc_file_for_with {
+        use super::*;
+        use crate::env::EnvHomeDir;
+        use std::collections::HashMap;
+
+        fn map_env(map: HashMap<&'static str, &'static str>) -> EnvHomeDir<impl Fn(&str) -> Option<String> + Send + Sync> {
+            let owned: HashMap<String, String> = map
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            EnvHomeDir::new(move |name| owned.get(name).cloned())
+        }
+
+        #[test]
+        fn bash_uses_home_from_resolver() {
+            let env = map_env(HashMap::from([("HOME", "/test/home")]));
+            let p = rc_file_for_with(Shell::Bash, &env).expect("bash rcfile must resolve");
+            assert_eq!(p, PathBuf::from("/test/home/.bashrc"));
+        }
+
+        #[test]
+        fn zsh_uses_home_from_resolver() {
+            let env = map_env(HashMap::from([("HOME", "/test/home")]));
+            let p = rc_file_for_with(Shell::Zsh, &env).expect("zsh rcfile must resolve");
+            assert_eq!(p, PathBuf::from("/test/home/.zshrc"));
+        }
+
+        #[test]
+        fn nu_honours_xdg_config_home_from_resolver() {
+            // When XDG_CONFIG_HOME is explicitly set, nu's env.nu
+            // sits under it — not under $HOME/.config. This is the
+            // codex-flagged failure mode: the production fallback
+            // path silently ignored the env var on Windows.
+            let env = map_env(HashMap::from([
+                ("HOME", "/test/home"),
+                ("XDG_CONFIG_HOME", "/test/xdg"),
+            ]));
+            let p = rc_file_for_with(Shell::Nu, &env).expect("nu rcfile must resolve");
+            assert_eq!(p, PathBuf::from("/test/xdg/nushell/env.nu"));
+        }
+
+        #[test]
+        fn nu_falls_back_to_home_config_when_xdg_unset() {
+            let env = map_env(HashMap::from([("HOME", "/test/home")]));
+            let p = rc_file_for_with(Shell::Nu, &env).expect("nu rcfile must resolve");
+            assert_eq!(p, PathBuf::from("/test/home/.config/nushell/env.nu"));
+        }
+
+        #[test]
+        fn clink_returns_none_regardless_of_resolver() {
+            let env = map_env(HashMap::from([("HOME", "/test/home")]));
+            assert_eq!(rc_file_for_with(Shell::Clink, &env), None);
+        }
+
+        #[test]
+        fn returns_none_when_resolver_has_no_home() {
+            let env = map_env(HashMap::new());
+            assert_eq!(rc_file_for_with(Shell::Bash, &env), None);
+            assert_eq!(rc_file_for_with(Shell::Zsh, &env), None);
+        }
+    }
 
 }
