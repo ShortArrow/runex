@@ -620,19 +620,35 @@ fn json_list_is_array_with_key_and_expand() {
 #[test]
 fn json_doctor_contract_pins_name_and_status_enum() {
     // The `--json` output is the contract for editor plugins / dashboards.
-    // Pin every check's shape (name: string, status: one of the known
-    // enum values) so a refactor that introduces a new status value or
-    // drops `name` from a check fails this test loudly. Wording, order,
-    // and human-readable detail are intentionally not pinned.
+    // Pin (1) the top-level shape (array of objects), (2) the always-
+    // present check names, (3) every check's name/status types, and
+    // (4) the `status` enum values. Wording, ordering, and human-
+    // readable detail strings are intentionally not pinned.
     let cfg = write_config("version = 1\n");
     let (stdout, _, ok) = run(&["doctor", "--json"], Some(cfg.path()), None);
     assert!(ok);
     let v: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}"));
-    let arr = v.as_array().expect("doctor --json must be an array");
-    assert!(!arr.is_empty());
-    // Mirrors `runex_core::doctor::CheckStatus`. If a new variant is
-    // added there, add it here too — that's the whole point of pinning.
+
+    // (1) top-level shape: array of objects.
+    let arr = v.as_array().expect("doctor --json must be a top-level array");
+    assert!(!arr.is_empty(), "doctor --json array must not be empty");
+    for check in arr {
+        assert!(check.is_object(), "every doctor check must be a JSON object: {check}");
+    }
+
+    // (2) always-present checks. Both fire on every run regardless of
+    //     config validity, so plugins can rely on their existence.
+    for required in ["config_file", "config_parse"] {
+        assert!(
+            doctor_check(&v, required).is_some(),
+            "doctor --json must always include the '{required}' check; got: {arr:?}"
+        );
+    }
+
+    // (3) + (4) per-check types and the status enum.
+    //     Mirrors `runex_core::doctor::CheckStatus`. If a new variant
+    //     is added there, add it here too — that's the whole point.
     const ALLOWED_STATUS: &[&str] = &["ok", "warn", "error"];
     for check in arr {
         let name = check["name"].as_str()
@@ -1565,44 +1581,90 @@ fn init_prompt_confirm_huge_stdin_is_treated_as_no() {
 // room for the rest of the command line and for tests to feed an
 // oversize input through argv.
 
-/// `runex hook --shell bash --line <oversize>` must finish quickly
-/// and emit a syntactically-valid InsertSpace directive. The shell
-/// wrapper would `eval` the output as a no-op buffer mutation. The
-/// time budget assertion catches accidental O(n) regressions where
-/// the handler walks the giant buffer instead of short-circuiting.
+/// `runex hook --shell bash --line <oversize>` must short-circuit to
+/// InsertSpace and skip expansion entirely. The cap exists so the
+/// per-keystroke handler stays O(1) regardless of buffer size; if the
+/// guard regresses the hook would walk a multi-MB paste on every key.
 ///
-/// We don't pin "doesn't expand `gcm`" here because the hook's
-/// command-position logic already prevents expansion in many
-/// arrangements of an oversize buffer. The unit-level cap behaviour
-/// is pinned by `hook_oversized_line_short_circuits_to_insertspace`
-/// in main.rs's test module.
+/// Construction: place the abbr `gcm` at the buffer head with the
+/// cursor immediately after it, then pad to `MAX_HOOK_LINE_BYTES + 1`
+/// with `a`. *With* the cap, the handler short-circuits and emits a
+/// literal space (the original `gcm` survives unchanged). *Without*
+/// the cap, the head `gcm` is in command position with cursor right
+/// after it — exactly the shape that triggers expansion — and the
+/// output would carry the expanded form. Asserting that the expanded
+/// form is absent is what makes this test exercise the cap branch
+/// rather than just timing it (timing-based assertions are flaky
+/// under CI load).
 #[test]
-fn hook_with_oversized_line_returns_promptly() {
+fn hook_oversize_line_short_circuits_before_expansion() {
     let cfg = write_config(
-        "version = 1\n\n[[abbr]]\nkey = \"gcm\"\nexpand = \"echo EXPANDED\"\n",
+        "version = 1\n\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
     );
-    let huge = "a".repeat(16 * 1024);
-    let cursor = huge.len().to_string();
 
-    let start = std::time::Instant::now();
+    // Cap is 16 KiB (`MAX_HOOK_LINE_BYTES`). Feed exactly cap + 1 so
+    // the `>` boundary fires with no slack. Has to stay below
+    // Windows' ~32 KiB CreateProcess argv limit, which it does.
+    const OVER_CAP: usize = 16 * 1024 + 1;
+    let head = "gcm";
+    let pad_len = OVER_CAP - head.len() - 1; // -1 for the space
+    let line = format!("{head} {}", "a".repeat(pad_len));
+    assert_eq!(line.len(), OVER_CAP, "test must feed exactly cap + 1 bytes");
+    let cursor = head.len().to_string(); // right after `gcm`
+
     let out = Command::new(bin())
         .args(["hook", "--shell", "bash", "--line"])
-        .arg(&huge)
+        .arg(&line)
         .args(["--cursor"])
         .arg(&cursor)
         .env("RUNEX_CONFIG", cfg.path())
         .output()
         .expect("runex hook must spawn");
-    let elapsed = start.elapsed();
 
-    assert!(out.status.success(), "hook must succeed: {:?}", out);
+    assert!(out.status.success(), "hook must succeed: {out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("READLINE_LINE="),
         "expected a READLINE_LINE assignment: {stdout}"
     );
     assert!(
-        elapsed.as_secs() < 1,
-        "hook with oversized --line must return promptly, took {elapsed:?}"
+        !stdout.contains("git commit -m"),
+        "oversize --line must short-circuit before expansion runs; \
+         expanded form leaked into stdout: {stdout}"
+    );
+}
+
+/// Reflexive control for the oversize test above: feed *exactly* the
+/// cap (cap bytes, not cap+1) with the same shape and confirm
+/// expansion still fires. Without this control, the oversize test
+/// could pass simply because the shape never triggers expansion at
+/// all — and we'd silently lose the cap-branch coverage.
+#[test]
+fn hook_at_cap_still_expands() {
+    let cfg = write_config(
+        "version = 1\n\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+
+    const AT_CAP: usize = 16 * 1024;
+    let head = "gcm";
+    let pad_len = AT_CAP - head.len() - 1;
+    let line = format!("{head} {}", "a".repeat(pad_len));
+    assert_eq!(line.len(), AT_CAP, "control must feed exactly cap bytes");
+    let cursor = head.len().to_string();
+
+    let out = Command::new(bin())
+        .args(["hook", "--shell", "bash", "--line"])
+        .arg(&line)
+        .args(["--cursor"])
+        .arg(&cursor)
+        .env("RUNEX_CONFIG", cfg.path())
+        .output()
+        .expect("runex hook must spawn");
+    assert!(out.status.success(), "hook must succeed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("git commit -m"),
+        "at-cap control must still expand; otherwise the oversize test \
+         is asserting the wrong branch: {stdout}"
     );
 }
