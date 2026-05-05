@@ -505,7 +505,24 @@ fn prompt_confirm(msg: &str) -> bool {
 /// can never match and would cause needless memory allocation in sanitize_for_display.
 const MAX_TOKEN_BYTES: usize = 1_024;
 
-type CmdResult = Result<(), Box<dyn std::error::Error>>;
+/// Outcome of a CLI subcommand handler. The handler reports either
+/// success (the process should exit 0) or a request to exit with a
+/// non-zero code. `main()` is the *only* function that calls
+/// `process::exit` — handlers return outcomes so they can be
+/// exercised from unit tests without taking the test process down
+/// with them. Unrecoverable errors still bubble up via the `Err`
+/// variant of `CmdResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmdOutcome {
+    /// Handler succeeded; main exits with 0.
+    Ok,
+    /// Handler requests a specific exit code (typically 1 for
+    /// validation failures or doctor-found-errors). Used in place
+    /// of `std::process::exit(n)` inside handlers.
+    ExitCode(i32),
+}
+
+type CmdResult = Result<CmdOutcome, Box<dyn std::error::Error>>;
 
 fn handle_version(json: bool) -> CmdResult {
     if json {
@@ -523,7 +540,7 @@ fn handle_version(json: bool) -> CmdResult {
     } else {
         println!("{}", version_line());
     }
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 fn handle_list(config: &Config, shell: Option<Shell>, json: bool) -> CmdResult {
@@ -534,7 +551,7 @@ fn handle_list(config: &Config, shell: Option<Shell>, json: bool) -> CmdResult {
             println!("{}\t{}", sanitize_for_display(key), sanitize_for_display(&exp));
         }
     }
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 fn handle_which(
@@ -550,7 +567,7 @@ fn handle_which(
             "error: token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
             token.len()
         );
-        std::process::exit(1);
+        return Ok(CmdOutcome::ExitCode(1));
     }
     let result = expand::which_abbr(config, &token, shell, command_exists);
     if json {
@@ -558,7 +575,7 @@ fn handle_which(
     } else {
         println!("{}", format_which_result(&result, why));
     }
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 fn handle_expand(
@@ -574,7 +591,7 @@ fn handle_expand(
             "error: --token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
             token.len()
         );
-        std::process::exit(1);
+        return Ok(CmdOutcome::ExitCode(1));
     }
     if dry_run {
         let result = expand::which_abbr(config, &token, shell, command_exists);
@@ -612,32 +629,38 @@ fn handle_expand(
             }
         }
     }
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
-/// Validate and parse the `--bin` argument for `export`.
+/// Validate the `--bin` argument for `export`.
 ///
 /// Rejects values that are empty, whitespace-only, too long, contain control
-/// characters, or contain non-printable-ASCII characters.  Only printable ASCII
+/// characters, or contain non-printable-ASCII characters. Only printable ASCII
 /// is allowed to prevent Unicode homoglyphs and bidirectional overrides from
 /// being silently embedded in generated shell scripts.
-fn validate_bin(bin: &str) {
+///
+/// Returns the error message to surface to the user on validation
+/// failure; `Ok(())` when the value passes. Caller is responsible
+/// for `eprintln!`ing the message and returning
+/// `CmdOutcome::ExitCode(1)` — keeping `validate_bin` itself I/O-free
+/// makes it a pure function the unit tests can drive directly.
+fn validate_bin(bin: &str) -> Result<(), String> {
     if bin.trim().is_empty() {
-        eprintln!("error: --bin must not be empty or whitespace-only");
-        std::process::exit(1);
+        return Err("--bin must not be empty or whitespace-only".into());
     }
     if bin.len() > MAX_BIN_LEN {
-        eprintln!("error: --bin is too long ({} bytes); maximum is {MAX_BIN_LEN}", bin.len());
-        std::process::exit(1);
+        return Err(format!(
+            "--bin is too long ({} bytes); maximum is {MAX_BIN_LEN}",
+            bin.len()
+        ));
     }
     if bin.chars().any(|c| c.is_ascii_control() || c == '\u{0085}' || c == '\u{2028}' || c == '\u{2029}') {
-        eprintln!("error: --bin contains an invalid control character");
-        std::process::exit(1);
+        return Err("--bin contains an invalid control character".into());
     }
     if bin.chars().any(|c| !c.is_ascii() || !c.is_ascii_graphic()) {
-        eprintln!("error: --bin must contain only printable ASCII characters");
-        std::process::exit(1);
+        return Err("--bin must contain only printable ASCII characters".into());
     }
+    Ok(())
 }
 
 fn handle_export(
@@ -645,7 +668,10 @@ fn handle_export(
     bin: String,
     config_flag: Option<&Path>,
 ) -> CmdResult {
-    validate_bin(&bin);
+    if let Err(msg) = validate_bin(&bin) {
+        eprintln!("error: {msg}");
+        return Ok(CmdOutcome::ExitCode(1));
+    }
     let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
         Box::<dyn std::error::Error>::from(e.to_string())
     })?;
@@ -681,7 +707,7 @@ fn handle_export(
         bin
     };
     print!("{}", runex_core::shell::export_script(s, &effective_bin, config.as_ref()));
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 fn handle_precache(
@@ -708,7 +734,7 @@ fn handle_precache(
             let cmds = precache::collect_unique_commands(&config);
             print!("{}", cmds.join(","));
         }
-        return Ok(());
+        return Ok(CmdOutcome::Ok);
     }
 
     let fp = compute_precache_fingerprint(&config_path, &shell_name);
@@ -718,7 +744,7 @@ fn handle_precache(
         let cache = precache::build_cache_from_resolved(&config, &fp, &resolved_str);
         let json = precache::cache_to_json(&cache);
         println!("{}", precache::export_statement(&shell_name, &json));
-        return Ok(());
+        return Ok(CmdOutcome::Ok);
     }
 
     // Default: use which::which() for command existence checks
@@ -727,7 +753,7 @@ fn handle_precache(
     let json = precache::cache_to_json(&cache);
 
     println!("{}", precache::export_statement(&shell_name, &json));
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 fn handle_timings(
@@ -759,7 +785,7 @@ fn handle_timings(
                     "error: key is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
                     k.len()
                 );
-                std::process::exit(1);
+                return Ok(CmdOutcome::ExitCode(1));
             }
             expand::expand_timed(&config, &k, shell, &command_exists, &mut timings);
         }
@@ -781,7 +807,7 @@ fn handle_timings(
     } else {
         print!("{}", format::format_timings_table(&timings));
     }
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 /// Compose the [`doctor::DoctorEnvInfo`] that the `doctor` subcommand
@@ -883,9 +909,9 @@ fn handle_doctor(
     }
 
     if !result.is_healthy() {
-        std::process::exit(1);
+        return Ok(CmdOutcome::ExitCode(1));
     }
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 fn handle_init(config_path: PathBuf, shell_override: Option<&str>, yes: bool) -> CmdResult {
@@ -936,7 +962,7 @@ fn handle_init(config_path: PathBuf, shell_override: Option<&str>, yes: bool) ->
 
     println!();
     println!("{}", runex_init::next_steps_message(shell, rc_path_for_next_steps.as_deref()));
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 /// Append the integration block to the rcfile for `shell`. Returns the
@@ -1030,7 +1056,7 @@ fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
     match probe {
         IntegrationCheck::Ok { detail, .. } => {
             println!("clink integration already up-to-date ({detail}).");
-            return Ok(());
+            return Ok(CmdOutcome::Ok);
         }
         IntegrationCheck::Outdated { path, .. } => {
             let msg = format!(
@@ -1039,7 +1065,7 @@ fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
             );
             if !(yes || prompt_confirm(&msg)) {
                 println!("Skipped clink integration update.");
-                return Ok(());
+                return Ok(CmdOutcome::Ok);
             }
         }
         IntegrationCheck::Skipped { .. } | IntegrationCheck::Missing { .. } => {
@@ -1050,7 +1076,7 @@ fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
             );
             if !(yes || prompt_confirm(&msg)) {
                 println!("Skipped clink integration.");
-                return Ok(());
+                return Ok(CmdOutcome::Ok);
             }
         }
     }
@@ -1060,7 +1086,7 @@ fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
         "Wrote clink integration to {}",
         sanitize_for_display(&install_path.display().to_string())
     );
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 /// Write `contents` to `install_path` with two safety properties the
@@ -1130,7 +1156,7 @@ fn write_clink_lua_safely(install_path: &Path, contents: &str) -> CmdResult {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(Box::new(e));
     }
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 
@@ -1177,7 +1203,7 @@ fn handle_hook(
             cursor: cursor_safe + 1,
         };
         println!("{}", runex_core::hook::render_action(shell, &action));
-        return Ok(());
+        return Ok(CmdOutcome::Ok);
     }
 
     // If the user pasted a block, the pwsh wrapper sets this flag so we skip
@@ -1195,7 +1221,7 @@ fn handle_hook(
             cursor: cursor.min(line.len()) + 1,
         };
         println!("{}", runex_core::hook::render_action(shell, &action));
-        return Ok(());
+        return Ok(CmdOutcome::Ok);
     }
 
     // Config load failures are treated as "no expansion" — we still return the
@@ -1213,83 +1239,79 @@ fn handle_hook(
         s.push_str(&line[cursor_safe..]);
         let action = runex_core::hook::HookAction::InsertSpace { line: s, cursor: cursor_safe + 1 };
         println!("{}", runex_core::hook::render_action(shell, &action));
-        return Ok(());
+        return Ok(CmdOutcome::Ok);
     };
 
     let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
     let command_exists = make_command_exists(path_prepend, Some(&fp));
     let action = runex_core::hook::hook(&config, shell, line, cursor, command_exists);
     println!("{}", runex_core::hook::render_action(shell, &action));
-    Ok(())
+    Ok(CmdOutcome::Ok)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    match cli.command {
+    let outcome: CmdOutcome = match cli.command {
         Commands::Version => handle_version(cli.json)?,
         Commands::List { shell: shell_str } => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let shell = resolve_shell(shell_str.as_deref())?;
-            handle_list(&config, shell, cli.json)?;
+            handle_list(&config, shell, cli.json)?
         }
         Commands::Which { token, why, shell: shell_str } => {
             let (config_path, config) = resolve_config(cli.config.as_deref())?;
             let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
             let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
             let command_exists = make_command_exists(cli.path_prepend.as_deref(), Some(&fp));
-            handle_which(token, &config, shell, &command_exists, cli.json, why)?;
+            handle_which(token, &config, shell, &command_exists, cli.json, why)?
         }
         Commands::Expand { token, dry_run, shell: shell_str } => {
             let (config_path, config) = resolve_config(cli.config.as_deref())?;
             let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
             let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
             let command_exists = make_command_exists(cli.path_prepend.as_deref(), Some(&fp));
-            handle_expand(token, &config, shell, &command_exists, cli.json, dry_run)?;
+            handle_expand(token, &config, shell, &command_exists, cli.json, dry_run)?
         }
-        Commands::Export { shell, bin } => {
-            handle_export(shell, bin, cli.config.as_deref())?;
-        }
-        Commands::Doctor { no_shell_aliases, verbose, strict } => {
-            handle_doctor(
-                cli.config.as_deref(),
-                cli.path_prepend.as_deref(),
-                no_shell_aliases,
-                verbose,
-                strict,
-                cli.json,
-            )?;
-        }
-        Commands::Precache { shell, list_commands, resolved } => {
-            handle_precache(shell, list_commands, resolved, cli.config.as_deref(), cli.path_prepend.as_deref())?;
-        }
-        Commands::Timings { key, shell: shell_str } => {
-            handle_timings(
-                key,
-                shell_str,
-                cli.config.as_deref(),
-                cli.path_prepend.as_deref(),
-                cli.json,
-            )?;
-        }
+        Commands::Export { shell, bin } => handle_export(shell, bin, cli.config.as_deref())?,
+        Commands::Doctor { no_shell_aliases, verbose, strict } => handle_doctor(
+            cli.config.as_deref(),
+            cli.path_prepend.as_deref(),
+            no_shell_aliases,
+            verbose,
+            strict,
+            cli.json,
+        )?,
+        Commands::Precache { shell, list_commands, resolved } => handle_precache(
+            shell,
+            list_commands,
+            resolved,
+            cli.config.as_deref(),
+            cli.path_prepend.as_deref(),
+        )?,
+        Commands::Timings { key, shell: shell_str } => handle_timings(
+            key,
+            shell_str,
+            cli.config.as_deref(),
+            cli.path_prepend.as_deref(),
+            cli.json,
+        )?,
         Commands::Init { shell, yes } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
                 p.to_path_buf()
             } else {
                 default_config_path()?
             };
-            handle_init(config_path, shell.as_deref(), yes)?;
+            handle_init(config_path, shell.as_deref(), yes)?
         }
-        Commands::Hook { shell, line, cursor, paste_pending } => {
-            handle_hook(
-                &shell,
-                &line,
-                cursor,
-                paste_pending,
-                cli.config.as_deref(),
-                cli.path_prepend.as_deref(),
-            )?;
-        }
+        Commands::Hook { shell, line, cursor, paste_pending } => handle_hook(
+            &shell,
+            &line,
+            cursor,
+            paste_pending,
+            cli.config.as_deref(),
+            cli.path_prepend.as_deref(),
+        )?,
         Commands::Add { key, expand, when } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
                 p.to_path_buf()
@@ -1303,6 +1325,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 when.as_deref(),
             )?;
             println!("Added: {} -> {}", sanitize_for_display(&key), sanitize_for_display(&expand));
+            CmdOutcome::Ok
         }
         Commands::Remove { key } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
@@ -1316,10 +1339,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 println!("No rule found for '{}'", sanitize_for_display(&key));
             }
+            CmdOutcome::Ok
         }
-    }
+    };
 
-    Ok(())
+    // Single point of `process::exit` for the whole CLI. Handlers
+    // never call `std::process::exit` themselves — they return
+    // `CmdOutcome::ExitCode(n)` and main translates that here. This
+    // is what makes handlers unit-testable: a test harness can call
+    // them directly and inspect the returned outcome instead of
+    // having the test process silently die.
+    match outcome {
+        CmdOutcome::Ok => Ok(()),
+        CmdOutcome::ExitCode(code) => std::process::exit(code),
+    }
 }
 
 #[cfg(test)]
@@ -1611,5 +1644,99 @@ mod tests {
     }
 
     } // mod rc_file_non_regular
+
+    /// Handlers that previously called `std::process::exit(1)`
+    /// directly are now testable from inside the process. These
+    /// tests confirm the new contract: a validation failure
+    /// returns `Ok(CmdOutcome::ExitCode(1))` instead of bringing
+    /// the test process down with it.
+    ///
+    /// The handlers exercised here are the ones that owned the
+    /// pre-B1 exits: handle_which / handle_expand / handle_timings
+    /// for over-long tokens, validate_bin (via handle_export) for
+    /// invalid bin strings.
+    mod handler_outcomes {
+        use super::*;
+        use runex_core::model::Config;
+
+        fn over_long_token() -> String {
+            // MAX_TOKEN_BYTES is 1_024; 1025 trips the guard with
+            // exactly one byte of slack.
+            "a".repeat(MAX_TOKEN_BYTES + 1)
+        }
+
+        fn never_exists(_: &str) -> bool {
+            false
+        }
+
+        #[test]
+        fn handle_which_over_long_token_returns_exit_code_1() {
+            let cfg = Config {
+                version: 1,
+                keybind: Default::default(),
+                precache: Default::default(),
+                abbr: Vec::new(),
+            };
+            let outcome = handle_which(
+                over_long_token(),
+                &cfg,
+                Shell::Bash,
+                &never_exists,
+                false,
+                false,
+            )
+            .expect("handle_which must return Ok, not Err, for an over-long token");
+            assert_eq!(outcome, CmdOutcome::ExitCode(1));
+        }
+
+        #[test]
+        fn handle_expand_over_long_token_returns_exit_code_1() {
+            let cfg = Config {
+                version: 1,
+                keybind: Default::default(),
+                precache: Default::default(),
+                abbr: Vec::new(),
+            };
+            let outcome = handle_expand(
+                over_long_token(),
+                &cfg,
+                Shell::Bash,
+                &never_exists,
+                false,
+                false,
+            )
+            .expect("handle_expand must return Ok, not Err, for an over-long token");
+            assert_eq!(outcome, CmdOutcome::ExitCode(1));
+        }
+
+        #[test]
+        fn validate_bin_rejects_empty() {
+            assert!(validate_bin("").is_err());
+            assert!(validate_bin("   ").is_err());
+        }
+
+        #[test]
+        fn validate_bin_rejects_oversize() {
+            let huge = "a".repeat(MAX_BIN_LEN + 1);
+            assert!(validate_bin(&huge).is_err());
+        }
+
+        #[test]
+        fn validate_bin_rejects_control_characters() {
+            assert!(validate_bin("ru\nnex").is_err()); // literal newline
+            assert!(validate_bin("ru\x07nex").is_err()); // BEL
+        }
+
+        #[test]
+        fn validate_bin_rejects_non_ascii() {
+            assert!(validate_bin("rünex").is_err());
+        }
+
+        #[test]
+        fn validate_bin_accepts_normal_name() {
+            assert!(validate_bin("runex").is_ok());
+            assert!(validate_bin("/usr/local/bin/runex").is_ok());
+        }
+    }
 
 }
