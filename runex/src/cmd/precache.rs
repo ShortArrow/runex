@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use runex_core::shell::Shell;
+use crate::domain::shell::Shell;
 
 use crate::util::path::make_command_exists;
 use crate::{compute_precache_fingerprint, resolve_config, CmdOutcome, CmdResult};
@@ -29,9 +29,9 @@ pub fn handle(
     config_flag: Option<&Path>,
     path_prepend: Option<&Path>,
 ) -> CmdResult {
-    use runex_core::precache;
+    use crate::app::precache;
 
-    let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
+    let s: Shell = shell.parse().map_err(|e: crate::domain::shell::ShellParseError| {
         Box::<dyn std::error::Error>::from(e.to_string())
     })?;
     let shell_name = format!("{s:?}").to_lowercase();

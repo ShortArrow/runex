@@ -1,9 +1,9 @@
 //! `runex expand --token …` — emit the expansion (or pass-through).
 //! `--dry-run` prints diagnostic info instead of the final cast.
 
-use runex_core::expand;
-use runex_core::model::{Config, ExpandResult};
-use runex_core::shell::Shell;
+use crate::domain::expand;
+use crate::domain::model::{Config, ExpandResult};
+use crate::domain::shell::Shell;
 
 use crate::format::{format_dry_run_result, which_result_to_json};
 use crate::{CmdOutcome, CmdResult, MAX_TOKEN_BYTES};

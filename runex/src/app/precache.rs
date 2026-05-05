@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::Config;
+use crate::domain::model::Config;
 
 /// Environment variable name for the command existence cache.
 pub const CACHE_ENV_VAR: &str = "RUNEX_CMD_CACHE_V1";
@@ -214,7 +214,7 @@ pub fn export_statement(shell: &str, cache_json: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Abbr, Config, KeybindConfig, PrecacheConfig, PerShellCmds, PerShellString};
+    use crate::domain::model::{Abbr, Config, KeybindConfig, PrecacheConfig, PerShellCmds, PerShellString};
 
     fn test_config(abbrs: Vec<Abbr>) -> Config {
         Config {

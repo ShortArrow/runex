@@ -3,9 +3,9 @@ use serde::Serialize;
 use std::cell::RefCell;
 use std::time::Instant;
 
-use crate::model::{Config, ExpandResult};
-use crate::shell::Shell;
-use crate::timings::{CommandExistsCall, Timings};
+use crate::domain::model::{Config, ExpandResult};
+use crate::domain::shell::Shell;
+use crate::domain::timings::{CommandExistsCall, Timings};
 
 /// A single skipped rule — part of the `which_abbr` trace.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -87,7 +87,7 @@ where
 /// Extract cursor placeholder `{}` from expansion text.
 /// Returns the text with `{}` removed and the byte offset where it was.
 fn extract_cursor_placeholder(text: &str) -> (String, Option<usize>) {
-    if let Some(pos) = text.find(crate::model::CURSOR_PLACEHOLDER) {
+    if let Some(pos) = text.find(crate::domain::model::CURSOR_PLACEHOLDER) {
         let mut result = String::with_capacity(text.len() - 2);
         result.push_str(&text[..pos]);
         result.push_str(&text[pos + 2..]);
@@ -232,8 +232,8 @@ pub fn list<'a>(config: &'a Config, shell: Option<Shell>) -> Vec<(&'a str, Strin
             let exp = match shell {
                 Some(sh) => a.expand.for_shell(sh)?.to_string(),
                 None => match &a.expand {
-                    crate::model::PerShellString::All(s) => s.clone(),
-                    crate::model::PerShellString::ByShell { default, .. } => {
+                    crate::domain::model::PerShellString::All(s) => s.clone(),
+                    crate::domain::model::PerShellString::ByShell { default, .. } => {
                         default.as_deref()?.to_string()
                     }
                 },
@@ -246,13 +246,13 @@ pub fn list<'a>(config: &'a Config, shell: Option<Shell>) -> Vec<(&'a str, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Abbr, Config, PerShellCmds, PerShellString};
+    use crate::domain::model::{Abbr, Config, PerShellCmds, PerShellString};
 
     fn cfg(abbrs: Vec<Abbr>) -> Config {
         Config {
             version: 1,
-            keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
+            keybind: crate::domain::model::KeybindConfig::default(),
+            precache: crate::domain::model::PrecacheConfig::default(),
             abbr: abbrs,
         }
     }
@@ -512,7 +512,7 @@ mod tests {
     #[test]
     fn expand_timed_same_result_as_expand() {
         let c = cfg(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
-        let mut timings = crate::timings::Timings::new();
+        let mut timings = crate::domain::timings::Timings::new();
         let result = expand_timed(&c, "ls", Shell::Bash, |_| true, &mut timings);
         assert_eq!(result, ExpandResult::Expanded { text: "lsd".into(), cursor_offset: None });
     }
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn expand_timed_records_command_exists_calls() {
         let c = cfg(vec![abbr_when("ls", "lsd", vec!["lsd"])]);
-        let mut timings = crate::timings::Timings::new();
+        let mut timings = crate::domain::timings::Timings::new();
         expand_timed(&c, "ls", Shell::Bash, |_| true, &mut timings);
         let calls = timings.command_exists_calls();
         assert_eq!(calls.len(), 1);
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn expand_timed_records_expand_phase() {
         let c = cfg(vec![abbr("gcm", "git commit -m")]);
-        let mut timings = crate::timings::Timings::new();
+        let mut timings = crate::domain::timings::Timings::new();
         expand_timed(&c, "gcm", Shell::Bash, |_| true, &mut timings);
         let phases = timings.phases();
         assert!(

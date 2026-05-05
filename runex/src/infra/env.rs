@@ -80,6 +80,7 @@ impl HomeDirResolver for SystemHomeDir {
 /// closure is `Send + Sync` so `&dyn HomeDirResolver` can cross
 /// thread boundaries (none of the runex-core callers spawn threads
 /// today, but the trait bound future-proofs the public API).
+#[allow(dead_code)]
 pub struct EnvHomeDir<F>
 where
     F: Fn(&str) -> Option<String> + Send + Sync,
@@ -91,6 +92,12 @@ impl<F> EnvHomeDir<F>
 where
     F: Fn(&str) -> Option<String> + Send + Sync,
 {
+    /// `#[allow(dead_code)]` because the only callers today are
+    /// inside `cfg(test)` modules under `runex/src/{app,infra}/`.
+    /// The struct + ctor stay on the API surface so future cmd-side
+    /// callers (e.g. a test that drives `cmd::init` with a hermetic
+    /// home dir) can pick them up without re-adding the type.
+    #[allow(dead_code)]
     pub fn new(lookup: F) -> Self {
         Self { lookup }
     }

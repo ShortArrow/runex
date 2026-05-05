@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use crate::config::xdg_config_home;
-use crate::env::{HomeDirResolver, SystemHomeDir};
-use crate::sanitize::{double_quote_escape, is_nu_drop_char};
-use crate::shell::{bash_quote_string, lua_quote_string, nu_quote_string, pwsh_quote_string, Shell};
+use crate::app::config::xdg_config_home;
+use crate::infra::env::{HomeDirResolver, SystemHomeDir};
+use crate::domain::sanitize::{double_quote_escape, is_nu_drop_char};
+use crate::domain::shell::{bash_quote_string, lua_quote_string, nu_quote_string, pwsh_quote_string, Shell};
 
 /// Quote a filesystem path for embedding in a Nu shell string literal.
 ///
@@ -75,7 +75,7 @@ expand = "git status"
 /// reload pathway, so users have to re-run `runex init clink` after a
 /// `runex` upgrade. `runex doctor` flags this drift via the
 /// `integration:clink` check (see
-/// [`crate::integration_check::check_clink_lua_freshness`]).
+/// [`crate::infra::integration_check::check_clink_lua_freshness`]).
 pub fn integration_line(shell: Shell, bin: &str) -> String {
     match shell {
         Shell::Bash => format!("eval \"$({} export bash)\"", bash_quote_string(bin)),
@@ -180,7 +180,7 @@ pub fn next_steps_message(shell: Shell, rc_path: Option<&std::path::Path>) -> St
 /// delegates to [`rc_file_for_with`] with the production
 /// [`SystemHomeDir`] resolver. Tests should call `rc_file_for_with`
 /// directly with an [`EnvHomeDir`] resolver — see the trait
-/// rationale in [`crate::env`].
+/// rationale in [`crate::infra::env`].
 pub fn rc_file_for(shell: Shell) -> Option<PathBuf> {
     rc_file_for_with(shell, &SystemHomeDir)
 }
@@ -212,7 +212,7 @@ pub fn rc_file_for_with(shell: Shell, env: &dyn HomeDirResolver) -> Option<PathB
             // `$XDG_CONFIG_HOME` is honoured before falling back to
             // `~/.config`. Tests can drive both knobs from one
             // closure.
-            let cfg = crate::config::xdg_config_home_with(env)
+            let cfg = crate::app::config::xdg_config_home_with(env)
                 .unwrap_or_else(|| home.join(".config"));
             Some(cfg.join("nushell").join("env.nu"))
         }
@@ -643,7 +643,7 @@ mod tests {
     /// fallback chain.
     mod rc_file_for_with {
         use super::*;
-        use crate::env::EnvHomeDir;
+        use crate::infra::env::EnvHomeDir;
         use std::collections::HashMap;
 
         fn map_env(map: HashMap<&'static str, &'static str>) -> EnvHomeDir<impl Fn(&str) -> Option<String> + Send + Sync> {

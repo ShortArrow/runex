@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use crate::model::{Config, TriggerKey};
-use crate::sanitize::{sanitize_for_display, sanitize_multiline_for_display};
+use crate::domain::model::{Config, TriggerKey};
+use crate::domain::sanitize::{sanitize_for_display, sanitize_multiline_for_display};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -296,10 +296,10 @@ const KNOWN_PRECACHE_KEYS: &[&str] = &["path_only"];
 pub fn check_rejected_rules(config_source: &str) -> Vec<Check> {
     // If deserialization fails (syntax / unsupported version), check_config_parse
     // already reports it. Emit nothing here.
-    let Ok(config) = crate::config::parse_config_lenient(config_source) else {
+    let Ok(config) = crate::app::config::parse_config_lenient(config_source) else {
         return vec![];
     };
-    let issues = crate::config::collect_validation_issues(&config);
+    let issues = crate::app::config::collect_validation_issues(&config);
     if issues.is_empty() {
         return vec![];
     }
@@ -319,13 +319,13 @@ pub fn check_rejected_rules(config_source: &str) -> Vec<Check> {
 
     for issue in issues {
         let check = match &issue {
-            crate::config::ValidationIssue::Config { .. } => Check {
+            crate::app::config::ValidationIssue::Config { .. } => Check {
                 name: "config_validation".into(),
                 status: CheckStatus::Warn,
                 detail: format!("config rejected: {}", issue.reason_text()),
                 detail_verbose: None,
             },
-            crate::config::ValidationIssue::Rule { rule_index, field_path, .. } => {
+            crate::app::config::ValidationIssue::Rule { rule_index, field_path, .. } => {
                 let safe_path = sanitize_for_display(field_path);
                 Check {
                     name: format!("config_validation.abbr[{rule_index}].{safe_path}"),
@@ -533,9 +533,9 @@ where
     }
     checks.extend(integration_marker_checks(&env_info.check_rcfile_markers));
     if let Some(export) = env_info.clink_export_for_drift_check.as_deref() {
-        let r = crate::integration_check::check_clink_lua_freshness(
+        let r = crate::infra::integration_check::check_clink_lua_freshness(
             export,
-            &crate::integration_check::default_clink_lua_paths(),
+            &crate::infra::integration_check::default_clink_lua_paths(),
         );
         checks.push(integration_check_to_check(r));
     }
@@ -551,8 +551,8 @@ where
 /// `Check` shape. `Outdated` becomes `Warn`, `Missing` becomes `Warn`
 /// (we don't escalate to Error: a stale or missing rcfile shouldn't
 /// fail `doctor` outright — the user's shell still works).
-fn integration_check_to_check(r: crate::integration_check::IntegrationCheck) -> Check {
-    use crate::integration_check::IntegrationCheck;
+fn integration_check_to_check(r: crate::infra::integration_check::IntegrationCheck) -> Check {
+    use crate::infra::integration_check::IntegrationCheck;
     let (status, name, detail) = match r {
         IntegrationCheck::Ok { name, detail } => (CheckStatus::Ok, name, detail),
         IntegrationCheck::Outdated { name, detail, .. } => (CheckStatus::Warn, name, detail),
@@ -564,8 +564,8 @@ fn integration_check_to_check(r: crate::integration_check::IntegrationCheck) -> 
 
 /// Run the rcfile-marker check for each shell selected by the caller.
 fn integration_marker_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
-    use crate::integration_check::check_rcfile_marker;
-    use crate::shell::Shell;
+    use crate::infra::integration_check::check_rcfile_marker;
+    use crate::domain::shell::Shell;
     let mut out = Vec::new();
     if sel.bash {
         out.push(integration_check_to_check(check_rcfile_marker(Shell::Bash, None)));
@@ -585,14 +585,14 @@ fn integration_marker_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Abbr, Config};
+    use crate::domain::model::{Abbr, Config};
     use std::io::Write;
 
     fn test_config(abbrs: Vec<Abbr>) -> Config {
         Config {
             version: 1,
-            keybind: crate::model::KeybindConfig::default(),
-            precache: crate::model::PrecacheConfig::default(),
+            keybind: crate::domain::model::KeybindConfig::default(),
+            precache: crate::domain::model::PrecacheConfig::default(),
             abbr: abbrs,
         }
     }
@@ -600,8 +600,8 @@ mod tests {
     fn abbr_when(key: &str, exp: &str, cmds: Vec<&str>) -> Abbr {
         Abbr {
             key: key.into(),
-            expand: crate::model::PerShellString::All(exp.into()),
-            when_command_exists: Some(crate::model::PerShellCmds::All(
+            expand: crate::domain::model::PerShellString::All(exp.into()),
+            when_command_exists: Some(crate::domain::model::PerShellCmds::All(
                 cmds.into_iter().map(String::from).collect(),
             )),
         }
@@ -610,7 +610,7 @@ mod tests {
     fn abbr(key: &str, exp: &str) -> Abbr {
         Abbr {
             key: key.into(),
-            expand: crate::model::PerShellString::All(exp.into()),
+            expand: crate::domain::model::PerShellString::All(exp.into()),
             when_command_exists: None,
         }
     }
@@ -740,14 +740,14 @@ mod tests {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = Config {
             version: 1,
-            keybind: crate::model::KeybindConfig {
-                self_insert: crate::model::PerShellKey {
-                    bash: Some(crate::model::TriggerKey::ShiftSpace),
+            keybind: crate::domain::model::KeybindConfig {
+                self_insert: crate::domain::model::PerShellKey {
+                    bash: Some(crate::domain::model::TriggerKey::ShiftSpace),
                     ..Default::default()
                 },
-                ..crate::model::KeybindConfig::default()
+                ..crate::domain::model::KeybindConfig::default()
             },
-            precache: crate::model::PrecacheConfig::default(),
+            precache: crate::domain::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
@@ -762,14 +762,14 @@ mod tests {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = Config {
             version: 1,
-            keybind: crate::model::KeybindConfig {
-                self_insert: crate::model::PerShellKey {
-                    pwsh: Some(crate::model::TriggerKey::ShiftSpace),
+            keybind: crate::domain::model::KeybindConfig {
+                self_insert: crate::domain::model::PerShellKey {
+                    pwsh: Some(crate::domain::model::TriggerKey::ShiftSpace),
                     ..Default::default()
                 },
-                ..crate::model::KeybindConfig::default()
+                ..crate::domain::model::KeybindConfig::default()
             },
-            precache: crate::model::PrecacheConfig::default(),
+            precache: crate::domain::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
@@ -784,14 +784,14 @@ mod tests {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = Config {
             version: 1,
-            keybind: crate::model::KeybindConfig {
-                self_insert: crate::model::PerShellKey {
-                    default: Some(crate::model::TriggerKey::ShiftSpace),
+            keybind: crate::domain::model::KeybindConfig {
+                self_insert: crate::domain::model::PerShellKey {
+                    default: Some(crate::domain::model::TriggerKey::ShiftSpace),
                     ..Default::default()
                 },
-                ..crate::model::KeybindConfig::default()
+                ..crate::domain::model::KeybindConfig::default()
             },
-            precache: crate::model::PrecacheConfig::default(),
+            precache: crate::domain::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
@@ -806,14 +806,14 @@ mod tests {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
         let cfg = Config {
             version: 1,
-            keybind: crate::model::KeybindConfig {
-                self_insert: crate::model::PerShellKey {
-                    pwsh: Some(crate::model::TriggerKey::ShiftSpace),
+            keybind: crate::domain::model::KeybindConfig {
+                self_insert: crate::domain::model::PerShellKey {
+                    pwsh: Some(crate::domain::model::TriggerKey::ShiftSpace),
                     ..Default::default()
                 },
-                ..crate::model::KeybindConfig::default()
+                ..crate::domain::model::KeybindConfig::default()
             },
-            precache: crate::model::PrecacheConfig::default(),
+            precache: crate::domain::model::PrecacheConfig::default(),
             abbr: vec![],
         };
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| true);
@@ -851,10 +851,10 @@ mod tests {
     #[test]
     fn doctor_command_check_detail_strips_control_chars_from_cmd() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
-        let cfg = test_config(vec![crate::model::Abbr {
+        let cfg = test_config(vec![crate::domain::model::Abbr {
             key: "ls".into(),
-            expand: crate::model::PerShellString::All("lsd".into()),
-            when_command_exists: Some(crate::model::PerShellCmds::All(vec!["cmd\x07inject".into()])),
+            expand: crate::domain::model::PerShellString::All("lsd".into()),
+            when_command_exists: Some(crate::domain::model::PerShellCmds::All(vec!["cmd\x07inject".into()])),
         }]);
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.contains("command:"));
@@ -885,10 +885,10 @@ mod tests {
     #[test]
     fn doctor_command_check_name_strips_control_chars() {
         let path = std::path::PathBuf::from("/nonexistent/config.toml");
-        let cfg = test_config(vec![crate::model::Abbr {
+        let cfg = test_config(vec![crate::domain::model::Abbr {
             key: "ls".into(),
-            expand: crate::model::PerShellString::All("lsd".into()),
-            when_command_exists: Some(crate::model::PerShellCmds::All(vec!["cmd\x1b[2Jevil".into()])),
+            expand: crate::domain::model::PerShellString::All("lsd".into()),
+            when_command_exists: Some(crate::domain::model::PerShellCmds::All(vec!["cmd\x1b[2Jevil".into()])),
         }]);
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.starts_with("command:"));

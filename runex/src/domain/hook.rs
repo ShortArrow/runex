@@ -4,9 +4,9 @@
 //! expansion logic — command-position detection, token extraction, cursor
 //! placeholder handling, shell escaping — lives here in Rust.
 
-use crate::expand::expand;
-use crate::model::{Config, ExpandResult, Shell};
-use crate::shell::{bash_quote_string, lua_quote_string, pwsh_quote_string};
+use crate::domain::expand::expand;
+use crate::domain::model::{Config, ExpandResult, Shell};
+use crate::domain::shell::{bash_quote_string, lua_quote_string, pwsh_quote_string};
 
 /// Outcome of a hook call — what the shell adapter should do to its buffer.
 ///
@@ -295,7 +295,7 @@ mod tests {
 
     // ---- hook() behaviour ----
 
-    use crate::config::parse_config;
+    use crate::app::config::parse_config;
 
     fn sample_config() -> Config {
         parse_config(

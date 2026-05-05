@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::model::Config;
-use crate::sanitize::is_deceptive_unicode;
+use crate::domain::model::Config;
+use crate::domain::sanitize::is_deceptive_unicode;
 
 const MAX_CONFIG_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 const MAX_ABBR_RULES: usize = 10_000;
@@ -304,11 +304,11 @@ const PER_SHELL_LABELS: &[&str] = &["default", "bash", "zsh", "pwsh", "nu"];
 /// Walk all rule-scope expand values for a `PerShellString`.
 /// Visits the same values in the same order as `PerShellString::all_values()`.
 fn walk_expand_issues(
-    expand: &crate::model::PerShellString,
+    expand: &crate::domain::model::PerShellString,
     rule_index: usize,
     mut f: impl FnMut(ValidationIssue) -> std::ops::ControlFlow<()>,
 ) -> std::ops::ControlFlow<()> {
-    use crate::model::PerShellString;
+    use crate::domain::model::PerShellString;
     match expand {
         PerShellString::All(s) => {
             if let Some(reason) = check_expand_value(s) {
@@ -346,11 +346,11 @@ fn walk_expand_issues(
 /// Walk `when_command_exists`, including the list-level `TooManyCmds` check
 /// before per-entry checks. Preserves `parse_config`'s ordering.
 fn walk_cmds_issues(
-    cmds: &crate::model::PerShellCmds,
+    cmds: &crate::domain::model::PerShellCmds,
     rule_index: usize,
     mut f: impl FnMut(ValidationIssue) -> std::ops::ControlFlow<()>,
 ) -> std::ops::ControlFlow<()> {
-    use crate::model::PerShellCmds;
+    use crate::domain::model::PerShellCmds;
 
     // Variant-level walk: always in [All] or [default, bash, zsh, pwsh, nu] order.
     let variants: Vec<(Option<&str>, &[String])> = match cmds {
@@ -503,7 +503,7 @@ pub fn default_config_path() -> Result<PathBuf, ConfigError> {
 
 /// Resolve `$XDG_CONFIG_HOME`, falling back to `~/.config`.
 pub(crate) fn xdg_config_home() -> Option<PathBuf> {
-    xdg_config_home_with(&crate::env::SystemHomeDir)
+    xdg_config_home_with(&crate::infra::env::SystemHomeDir)
 }
 
 /// Resolver-injectable variant of [`xdg_config_home`]. The non-`_with`
@@ -511,8 +511,8 @@ pub(crate) fn xdg_config_home() -> Option<PathBuf> {
 ///
 /// Visibility is `pub` (not `pub(crate)`) so other crates in the
 /// workspace — currently the `runex` binary's `init` handler tests —
-/// can pass an [`crate::env::EnvHomeDir`] for hermetic test runs.
-pub fn xdg_config_home_with(env: &dyn crate::env::HomeDirResolver) -> Option<PathBuf> {
+/// can pass an [`crate::infra::env::EnvHomeDir`] for hermetic test runs.
+pub fn xdg_config_home_with(env: &dyn crate::infra::env::HomeDirResolver) -> Option<PathBuf> {
     if let Some(p) = env.env_var("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(p));
     }
@@ -741,7 +741,7 @@ fn toml_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::TriggerKey;
+    use crate::domain::model::TriggerKey;
     use serial_test::serial;
 
     mod parsing {
@@ -760,7 +760,7 @@ expand = "git commit -m"
         assert_eq!(config.version, 1);
         assert_eq!(config.abbr.len(), 1);
         assert_eq!(config.abbr[0].key, "gcm");
-        assert_eq!(config.abbr[0].expand, crate::model::PerShellString::All("git commit -m".into()));
+        assert_eq!(config.abbr[0].expand, crate::domain::model::PerShellString::All("git commit -m".into()));
     }
 
     #[test]
@@ -776,7 +776,7 @@ when_command_exists = ["lsd"]
         let config = parse_config(toml).unwrap();
         assert_eq!(
             config.abbr[0].when_command_exists,
-            Some(crate::model::PerShellCmds::All(vec!["lsd".to_string()]))
+            Some(crate::domain::model::PerShellCmds::All(vec!["lsd".to_string()]))
         );
     }
 
@@ -935,7 +935,7 @@ expand = "git commit -m"
     /// process env state.
     #[test]
     fn xdg_config_home_with_resolver_honours_env_var() {
-        use crate::env::EnvHomeDir;
+        use crate::infra::env::EnvHomeDir;
         use std::collections::HashMap;
         let owned: HashMap<String, String> = HashMap::from([
             ("XDG_CONFIG_HOME".to_string(), "/test/xdg".to_string()),
@@ -946,7 +946,7 @@ expand = "git commit -m"
 
     #[test]
     fn xdg_config_home_with_resolver_falls_back_to_home_when_unset() {
-        use crate::env::EnvHomeDir;
+        use crate::infra::env::EnvHomeDir;
         use std::collections::HashMap;
         let owned: HashMap<String, String> = HashMap::from([
             ("HOME".to_string(), "/test/home".to_string()),
@@ -960,7 +960,7 @@ expand = "git commit -m"
 
     #[test]
     fn xdg_config_home_with_resolver_returns_none_when_neither_set() {
-        use crate::env::EnvHomeDir;
+        use crate::infra::env::EnvHomeDir;
         use std::collections::HashMap;
         let env = EnvHomeDir::new(|_| -> Option<String> {
             let _: HashMap<String, String> = HashMap::new();
@@ -1611,13 +1611,13 @@ expand = "git commit -m"
 
     mod validation_walker {
         use super::*;
-        use crate::model::{Abbr, PerShellCmds, PerShellString};
+        use crate::domain::model::{Abbr, PerShellCmds, PerShellString};
 
         fn make_config(abbrs: Vec<Abbr>) -> Config {
             Config {
                 version: 1,
-                keybind: crate::model::KeybindConfig::default(),
-                precache: crate::model::PrecacheConfig::default(),
+                keybind: crate::domain::model::KeybindConfig::default(),
+                precache: crate::domain::model::PrecacheConfig::default(),
                 abbr: abbrs,
             }
         }

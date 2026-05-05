@@ -12,9 +12,9 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use runex_core::init as runex_init;
-use runex_core::sanitize::sanitize_for_display;
-use runex_core::shell::Shell;
+use crate::app::init as runex_init;
+use crate::domain::sanitize::sanitize_for_display;
+use crate::domain::shell::Shell;
 
 use crate::resolve_config_opt;
 use crate::util::prompt::{prompt_confirm, read_rc_content};
@@ -46,7 +46,7 @@ pub fn handle(config_path: PathBuf, shell_override: Option<&str>, yes: bool) -> 
     }
 
     let shell = if let Some(s) = shell_override {
-        s.parse::<Shell>().map_err(|e: runex_core::shell::ShellParseError| {
+        s.parse::<Shell>().map_err(|e: crate::domain::shell::ShellParseError| {
             Box::<dyn std::error::Error>::from(e.to_string())
         })?
     } else {
@@ -141,7 +141,7 @@ fn install_rcfile_integration(shell: Shell, yes: bool) -> Result<Option<PathBuf>
 /// not abbreviation tables, so the dependency is light — but still
 /// correct to thread through).
 fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
-    use runex_core::integration_check::{check_clink_lua_freshness, IntegrationCheck};
+    use crate::infra::integration_check::{check_clink_lua_freshness, IntegrationCheck};
 
     // Compute the canonical export content for *this* runex binary.
     let bin = std::env::current_exe()
@@ -149,7 +149,7 @@ fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "runex".to_string());
     let (_path, config, _err) = resolve_config_opt(Some(config_path));
-    let new_content = runex_core::shell::export_script(Shell::Clink, &bin, config.as_ref());
+    let new_content = crate::domain::shell::export_script(Shell::Clink, &bin, config.as_ref());
 
     let install_path = runex_init::default_clink_lua_install_path();
 
@@ -158,7 +158,7 @@ fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
     // is purely informational ("would this PR-style overwrite be a no-op?").
     let probe = check_clink_lua_freshness(
         &new_content,
-        &runex_core::integration_check::default_clink_lua_paths(),
+        &crate::infra::integration_check::default_clink_lua_paths(),
     );
     match probe {
         IntegrationCheck::Ok { detail, .. } => {

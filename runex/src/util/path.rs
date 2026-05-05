@@ -62,7 +62,7 @@ pub fn make_command_exists<'a>(
     path_prepend: Option<&'a Path>,
     precache_fingerprint: Option<&str>,
 ) -> impl Fn(&str) -> bool + 'a {
-    use runex_core::precache;
+    use crate::app::precache;
 
     let hint = precache_fingerprint.and_then(precache::load_cache);
     let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
@@ -133,7 +133,7 @@ pub fn make_command_exists_owned(
     path_prepend: Option<PathBuf>,
     precache_fingerprint: Option<String>,
 ) -> impl Fn(&str) -> bool + 'static {
-    use runex_core::precache;
+    use crate::app::precache;
 
     let hint = precache_fingerprint
         .as_deref()

@@ -1,15 +1,18 @@
+mod app;
 mod cmd;
+mod domain;
 mod format;
+mod infra;
 mod shell_alias;
 mod util;
 #[cfg(windows)]
 mod win_path;
 
 use clap::{Parser, Subcommand};
-use runex_core::config::{default_config_path, load_config};
-use runex_core::model::Config;
-use runex_core::sanitize::sanitize_for_display;
-use runex_core::shell::Shell;
+use crate::app::config::{default_config_path, load_config};
+use crate::domain::model::Config;
+use crate::domain::sanitize::sanitize_for_display;
+use crate::domain::shell::Shell;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -256,8 +259,8 @@ pub(crate) fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Op
 /// Compute the precache fingerprint for the current environment.
 pub(crate) fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> String {
     let path_env = std::env::var("PATH").unwrap_or_default();
-    let mtime = runex_core::precache::config_mtime(config_path);
-    runex_core::precache::compute_fingerprint(&path_env, mtime, shell)
+    let mtime = crate::app::precache::config_mtime(config_path);
+    crate::app::precache::compute_fingerprint(&path_env, mtime, shell)
 }
 
 /// Per-invocation runtime context shared by every command handler
@@ -562,7 +565,6 @@ mod tests {
     use super::*;
 
     mod command_exists {
-        use super::*;
 
     #[test]
     /// `cargo` is guaranteed to be on PATH in a Rust build environment.
@@ -929,7 +931,7 @@ mod tests {
     /// invalid bin strings.
     mod handler_outcomes {
         use super::*;
-        use runex_core::model::Config;
+        use crate::domain::model::Config;
 
         fn over_long_token() -> String {
             // MAX_TOKEN_BYTES is 1_024; 1025 trips the guard with

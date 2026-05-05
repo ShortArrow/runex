@@ -10,9 +10,9 @@
 
 use std::path::Path;
 
-use runex_core::doctor;
-use runex_core::model::Config;
-use runex_core::shell::Shell;
+use crate::app::doctor;
+use crate::domain::model::Config;
+use crate::domain::shell::Shell;
 
 use crate::format::format_check_line;
 use crate::shell_alias::add_shell_alias_conflicts;
@@ -44,7 +44,7 @@ pub fn build_doctor_env_info(config: Option<&Config>) -> doctor::DoctorEnvInfo {
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "runex".to_string());
-    info.clink_export_for_drift_check = Some(runex_core::shell::export_script(
+    info.clink_export_for_drift_check = Some(crate::domain::shell::export_script(
         Shell::Clink,
         &clink_bin,
         config,
@@ -96,7 +96,7 @@ pub fn handle(
         add_shell_alias_conflicts(&mut result, config.as_ref());
     }
     // Read config source once (O_NOFOLLOW, size-capped) and share across checks.
-    let source = runex_core::config::read_config_source(&config_path).ok();
+    let source = crate::app::config::read_config_source(&config_path).ok();
 
     // Always: report every rule rejected by per-field validation so users know
     // *all* the invalid fields, not just the first one that tripped parse_config.

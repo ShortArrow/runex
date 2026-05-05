@@ -1,8 +1,8 @@
 //! `runex which <token>` — show the rule that would match the token.
 
-use runex_core::expand;
-use runex_core::model::Config;
-use runex_core::shell::Shell;
+use crate::domain::expand;
+use crate::domain::model::Config;
+use crate::domain::shell::Shell;
 
 use crate::format::{format_which_result, which_result_to_json};
 use crate::{CmdOutcome, CmdResult, MAX_TOKEN_BYTES};

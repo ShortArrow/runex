@@ -7,8 +7,8 @@
 
 use std::path::Path;
 
-use runex_core::expand;
-use runex_core::shell::Shell;
+use crate::domain::expand;
+use crate::domain::shell::Shell;
 
 use crate::format;
 use crate::util::path::make_command_exists;
@@ -22,7 +22,7 @@ pub fn handle(
     path_prepend: Option<&Path>,
     json: bool,
 ) -> CmdResult {
-    use runex_core::timings::{PhaseTimer, Timings};
+    use crate::domain::timings::{PhaseTimer, Timings};
 
     let mut timings = Timings::new();
 

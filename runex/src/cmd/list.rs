@@ -1,9 +1,9 @@
 //! `runex list` — print every abbreviation in the loaded config.
 
-use runex_core::expand;
-use runex_core::model::Config;
-use runex_core::sanitize::sanitize_for_display;
-use runex_core::shell::Shell;
+use crate::domain::expand;
+use crate::domain::model::Config;
+use crate::domain::sanitize::sanitize_for_display;
+use crate::domain::shell::Shell;
 
 use crate::{CmdOutcome, CmdResult};
 

@@ -1,6 +1,6 @@
-use runex_core::doctor::{Check, CheckStatus};
-use runex_core::expand::{self, WhichResult};
-use runex_core::sanitize::sanitize_for_display;
+use crate::app::doctor::{Check, CheckStatus};
+use crate::domain::expand::{self, WhichResult};
+use crate::domain::sanitize::sanitize_for_display;
 
 use crate::{ANSI_GREEN, ANSI_RED, ANSI_RESET, ANSI_YELLOW, CHECK_TAG_WIDTH, GIT_COMMIT};
 
@@ -287,7 +287,7 @@ pub(crate) fn format_duration(d: std::time::Duration) -> String {
     }
 }
 
-pub(crate) fn format_timings_table(timings: &runex_core::timings::Timings) -> String {
+pub(crate) fn format_timings_table(timings: &crate::domain::timings::Timings) -> String {
     let mut out = String::new();
     out.push_str(&format!(" {:<28} {}\n", "Phase", "Duration"));
     out.push_str(&format!(" {}\n", "─".repeat(38)));
@@ -306,7 +306,7 @@ pub(crate) fn format_timings_table(timings: &runex_core::timings::Timings) -> St
     out
 }
 
-pub(crate) fn format_timings_json(timings: &runex_core::timings::Timings) -> serde_json::Value {
+pub(crate) fn format_timings_json(timings: &crate::domain::timings::Timings) -> serde_json::Value {
     let phases: Vec<serde_json::Value> = timings.phases().iter().map(|p| {
         serde_json::json!({
             "name": p.name,
@@ -333,7 +333,7 @@ pub(crate) fn format_timings_json(timings: &runex_core::timings::Timings) -> ser
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runex_core::expand;
+    use crate::domain::expand;
 
     #[test]
     fn format_check_line_colors_only_tag_text() {
@@ -396,19 +396,19 @@ mod tests {
         assert!(!s.contains('\x07'), "format_dry_run_result: BEL must be stripped: {s:?}");
     }
 
-    fn make_abbr(key: &str, exp: &str) -> runex_core::model::Abbr {
-        runex_core::model::Abbr {
+    fn make_abbr(key: &str, exp: &str) -> crate::domain::model::Abbr {
+        crate::domain::model::Abbr {
             key: key.into(),
-            expand: runex_core::model::PerShellString::All(exp.into()),
+            expand: crate::domain::model::PerShellString::All(exp.into()),
             when_command_exists: None,
         }
     }
 
-    fn make_abbr_when(key: &str, exp: &str, cmds: Vec<&str>) -> runex_core::model::Abbr {
-        runex_core::model::Abbr {
+    fn make_abbr_when(key: &str, exp: &str, cmds: Vec<&str>) -> crate::domain::model::Abbr {
+        crate::domain::model::Abbr {
             key: key.into(),
-            expand: runex_core::model::PerShellString::All(exp.into()),
-            when_command_exists: Some(runex_core::model::PerShellCmds::All(
+            expand: crate::domain::model::PerShellString::All(exp.into()),
+            when_command_exists: Some(crate::domain::model::PerShellCmds::All(
                 cmds.into_iter().map(String::from).collect(),
             )),
         }
@@ -416,13 +416,13 @@ mod tests {
 
     #[test]
     fn format_dry_run_no_match() {
-        let config = runex_core::model::Config {
+        let config = crate::domain::model::Config {
             version: 1,
-            keybind: runex_core::model::KeybindConfig::default(),
-            precache: runex_core::model::PrecacheConfig::default(),
+            keybind: crate::domain::model::KeybindConfig::default(),
+            precache: crate::domain::model::PrecacheConfig::default(),
             abbr: vec![],
         };
-        let result = expand::which_abbr(&config, "xyz", runex_core::shell::Shell::Bash, |_| true);
+        let result = expand::which_abbr(&config, "xyz", crate::domain::shell::Shell::Bash, |_| true);
         let out = format_dry_run_result("xyz", &result);
         assert!(out.contains("token: xyz"));
         assert!(out.contains("no rule matched"));
@@ -431,13 +431,13 @@ mod tests {
 
     #[test]
     fn format_dry_run_expanded() {
-        let config = runex_core::model::Config {
+        let config = crate::domain::model::Config {
             version: 1,
-            keybind: runex_core::model::KeybindConfig::default(),
-            precache: runex_core::model::PrecacheConfig::default(),
+            keybind: crate::domain::model::KeybindConfig::default(),
+            precache: crate::domain::model::PrecacheConfig::default(),
             abbr: vec![make_abbr("gcm", "git commit -m")],
         };
-        let result = expand::which_abbr(&config, "gcm", runex_core::shell::Shell::Bash, |_| true);
+        let result = expand::which_abbr(&config, "gcm", crate::domain::shell::Shell::Bash, |_| true);
         let out = format_dry_run_result("gcm", &result);
         assert!(out.contains("token: gcm"));
         assert!(out.contains("expanded  ->  git commit -m"));
@@ -446,13 +446,13 @@ mod tests {
 
     #[test]
     fn format_dry_run_condition_failed() {
-        let config = runex_core::model::Config {
+        let config = crate::domain::model::Config {
             version: 1,
-            keybind: runex_core::model::KeybindConfig::default(),
-            precache: runex_core::model::PrecacheConfig::default(),
+            keybind: crate::domain::model::KeybindConfig::default(),
+            precache: crate::domain::model::PrecacheConfig::default(),
             abbr: vec![make_abbr_when("ls", "lsd", vec!["lsd"])],
         };
-        let result = expand::which_abbr(&config, "ls", runex_core::shell::Shell::Bash, |_| false);
+        let result = expand::which_abbr(&config, "ls", crate::domain::shell::Shell::Bash, |_| false);
         let out = format_dry_run_result("ls", &result);
         assert!(out.contains("lsd: NOT FOUND"), "out: {out}");
         assert!(out.contains("pass-through"), "out: {out}");
@@ -460,16 +460,16 @@ mod tests {
 
     #[test]
     fn format_dry_run_duplicate_key_fallthrough() {
-        let config = runex_core::model::Config {
+        let config = crate::domain::model::Config {
             version: 1,
-            keybind: runex_core::model::KeybindConfig::default(),
-            precache: runex_core::model::PrecacheConfig::default(),
+            keybind: crate::domain::model::KeybindConfig::default(),
+            precache: crate::domain::model::PrecacheConfig::default(),
             abbr: vec![
                 make_abbr("ls", "ls"),
                 make_abbr("ls", "lsd"),
             ],
         };
-        let result = expand::which_abbr(&config, "ls", runex_core::shell::Shell::Bash, |_| true);
+        let result = expand::which_abbr(&config, "ls", crate::domain::shell::Shell::Bash, |_| true);
         let out = format_dry_run_result("ls", &result);
         assert!(out.contains("rule #1 skipped"), "out: {out}");
         assert!(out.contains("expanded  ->  lsd"), "out: {out}");
@@ -477,7 +477,7 @@ mod tests {
 
     // ── timings formatting tests ────────────────────────────────────────
 
-    use runex_core::timings::Timings;
+    use crate::domain::timings::Timings;
     use std::time::Duration;
 
     #[test]

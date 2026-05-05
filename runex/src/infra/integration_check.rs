@@ -20,9 +20,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::init::{rc_file_for, RUNEX_INIT_MARKER};
-use crate::sanitize::sanitize_for_display;
-use crate::shell::Shell;
+use crate::app::init::{rc_file_for, RUNEX_INIT_MARKER};
+use crate::domain::sanitize::sanitize_for_display;
+use crate::domain::shell::Shell;
 
 /// Maximum bytes any of the rcfile / clink-lua probes will read.
 /// Matches `config::MAX_CONFIG_FILE_BYTES` so the safety story is
@@ -109,6 +109,13 @@ pub enum IntegrationCheck {
 }
 
 impl IntegrationCheck {
+    /// Convenience accessor used historically by external callers of
+    /// `runex-core`. After Phase C absorbed runex-core into the bin
+    /// crate the accessors have no internal callers; the
+    /// `#[allow(dead_code)]` keeps them on the API surface so the
+    /// `cmd::doctor` formatter can switch to using them later
+    /// without having to re-add the methods.
+    #[allow(dead_code)]
     pub fn name(&self) -> &str {
         match self {
             IntegrationCheck::Ok { name, .. }
@@ -118,6 +125,7 @@ impl IntegrationCheck {
         }
     }
 
+    #[allow(dead_code)]
     pub fn detail(&self) -> &str {
         match self {
             IntegrationCheck::Ok { detail, .. }
@@ -170,7 +178,7 @@ pub fn check_clink_lua_freshness(current_export: &str, search_paths: &[PathBuf])
 
 /// Confirm that the rcfile for `shell` mentions the runex init marker.
 /// `rcfile_override` is for tests; production callers pass `None` and
-/// fall back to [`crate::init::rc_file_for`].
+/// fall back to [`crate::app::init::rc_file_for`].
 pub fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) -> IntegrationCheck {
     let name = format!("integration:{}", shell_short_name(shell));
     let path = match rcfile_override {
@@ -230,7 +238,7 @@ pub fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) -> Inte
 /// Default ordered list of paths to probe for the clink lua file on
 /// this platform. Callers may extend or override this list.
 pub fn default_clink_lua_paths() -> Vec<PathBuf> {
-    default_clink_lua_paths_with(&crate::env::SystemHomeDir)
+    default_clink_lua_paths_with(&crate::infra::env::SystemHomeDir)
 }
 
 /// Resolver-injectable variant of [`default_clink_lua_paths`]. The
@@ -239,7 +247,7 @@ pub fn default_clink_lua_paths() -> Vec<PathBuf> {
 /// Used by tests that need to probe behaviour with a known set of
 /// `RUNEX_CLINK_LUA_PATH` / `LOCALAPPDATA` / `home_dir` values
 /// without leaking into the process env.
-pub fn default_clink_lua_paths_with(env: &dyn crate::env::HomeDirResolver) -> Vec<PathBuf> {
+pub fn default_clink_lua_paths_with(env: &dyn crate::infra::env::HomeDirResolver) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Some(p) = env.env_var("RUNEX_CLINK_LUA_PATH") {
         out.push(PathBuf::from(p));
@@ -523,7 +531,7 @@ mod tests {
     /// then `home_dir`-derived (Linux clink fork).
     #[test]
     fn default_clink_lua_paths_with_includes_explicit_override() {
-        use crate::env::EnvHomeDir;
+        use crate::infra::env::EnvHomeDir;
         use std::collections::HashMap;
         let owned: HashMap<String, String> = HashMap::from([
             ("RUNEX_CLINK_LUA_PATH".to_string(), "/explicit/runex.lua".to_string()),
@@ -539,7 +547,7 @@ mod tests {
 
     #[test]
     fn default_clink_lua_paths_with_uses_localappdata_when_set() {
-        use crate::env::EnvHomeDir;
+        use crate::infra::env::EnvHomeDir;
         use std::collections::HashMap;
         let owned: HashMap<String, String> = HashMap::from([
             ("LOCALAPPDATA".to_string(), r"C:\Users\test\AppData\Local".to_string()),
@@ -554,7 +562,7 @@ mod tests {
 
     #[test]
     fn default_clink_lua_paths_with_includes_home_for_linux_fork() {
-        use crate::env::EnvHomeDir;
+        use crate::infra::env::EnvHomeDir;
         use std::collections::HashMap;
         let owned: HashMap<String, String> = HashMap::from([
             ("HOME".to_string(), "/test/home".to_string()),
@@ -569,7 +577,7 @@ mod tests {
 
     #[test]
     fn default_clink_lua_paths_with_empty_resolver_returns_empty() {
-        use crate::env::EnvHomeDir;
+        use crate::infra::env::EnvHomeDir;
         use std::collections::HashMap;
         let env = EnvHomeDir::new(|_| -> Option<String> {
             let _: HashMap<String, String> = HashMap::new();

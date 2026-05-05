@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use runex_core::sanitize::sanitize_for_display;
+use crate::domain::sanitize::sanitize_for_display;
 
 use crate::{CmdOutcome, CmdResult};
 
@@ -18,7 +18,7 @@ pub fn handle_add(
     expand: &str,
     when_command_exists: Option<&[String]>,
 ) -> CmdResult {
-    runex_core::config::append_abbr_to_file(config_path, key, expand, when_command_exists)?;
+    crate::app::config::append_abbr_to_file(config_path, key, expand, when_command_exists)?;
     println!(
         "Added: {} -> {}",
         sanitize_for_display(key),
@@ -28,7 +28,7 @@ pub fn handle_add(
 }
 
 pub fn handle_remove(config_path: &Path, key: &str) -> CmdResult {
-    let removed = runex_core::config::remove_abbr_from_file(config_path, key)?;
+    let removed = crate::app::config::remove_abbr_from_file(config_path, key)?;
     if removed > 0 {
         println!(
             "Removed {} rule(s) for '{}'",

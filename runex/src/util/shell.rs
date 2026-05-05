@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use runex_core::shell::Shell;
+use crate::domain::shell::Shell;
 
 /// Infer the current shell from environment variables.
 ///
@@ -33,7 +33,7 @@ pub fn detect_shell() -> Option<Shell> {
 /// Returns `None` when no shell could be determined (both flag absent and detection failed).
 pub fn resolve_shell(shell_flag: Option<&str>) -> Result<Option<Shell>, Box<dyn std::error::Error>> {
     if let Some(s) = shell_flag {
-        let sh = s.parse::<Shell>().map_err(|e: runex_core::shell::ShellParseError| {
+        let sh = s.parse::<Shell>().map_err(|e: crate::domain::shell::ShellParseError| {
             Box::<dyn std::error::Error>::from(e.to_string())
         })?;
         return Ok(Some(sh));

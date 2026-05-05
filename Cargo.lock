@@ -556,13 +556,16 @@ version = "0.1.13"
 dependencies = [
  "base64",
  "clap",
+ "dirs",
  "expectrl",
  "libc",
- "runex-core",
  "serde",
  "serde_json",
  "serial_test",
  "tempfile",
+ "thiserror",
+ "toml",
+ "toml_edit",
  "which",
  "winreg",
 ]

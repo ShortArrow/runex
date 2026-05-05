@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use runex_core::shell::Shell;
+use crate::domain::shell::Shell;
 
 use crate::{resolve_config, resolve_config_opt, CmdOutcome, CmdResult, MAX_BIN_LEN};
 
@@ -49,7 +49,7 @@ pub fn handle(shell: String, bin: String, config_flag: Option<&Path>) -> CmdResu
         eprintln!("error: {msg}");
         return Ok(CmdOutcome::ExitCode(1));
     }
-    let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
+    let s: Shell = shell.parse().map_err(|e: crate::domain::shell::ShellParseError| {
         Box::<dyn std::error::Error>::from(e.to_string())
     })?;
     let config = if config_flag.is_some() {
@@ -83,6 +83,6 @@ pub fn handle(shell: String, bin: String, config_flag: Option<&Path>) -> CmdResu
     } else {
         bin
     };
-    print!("{}", runex_core::shell::export_script(s, &effective_bin, config.as_ref()));
+    print!("{}", crate::domain::shell::export_script(s, &effective_bin, config.as_ref()));
     Ok(CmdOutcome::Ok)
 }
