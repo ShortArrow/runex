@@ -8,7 +8,7 @@ use crate::domain::shell::Shell;
 use crate::format::{format_dry_run_result, which_result_to_json};
 use crate::{CmdOutcome, CmdResult, MAX_TOKEN_BYTES};
 
-pub fn handle(
+pub(crate) fn handle(
     token: String,
     config: &Config,
     shell: Shell,

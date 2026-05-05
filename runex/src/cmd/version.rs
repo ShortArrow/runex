@@ -2,7 +2,7 @@
 
 use crate::{format::version_line, CmdOutcome, CmdResult, GIT_COMMIT};
 
-pub fn handle(json: bool) -> CmdResult {
+pub(crate) fn handle(json: bool) -> CmdResult {
     if json {
         #[derive(serde::Serialize)]
         struct VersionJson<'a> {

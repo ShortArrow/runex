@@ -7,7 +7,7 @@ use crate::domain::shell::Shell;
 
 use crate::{CmdOutcome, CmdResult};
 
-pub fn handle(config: &Config, shell: Option<Shell>, json: bool) -> CmdResult {
+pub(crate) fn handle(config: &Config, shell: Option<Shell>, json: bool) -> CmdResult {
     if json {
         println!("{}", serde_json::to_string_pretty(&config.abbr)?);
     } else {

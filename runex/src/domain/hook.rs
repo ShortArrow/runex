@@ -14,7 +14,7 @@ use crate::domain::shell::{bash_quote_string, lua_quote_string, pwsh_quote_strin
 /// in **bytes** from the start of `line`. Shells are expected to replace their
 /// buffer and cursor with these values atomically.
 #[derive(Debug, Clone, PartialEq)]
-pub enum HookAction {
+pub(crate) enum HookAction {
     /// The token at the cursor expanded; shell should replace the buffer.
     Replace { line: String, cursor: usize },
     /// No expansion happened; shell should just insert a literal space at the
@@ -27,7 +27,7 @@ pub enum HookAction {
 /// `line` is the shell's current buffer, `cursor` is the byte offset of the
 /// caret. If a known abbreviation ends at the cursor and the prefix is a
 /// command position, expand it; otherwise fall back to inserting a space.
-pub fn hook<F>(
+pub(crate) fn hook<F>(
     config: &Config,
     shell: Shell,
     line: &str,
@@ -124,7 +124,7 @@ fn is_known_token(config: &Config, token: &str) -> bool {
 /// fragment five trivial format strings across five files without
 /// improving testability — the existing per-shell unit tests in this
 /// module already exercise each arm independently.
-pub fn render_action(shell: Shell, action: &HookAction) -> String {
+pub(crate) fn render_action(shell: Shell, action: &HookAction) -> String {
     let (line, cursor) = match action {
         HookAction::Replace { line, cursor } | HookAction::InsertSpace { line, cursor } => {
             (line, cursor)
@@ -172,7 +172,7 @@ pub fn render_action(shell: Shell, action: &HookAction) -> String {
 ///
 /// Anything else (mid-arguments, after `=`, inside a command's arguments) is
 /// treated as non-command-position and abbreviations should not expand.
-pub fn is_command_position(prefix: &str) -> bool {
+pub(crate) fn is_command_position(prefix: &str) -> bool {
     let trimmed = trim_trailing_spaces(prefix);
 
     if trimmed.is_empty() {

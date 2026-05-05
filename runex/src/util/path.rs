@@ -58,7 +58,7 @@ use std::path::{Path, PathBuf};
 /// the real cause is environmental. The regression test
 /// `runex/tests/windows_path_isolation.rs` pins this behavior so the
 /// failure mode can't return unnoticed.
-pub fn make_command_exists<'a>(
+pub(crate) fn make_command_exists<'a>(
     path_prepend: Option<&'a Path>,
     precache_fingerprint: Option<&str>,
 ) -> impl Fn(&str) -> bool + 'a {
@@ -129,7 +129,7 @@ pub fn make_command_exists<'a>(
 /// is still used by tests that pin per-call lifetimes; this version
 /// exists so [`crate::AppContext`] can hold a `'static`-bounded
 /// closure.
-pub fn make_command_exists_owned(
+pub(crate) fn make_command_exists_owned(
     path_prepend: Option<PathBuf>,
     precache_fingerprint: Option<String>,
 ) -> impl Fn(&str) -> bool + 'static {

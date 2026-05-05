@@ -6,14 +6,14 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CheckStatus {
+pub(crate) enum CheckStatus {
     Ok,
     Warn,
     Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Check {
+pub(crate) struct Check {
     pub name: String,
     pub status: CheckStatus,
     pub detail: String,
@@ -23,12 +23,12 @@ pub struct Check {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DiagResult {
+pub(crate) struct DiagResult {
     pub checks: Vec<Check>,
 }
 
 impl DiagResult {
-    pub fn is_healthy(&self) -> bool {
+    pub(crate) fn is_healthy(&self) -> bool {
         self.checks.iter().all(|c| c.status != CheckStatus::Error)
     }
 }
@@ -40,7 +40,7 @@ impl DiagResult {
 /// platform diagnostics — XDG paths, registry overrides, shell autodetect
 /// hints — can be added without churning every call site.
 #[derive(Debug, Clone, Default)]
-pub struct DoctorEnvInfo {
+pub(crate) struct DoctorEnvInfo {
     /// Summary of the augmented command-resolution PATH used on Windows.
     /// `None` on non-Windows or when the caller can't compute it. When
     /// present, `diagnose` emits an informational `effective_search_path`
@@ -67,7 +67,7 @@ pub struct DoctorEnvInfo {
 /// future per-shell options (skip-if-missing, custom path overrides)
 /// can be added without churning callers.
 #[derive(Debug, Clone, Default)]
-pub struct RcfileMarkerSelection {
+pub(crate) struct RcfileMarkerSelection {
     pub bash: bool,
     pub zsh: bool,
     pub pwsh: bool,
@@ -77,7 +77,7 @@ pub struct RcfileMarkerSelection {
 impl RcfileMarkerSelection {
     /// Enable checks for every shell that has an rcfile concept
     /// (i.e. all of them except clink).
-    pub fn all() -> Self {
+    pub(crate) fn all() -> Self {
         Self { bash: true, zsh: true, pwsh: true, nu: true }
     }
 }
@@ -85,14 +85,14 @@ impl RcfileMarkerSelection {
 /// Per-source breakdown of the merged PATH `runex hook` actually uses
 /// when resolving `when_command_exists` entries.
 #[derive(Debug, Clone)]
-pub struct EffectiveSearchPathSummary {
+pub(crate) struct EffectiveSearchPathSummary {
     pub from_process: usize,
     pub from_user_registry: usize,
     pub from_system_registry: usize,
 }
 
 impl EffectiveSearchPathSummary {
-    pub fn total(&self) -> usize {
+    pub(crate) fn total(&self) -> usize {
         self.from_process + self.from_user_registry + self.from_system_registry
     }
 }
@@ -293,7 +293,7 @@ const KNOWN_PRECACHE_KEYS: &[&str] = &["path_only"];
 ///
 /// Config loading still stops at the first error — these warnings are
 /// observability only, not a lenient-load mode.
-pub fn check_rejected_rules(config_source: &str) -> Vec<Check> {
+pub(crate) fn check_rejected_rules(config_source: &str) -> Vec<Check> {
     // If deserialization fails (syntax / unsupported version), check_config_parse
     // already reports it. Emit nothing here.
     let Ok(config) = crate::app::config::parse_config_lenient(config_source) else {
@@ -350,7 +350,7 @@ pub fn check_rejected_rules(config_source: &str) -> Vec<Check> {
 ///
 /// Returns an empty vec when the TOML is unparseable; that case is reported
 /// by `check_config_parse` already.
-pub fn check_precache_deprecation(config_source: &str) -> Vec<Check> {
+pub(crate) fn check_precache_deprecation(config_source: &str) -> Vec<Check> {
     let table: toml::Table = match config_source.parse() {
         Ok(t) => t,
         Err(_) => return vec![],
@@ -366,7 +366,7 @@ pub fn check_precache_deprecation(config_source: &str) -> Vec<Check> {
     }]
 }
 
-pub fn check_unknown_fields(config_source: &str) -> Vec<Check> {
+pub(crate) fn check_unknown_fields(config_source: &str) -> Vec<Check> {
     let table: toml::Table = match config_source.parse() {
         Ok(t) => t,
         Err(_) => return vec![], // parse errors are caught by check_config_parse
@@ -480,7 +480,7 @@ pub fn check_unknown_fields(config_source: &str) -> Vec<Check> {
 /// A rule is unreachable if an earlier rule with the same key has no
 /// `when_command_exists` condition — it will always match first, making
 /// all later rules with that key dead code.
-pub fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
+pub(crate) fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
     let mut checks = Vec::new();
     // Track keys where an unconditional rule has been seen.
     let mut unconditional_keys: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
@@ -512,7 +512,7 @@ pub fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
 /// `config` is `None` when config loading failed (parse error, etc.).
 /// `parse_error` carries the error message when `config` is `None` due to a parse failure.
 /// `command_exists` is injected for testability.
-pub fn diagnose<F>(
+pub(crate) fn diagnose<F>(
     config_path: &Path,
     config: Option<&Config>,
     parse_error: Option<&str>,

@@ -22,7 +22,7 @@ use crate::{AppContext, CmdOutcome, CmdResult, OptionalContext, Spinner};
 /// passes alongside the config checks. Today this only sets the
 /// Windows effective-search-path breakdown; on other platforms only
 /// the integration-check fields apply.
-pub fn build_doctor_env_info(config: Option<&Config>) -> doctor::DoctorEnvInfo {
+pub(crate) fn build_doctor_env_info(config: Option<&Config>) -> doctor::DoctorEnvInfo {
     let mut info = doctor::DoctorEnvInfo::default();
 
     #[cfg(windows)]
@@ -59,7 +59,7 @@ pub fn build_doctor_env_info(config: Option<&Config>) -> doctor::DoctorEnvInfo {
     info
 }
 
-pub fn handle(
+pub(crate) fn handle(
     config_flag: Option<&Path>,
     path_prepend: Option<&Path>,
     no_shell_aliases: bool,

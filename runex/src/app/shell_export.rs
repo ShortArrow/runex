@@ -233,7 +233,7 @@ fn clink_binding(trigger: Option<TriggerKey>) -> String {
 /// Generate a shell integration script.
 ///
 /// `{BIN}` placeholders in the template are replaced with `bin`.
-pub fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String {
+pub(crate) fn export_script(shell: Shell, bin: &str, config: Option<&Config>) -> String {
     let template = match shell {
         Shell::Bash => include_str!("../domain/templates/bash.sh"),
         Shell::Zsh => include_str!("../domain/templates/zsh.zsh"),

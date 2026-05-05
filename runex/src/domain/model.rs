@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// `shell.rs` uses `model::Config`/`TriggerKey`, and `model.rs` needs `Shell`
 /// for the per-shell expand/condition helpers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Shell {
+pub(crate) enum Shell {
     Bash,
     Zsh,
     Pwsh,
@@ -22,7 +22,7 @@ pub enum Shell {
 /// ```
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
-pub enum PerShellString {
+pub(crate) enum PerShellString {
     /// Same expansion for every shell.
     All(String),
     /// Per-shell overrides; `default` is the fallback.
@@ -41,7 +41,7 @@ impl PerShellString {
     /// For `ByShell`, the shell-specific field takes priority over `default`.
     /// `Shell::Clink` always uses `default` (no clink-specific field).
     /// Returns `None` when neither the shell-specific field nor `default` is set.
-    pub fn for_shell(&self, shell: Shell) -> Option<&str> {
+    pub(crate) fn for_shell(&self, shell: Shell) -> Option<&str> {
         match self {
             PerShellString::All(s) => Some(s.as_str()),
             PerShellString::ByShell { default, bash, zsh, pwsh, nu } => {
@@ -58,7 +58,7 @@ impl PerShellString {
     }
 
     /// Iterate over all non-None string values (used for validation).
-    pub fn all_values(&self) -> Vec<&str> {
+    pub(crate) fn all_values(&self) -> Vec<&str> {
         match self {
             PerShellString::All(s) => vec![s.as_str()],
             PerShellString::ByShell { default, bash, zsh, pwsh, nu } => {
@@ -79,7 +79,7 @@ impl PerShellString {
 /// ```
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
-pub enum PerShellCmds {
+pub(crate) enum PerShellCmds {
     /// Same command list for every shell.
     All(Vec<String>),
     /// Per-shell overrides; `default` is the fallback.
@@ -94,7 +94,7 @@ pub enum PerShellCmds {
 
 impl PerShellCmds {
     /// Return the command list for `shell`, or `None` if no entry applies.
-    pub fn for_shell(&self, shell: Shell) -> Option<&[String]> {
+    pub(crate) fn for_shell(&self, shell: Shell) -> Option<&[String]> {
         match self {
             PerShellCmds::All(v) => Some(v.as_slice()),
             PerShellCmds::ByShell { default, bash, zsh, pwsh, nu } => {
@@ -111,7 +111,7 @@ impl PerShellCmds {
     }
 
     /// Iterate over all non-None vec values (used for validation).
-    pub fn all_values(&self) -> Vec<&[String]> {
+    pub(crate) fn all_values(&self) -> Vec<&[String]> {
         match self {
             PerShellCmds::All(v) => vec![v.as_slice()],
             PerShellCmds::ByShell { default, bash, zsh, pwsh, nu } => {
@@ -126,7 +126,7 @@ impl PerShellCmds {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "kebab-case")]
-pub enum TriggerKey {
+pub(crate) enum TriggerKey {
     #[default]
     Space,
     Tab,
@@ -135,7 +135,7 @@ pub enum TriggerKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub struct PerShellKey {
+pub(crate) struct PerShellKey {
     pub default: Option<TriggerKey>,
     pub bash: Option<TriggerKey>,
     pub zsh: Option<TriggerKey>,
@@ -144,7 +144,7 @@ pub struct PerShellKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub struct KeybindConfig {
+pub(crate) struct KeybindConfig {
     #[serde(default)]
     pub trigger: PerShellKey,
     #[serde(default)]
@@ -153,7 +153,7 @@ pub struct KeybindConfig {
 
 /// A single abbreviation rule: rune → cast.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct Abbr {
+pub(crate) struct Abbr {
     pub key: String,
     pub expand: PerShellString,
     pub when_command_exists: Option<PerShellCmds>,
@@ -161,7 +161,7 @@ pub struct Abbr {
 
 /// Precache configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub struct PrecacheConfig {
+pub(crate) struct PrecacheConfig {
     /// When true, only check PATH binaries (via which). Faster but misses
     /// shell builtins, aliases, functions, and cmdlets.
     /// When false (default), use shell-native detection (Get-Command,
@@ -172,7 +172,7 @@ pub struct PrecacheConfig {
 
 /// Top-level configuration.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct Config {
+pub(crate) struct Config {
     pub version: u32,
     #[serde(default)]
     pub keybind: KeybindConfig,
@@ -184,7 +184,7 @@ pub struct Config {
 
 /// Result of an expand operation.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ExpandResult {
+pub(crate) enum ExpandResult {
     /// Token was expanded. `cursor_offset` is the byte position within `text`
     /// where the cursor should be placed (from the `{}` placeholder).
     /// `None` means cursor goes to end of expansion (default).
@@ -193,7 +193,7 @@ pub enum ExpandResult {
 }
 
 /// Cursor placeholder marker in expansion text.
-pub const CURSOR_PLACEHOLDER: &str = "{}";
+pub(crate) const CURSOR_PLACEHOLDER: &str = "{}";
 
 #[cfg(test)]
 mod tests {

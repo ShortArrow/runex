@@ -15,7 +15,7 @@ use crate::util::path::make_command_exists;
 use crate::util::shell::resolve_shell;
 use crate::{compute_precache_fingerprint, resolve_config, CmdOutcome, CmdResult, MAX_TOKEN_BYTES};
 
-pub fn handle(
+pub(crate) fn handle(
     key: Option<String>,
     shell_str: Option<String>,
     config_flag: Option<&Path>,

@@ -25,7 +25,7 @@ use crate::{resolve_config, resolve_config_opt, CmdOutcome, CmdResult, MAX_BIN_L
 /// for `eprintln!`ing the message and returning
 /// `CmdOutcome::ExitCode(1)` — keeping `validate_bin` itself I/O-free
 /// makes it a pure function the unit tests can drive directly.
-pub fn validate_bin(bin: &str) -> Result<(), String> {
+pub(crate) fn validate_bin(bin: &str) -> Result<(), String> {
     if bin.trim().is_empty() {
         return Err("--bin must not be empty or whitespace-only".into());
     }
@@ -44,7 +44,7 @@ pub fn validate_bin(bin: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn handle(shell: String, bin: String, config_flag: Option<&Path>) -> CmdResult {
+pub(crate) fn handle(shell: String, bin: String, config_flag: Option<&Path>) -> CmdResult {
     if let Err(msg) = validate_bin(&bin) {
         eprintln!("error: {msg}");
         return Ok(CmdOutcome::ExitCode(1));

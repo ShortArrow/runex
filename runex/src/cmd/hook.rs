@@ -14,7 +14,7 @@ use crate::domain::shell::Shell;
 
 use crate::{AppContext, CmdOutcome, CmdResult, MAX_HOOK_LINE_BYTES};
 
-pub fn handle(
+pub(crate) fn handle(
     shell_str: &str,
     line: &str,
     cursor: usize,

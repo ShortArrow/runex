@@ -281,16 +281,25 @@ pub(crate) fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> S
 /// `command_exists` is `Box<dyn Fn>` so the context is movable;
 /// the underlying closure owns its `path_prepend` so the context
 /// has no lifetime parameter.
-pub struct AppContext {
-    pub config_path: PathBuf,
-    pub config: Config,
+pub(crate) struct AppContext {
+    /// Path actually loaded — kept on the context for diagnostics
+    /// (and for handlers that may want to surface it). Currently
+    /// only constructed; future code may surface it on errors.
+    #[allow(dead_code)]
+    pub(crate) config_path: PathBuf,
+    pub(crate) config: Config,
     /// `None` only when `--shell` was omitted *and* the command is
     /// shell-agnostic (e.g. `list` shows all shells). Most handlers
     /// fall back to `Shell::Bash` themselves; `AppContext` keeps the
     /// raw `Option` so each handler can decide.
-    pub shell: Option<Shell>,
-    pub fingerprint: String,
-    pub command_exists: Box<dyn Fn(&str) -> bool>,
+    pub(crate) shell: Option<Shell>,
+    /// Stable digest of `(config_path, shell)`. Threaded through to
+    /// the precache layer for cache-key isolation; not read after
+    /// construction in this file but kept on the struct for
+    /// completeness of the context shape.
+    #[allow(dead_code)]
+    pub(crate) fingerprint: String,
+    pub(crate) command_exists: Box<dyn Fn(&str) -> bool>,
 }
 
 impl AppContext {
@@ -302,7 +311,7 @@ impl AppContext {
     /// closure consults the on-disk precache hint. Most commands
     /// pass `true`; the historical `make_command_exists(.., None)`
     /// callers (precache itself, doctor) pass `false`.
-    pub fn build(
+    pub(crate) fn build(
         config_flag: Option<&Path>,
         shell_flag: Option<&str>,
         path_prepend: Option<&Path>,
@@ -319,7 +328,7 @@ impl AppContext {
     ///
     /// `OptionalContext` is the same shape as `AppContext` but with
     /// `Option<Config>` so the caller can branch on absence.
-    pub fn build_optional(
+    pub(crate) fn build_optional(
         config_flag: Option<&Path>,
         shell_flag: Option<&str>,
         path_prepend: Option<&Path>,
@@ -380,13 +389,17 @@ impl AppContext {
 /// Same fields as [`AppContext`] but `config` is optional and a
 /// `parse_error` is carried forward — used by commands that must
 /// survive a missing or broken config (`hook`, `doctor`).
-pub struct OptionalContext {
-    pub config_path: PathBuf,
-    pub config: Option<Config>,
-    pub parse_error: Option<String>,
-    pub shell: Option<Shell>,
-    pub fingerprint: String,
-    pub command_exists: Box<dyn Fn(&str) -> bool>,
+pub(crate) struct OptionalContext {
+    #[allow(dead_code)]
+    pub(crate) config_path: PathBuf,
+    pub(crate) config: Option<Config>,
+    #[allow(dead_code)]
+    pub(crate) parse_error: Option<String>,
+    #[allow(dead_code)]
+    pub(crate) shell: Option<Shell>,
+    #[allow(dead_code)]
+    pub(crate) fingerprint: String,
+    pub(crate) command_exists: Box<dyn Fn(&str) -> bool>,
 }
 
 /// Items at crate root use the util fns directly. cmd/* and util/*
@@ -414,7 +427,7 @@ pub(crate) const MAX_TOKEN_BYTES: usize = 1_024;
 /// with them. Unrecoverable errors still bubble up via the `Err`
 /// variant of `CmdResult`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CmdOutcome {
+pub(crate) enum CmdOutcome {
     /// Handler succeeded; main exits with 0.
     Ok,
     /// Handler requests a specific exit code (typically 1 for

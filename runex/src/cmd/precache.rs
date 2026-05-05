@@ -22,7 +22,7 @@ use crate::domain::shell::Shell;
 use crate::util::path::make_command_exists;
 use crate::{compute_precache_fingerprint, resolve_config, CmdOutcome, CmdResult};
 
-pub fn handle(
+pub(crate) fn handle(
     shell: String,
     list_commands: bool,
     resolved: Option<String>,

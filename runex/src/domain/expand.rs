@@ -10,7 +10,7 @@ use crate::domain::timings::{CommandExistsCall, Timings};
 /// A single skipped rule — part of the `which_abbr` trace.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
-pub enum SkipReason {
+pub(crate) enum SkipReason {
     /// key == expand (self-loop guard).
     SelfLoop,
     /// One or more `when_command_exists` commands were absent.
@@ -29,7 +29,7 @@ pub enum SkipReason {
 /// and `expand` agree on the final outcome even with duplicate-key rules.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
-pub enum WhichResult {
+pub(crate) enum WhichResult {
     /// Token matched a rule and all conditions passed.
     Expanded {
         key: String,
@@ -53,7 +53,7 @@ pub enum WhichResult {
 ///
 /// `shell` selects the per-shell expand/when_command_exists entry.
 /// `command_exists` is injected for testability (DI).
-pub fn expand<F>(config: &Config, token: &str, shell: Shell, command_exists: F) -> ExpandResult
+pub(crate) fn expand<F>(config: &Config, token: &str, shell: Shell, command_exists: F) -> ExpandResult
 where
     F: Fn(&str) -> bool,
 {
@@ -101,7 +101,7 @@ fn extract_cursor_placeholder(text: &str) -> (String, Option<usize>) {
 ///
 /// Each `command_exists` call is individually timed, and the overall expand
 /// phase is recorded as a single phase entry.
-pub fn expand_timed<F>(
+pub(crate) fn expand_timed<F>(
     config: &Config,
     token: &str,
     shell: Shell,
@@ -145,7 +145,7 @@ where
 /// every bypassed rule before returning the first one that passes. This means
 /// `which_abbr` and `expand` always agree on the final outcome, even when
 /// multiple rules share the same key.
-pub fn which_abbr<F>(config: &Config, token: &str, shell: Shell, command_exists: F) -> WhichResult
+pub(crate) fn which_abbr<F>(config: &Config, token: &str, shell: Shell, command_exists: F) -> WhichResult
 where
     F: Fn(&str) -> bool,
 {
@@ -224,7 +224,7 @@ where
 /// When `shell` is `Some`, returns only rules that have an entry for that shell,
 /// using the resolved expansion string.
 /// When `shell` is `None`, uses the `All` value or the `default` field.
-pub fn list<'a>(config: &'a Config, shell: Option<Shell>) -> Vec<(&'a str, String)> {
+pub(crate) fn list<'a>(config: &'a Config, shell: Option<Shell>) -> Vec<(&'a str, String)> {
     config
         .abbr
         .iter()

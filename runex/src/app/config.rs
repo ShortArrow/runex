@@ -10,7 +10,7 @@ const MAX_CMD_BYTES: usize = 255;
 const MAX_CMD_LIST_LEN: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
+pub(crate) enum ConfigError {
     #[error("{0}")]
     Parse(#[from] toml::de::Error),
     #[error("IO error: {0}")]
@@ -478,7 +478,7 @@ pub(crate) fn parse_config_lenient(s: &str) -> Result<Config, ConfigError> {
 /// [`visit_validation_issues`]; the first violation is returned as a
 /// `ConfigError`. Validation order is pinned by the `visit_validation_issues`
 /// traversal order.
-pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
+pub(crate) fn parse_config(s: &str) -> Result<Config, ConfigError> {
     let config = parse_config_lenient(s)?;
     if let Some(e) = first_validation_error(&config) {
         return Err(e);
@@ -492,7 +492,7 @@ pub fn parse_config(s: &str) -> Result<Config, ConfigError> {
 /// after the D3 split. Phase D D4 / future cleanup may inline these
 /// shims; the function itself lives in `infra` because it touches
 /// `RUNEX_CONFIG` env / `XDG_CONFIG_HOME` resolution.
-pub fn default_config_path() -> Result<PathBuf, ConfigError> {
+pub(crate) fn default_config_path() -> Result<PathBuf, ConfigError> {
     crate::infra::config_store::default_config_path()
 }
 
@@ -503,7 +503,7 @@ pub fn default_config_path() -> Result<PathBuf, ConfigError> {
 /// Symlink handling, size cap, and TOCTOU avoidance are all enforced
 /// inside [`crate::infra::config_store::read_config_source`]. The
 /// rationale (dotfiles symlink idiom etc.) is documented there.
-pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
+pub(crate) fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     let content = crate::infra::config_store::read_config_source(path)?;
     parse_config(&content)
 }
@@ -515,7 +515,7 @@ pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
 /// [`crate::infra::config_store::append_abbr_block`]. Phase D D4
 /// will move this wrapper to `app::abbr` and have `cmd/add_remove`
 /// call that instead.
-pub fn append_abbr_to_file(
+pub(crate) fn append_abbr_to_file(
     path: &std::path::Path,
     key: &str,
     expand: &str,
@@ -543,7 +543,7 @@ pub fn append_abbr_to_file(
 /// [`crate::infra::config_store::remove_abbr_block`]; kept here for
 /// call-site continuity until Phase D D4 routes `cmd/add_remove`
 /// through `app::abbr`.
-pub fn remove_abbr_from_file(path: &std::path::Path, key: &str) -> Result<usize, ConfigError> {
+pub(crate) fn remove_abbr_from_file(path: &std::path::Path, key: &str) -> Result<usize, ConfigError> {
     crate::infra::config_store::remove_abbr_block(path, key)
 }
 

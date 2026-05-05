@@ -11,7 +11,7 @@ use std::path::Path;
 /// detection. Files larger than this are treated as if the marker is
 /// absent so that init fails safe (appends the integration line)
 /// rather than consuming unbounded memory.
-pub const MAX_RC_FILE_BYTES: usize = 1024 * 1024; // 1 MB
+pub(crate) const MAX_RC_FILE_BYTES: usize = 1024 * 1024; // 1 MB
 
 /// Read a shell rc file for `RUNEX_INIT_MARKER` detection.
 ///
@@ -27,7 +27,7 @@ pub const MAX_RC_FILE_BYTES: usize = 1024 * 1024; // 1 MB
 /// through a symlink target, while the write side would refuse to
 /// follow and try to append. Both sides agree on "no symlinks at the
 /// final path component".
-pub fn read_rc_content(path: &Path) -> String {
+pub(crate) fn read_rc_content(path: &Path) -> String {
     use std::io::Read;
     #[cfg(unix)]
     let mut file = {
@@ -65,7 +65,7 @@ pub fn read_rc_content(path: &Path) -> String {
 /// A real y/N answer is at most a few bytes; anything beyond this
 /// limit is treated as "no" to prevent unbounded memory growth from
 /// piped input.
-pub const MAX_CONFIRM_BYTES: usize = 1_024;
+pub(crate) const MAX_CONFIRM_BYTES: usize = 1_024;
 
 /// Inner implementation of [`prompt_confirm`] that reads from an
 /// arbitrary `BufRead`. Returns true only for trimmed,
@@ -74,7 +74,7 @@ pub const MAX_CONFIRM_BYTES: usize = 1_024;
 ///
 /// Exposed so tests can drive the parsing logic without spawning a
 /// pty or piping into stdin.
-pub fn prompt_confirm_from(reader: &mut impl io::BufRead) -> bool {
+pub(crate) fn prompt_confirm_from(reader: &mut impl io::BufRead) -> bool {
     use io::{BufRead as _, Read as _};
     let mut input = String::new();
     let mut limited = reader.by_ref().take(MAX_CONFIRM_BYTES as u64 + 1);
@@ -94,7 +94,7 @@ pub fn prompt_confirm_from(reader: &mut impl io::BufRead) -> bool {
 ///
 /// stderr is used for the prompt (not stdout) so callers can pipe
 /// stdout without interleaving prompt text into their pipe.
-pub fn prompt_confirm(msg: &str) -> bool {
+pub(crate) fn prompt_confirm(msg: &str) -> bool {
     use std::io::Write as _;
     eprint!("{msg} [y/N] ");
     let _ = io::stderr().flush();

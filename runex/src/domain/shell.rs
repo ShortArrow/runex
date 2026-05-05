@@ -5,7 +5,7 @@ use crate::domain::sanitize::{double_quote_escape, is_nu_drop_char, is_unicode_l
 
 // Shell is defined in model to avoid circular dependency; re-export it here
 // so callers that do `use crate::domain::shell::Shell` still work.
-pub use crate::domain::model::Shell;
+pub(crate) use crate::domain::model::Shell;
 
 impl FromStr for Shell {
     type Err = ShellParseError;
@@ -28,7 +28,7 @@ impl FromStr for Shell {
 /// ASCII control characters and Unicode visual-deception characters (directional overrides,
 /// BOM, zero-width chars) are stripped to prevent terminal injection via crafted error output.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShellParseError(pub String);
+pub(crate) struct ShellParseError(pub String);
 
 impl fmt::Display for ShellParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

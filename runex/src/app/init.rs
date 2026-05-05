@@ -42,7 +42,7 @@ fn nu_quote_path(path: &str) -> String {
 /// `runex init` only writes this content when the config file does not
 /// already exist (`OpenOptions::create_new`). Existing configs are
 /// never touched.
-pub fn default_config_content() -> &'static str {
+pub(crate) fn default_config_content() -> &'static str {
     r#"version = 1
 
 [keybind.trigger]
@@ -76,7 +76,7 @@ expand = "git status"
 /// `runex` upgrade. `runex doctor` flags this drift via the
 /// `integration:clink` check (see
 /// [`crate::infra::integration_check::check_clink_lua_freshness`]).
-pub fn integration_line(shell: Shell, bin: &str) -> String {
+pub(crate) fn integration_line(shell: Shell, bin: &str) -> String {
     match shell {
         Shell::Bash => format!("eval \"$({} export bash)\"", bash_quote_string(bin)),
         Shell::Zsh => format!("eval \"$({} export zsh)\"", bash_quote_string(bin)),
@@ -144,7 +144,7 @@ pub(crate) fn clink_lua_install_path_with_resolver(
 ///
 /// `rc_path` is the file we just appended to (or `None` for clink, where
 /// the integration goes into a separate lua file rather than an rcfile).
-pub fn next_steps_message(shell: Shell, rc_path: Option<&std::path::Path>) -> String {
+pub(crate) fn next_steps_message(shell: Shell, rc_path: Option<&std::path::Path>) -> String {
     let reload = match shell {
         Shell::Bash | Shell::Zsh => match rc_path {
             Some(p) => format!("Reload your shell: `source {}` (or `exec $SHELL`)", p.display()),

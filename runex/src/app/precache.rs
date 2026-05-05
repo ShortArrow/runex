@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::model::Config;
 
 /// Environment variable name for the command existence cache.
-pub const CACHE_ENV_VAR: &str = "RUNEX_CMD_CACHE_V1";
+pub(crate) const CACHE_ENV_VAR: &str = "RUNEX_CMD_CACHE_V1";
 
 /// Current cache format version.
 const CACHE_VERSION: u32 = 1;
@@ -27,7 +27,7 @@ const FINGERPRINT_LEN: usize = 16;
 
 /// Serialized command existence cache.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CmdCache {
+pub(crate) struct CmdCache {
     pub v: u32,
     pub fingerprint: String,
     pub commands: HashMap<String, bool>,
@@ -38,7 +38,7 @@ pub struct CmdCache {
 /// Uses a fast non-cryptographic hash — this is for staleness detection,
 /// not tamper resistance. An attacker who can modify the env var can also
 /// modify PATH itself.
-pub fn compute_fingerprint(path_env: &str, config_mtime: u64, shell: &str) -> String {
+pub(crate) fn compute_fingerprint(path_env: &str, config_mtime: u64, shell: &str) -> String {
     let mut hasher = DefaultHasher::new();
     path_env.hash(&mut hasher);
     config_mtime.hash(&mut hasher);
@@ -48,7 +48,7 @@ pub fn compute_fingerprint(path_env: &str, config_mtime: u64, shell: &str) -> St
 
 /// Collect all unique command names referenced by `when_command_exists`
 /// across all abbreviation rules in the config.
-pub fn collect_unique_commands(config: &Config) -> Vec<String> {
+pub(crate) fn collect_unique_commands(config: &Config) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
     for abbr in &config.abbr {
@@ -66,7 +66,7 @@ pub fn collect_unique_commands(config: &Config) -> Vec<String> {
 }
 
 /// Build a cache by checking each command with the provided closure.
-pub fn build_cache<F>(
+pub(crate) fn build_cache<F>(
     config: &Config,
     fingerprint: &str,
     command_exists: F,
@@ -89,7 +89,7 @@ where
 /// Parse a `"cmd1=1,cmd2=0,..."` string into a `HashMap<String, bool>`.
 ///
 /// Unknown entries (not `0` or `1`) are treated as `false`.
-pub fn parse_resolved(resolved: &str) -> HashMap<String, bool> {
+pub(crate) fn parse_resolved(resolved: &str) -> HashMap<String, bool> {
     let mut map = HashMap::new();
     for entry in resolved.split(',') {
         let entry = entry.trim();
@@ -108,7 +108,7 @@ pub fn parse_resolved(resolved: &str) -> HashMap<String, bool> {
 /// Used when the calling shell (e.g. PowerShell) checks command existence
 /// via `Get-Command` instead of `which::which()`. Only commands referenced
 /// in the config's `when_command_exists` are included.
-pub fn build_cache_from_resolved(
+pub(crate) fn build_cache_from_resolved(
     config: &Config,
     fingerprint: &str,
     resolved_str: &str,
@@ -128,7 +128,7 @@ pub fn build_cache_from_resolved(
 }
 
 /// Serialize a cache to JSON.
-pub fn cache_to_json(cache: &CmdCache) -> String {
+pub(crate) fn cache_to_json(cache: &CmdCache) -> String {
     serde_json::to_string(cache).unwrap_or_default()
 }
 
@@ -138,7 +138,7 @@ pub fn cache_to_json(cache: &CmdCache) -> String {
 /// unexpected version, or have a malformed fingerprint. This is a
 /// defense-in-depth measure — the cache is untrusted input from an
 /// environment variable.
-pub fn parse_cache(json: &str) -> Option<CmdCache> {
+pub(crate) fn parse_cache(json: &str) -> Option<CmdCache> {
     if json.len() > MAX_CACHE_BYTES {
         return None;
     }
@@ -164,7 +164,7 @@ pub fn parse_cache(json: &str) -> Option<CmdCache> {
 /// - JSON is malformed
 /// - version != 1
 /// - fingerprint does not match expected
-pub fn load_cache(expected_fingerprint: &str) -> Option<CmdCache> {
+pub(crate) fn load_cache(expected_fingerprint: &str) -> Option<CmdCache> {
     let json = std::env::var(CACHE_ENV_VAR).ok()?;
     let cache = parse_cache(&json)?;
     if cache.fingerprint != expected_fingerprint {
@@ -175,7 +175,7 @@ pub fn load_cache(expected_fingerprint: &str) -> Option<CmdCache> {
 
 /// Get the mtime of a config file as seconds since epoch.
 /// Returns 0 if the file doesn't exist or metadata can't be read.
-pub fn config_mtime(path: &Path) -> u64 {
+pub(crate) fn config_mtime(path: &Path) -> u64 {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
@@ -185,7 +185,7 @@ pub fn config_mtime(path: &Path) -> u64 {
 }
 
 /// Generate a shell export statement for the cache.
-pub fn export_statement(shell: &str, cache_json: &str) -> String {
+pub(crate) fn export_statement(shell: &str, cache_json: &str) -> String {
     match shell {
         "bash" | "zsh" => {
             let escaped = cache_json.replace('\'', "'\\''");

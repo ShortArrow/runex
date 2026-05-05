@@ -12,7 +12,7 @@ use crate::domain::sanitize::sanitize_for_display;
 
 use crate::{CmdOutcome, CmdResult};
 
-pub fn handle_add(
+pub(crate) fn handle_add(
     config_path: &Path,
     key: &str,
     expand: &str,
@@ -27,7 +27,7 @@ pub fn handle_add(
     Ok(CmdOutcome::Ok)
 }
 
-pub fn handle_remove(config_path: &Path, key: &str) -> CmdResult {
+pub(crate) fn handle_remove(config_path: &Path, key: &str) -> CmdResult {
     let removed = crate::app::config::remove_abbr_from_file(config_path, key)?;
     if removed > 0 {
         println!(

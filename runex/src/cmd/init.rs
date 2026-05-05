@@ -22,7 +22,7 @@ use crate::util::prompt::{prompt_confirm, read_rc_content};
 use crate::util::shell::detect_shell;
 use crate::{CmdOutcome, CmdResult};
 
-pub fn handle(
+pub(crate) fn handle(
     config_path: PathBuf,
     shell_override: Option<&str>,
     yes: bool,

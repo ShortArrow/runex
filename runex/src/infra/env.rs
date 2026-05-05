@@ -35,7 +35,7 @@ use std::path::PathBuf;
 /// caller in `runex-core` that wants one wants the other (config-
 /// home resolution starts from `$XDG_CONFIG_HOME` and falls back to
 /// `home_dir().join(".config")`, etc.).
-pub trait HomeDirResolver: Send + Sync {
+pub(crate) trait HomeDirResolver: Send + Sync {
     /// The user's home directory. `None` when the platform cannot
     /// determine one (extremely rare in practice — empty `$HOME`
     /// with no `dirs` fallback). Callers that can't recover from
@@ -55,7 +55,7 @@ pub trait HomeDirResolver: Send + Sync {
 /// Zero-sized; `&SystemHomeDir` is a fine default for any function
 /// that takes `&dyn HomeDirResolver`.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct SystemHomeDir;
+pub(crate) struct SystemHomeDir;
 
 impl HomeDirResolver for SystemHomeDir {
     fn home_dir(&self) -> Option<PathBuf> {
@@ -80,8 +80,14 @@ impl HomeDirResolver for SystemHomeDir {
 /// closure is `Send + Sync` so `&dyn HomeDirResolver` can cross
 /// thread boundaries (none of the runex-core callers spawn threads
 /// today, but the trait bound future-proofs the public API).
+///
+/// `#[allow(dead_code)]` because every concrete construction is
+/// inside a `#[cfg(test)] mod` (the inline tests in `cmd::init`,
+/// `app::init`, `infra::env`, `infra::config_store`). The
+/// production code path always passes [`SystemHomeDir`]; the resolver
+/// trait abstracts both so the same code reaches both.
 #[allow(dead_code)]
-pub struct EnvHomeDir<F>
+pub(crate) struct EnvHomeDir<F>
 where
     F: Fn(&str) -> Option<String> + Send + Sync,
 {
@@ -92,13 +98,10 @@ impl<F> EnvHomeDir<F>
 where
     F: Fn(&str) -> Option<String> + Send + Sync,
 {
-    /// `#[allow(dead_code)]` because the only callers today are
-    /// inside `cfg(test)` modules under `runex/src/{app,infra}/`.
-    /// The struct + ctor stay on the API surface so future cmd-side
-    /// callers (e.g. a test that drives `cmd::init` with a hermetic
-    /// home dir) can pick them up without re-adding the type.
+    /// Test-only ctor. See the struct docstring for the rationale on
+    /// `#[allow(dead_code)]`.
     #[allow(dead_code)]
-    pub fn new(lookup: F) -> Self {
+    pub(crate) fn new(lookup: F) -> Self {
         Self { lookup }
     }
 }

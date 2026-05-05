@@ -99,7 +99,7 @@ fn read_capped_regular_file(path: &Path) -> Option<String> {
 /// caller can convert it into a `doctor::Check` without coupling this
 /// module to `doctor`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IntegrationCheck {
+pub(crate) enum IntegrationCheck {
     /// Integration is in place and (where checkable) up-to-date.
     Ok { name: String, detail: String },
     /// Integration is reachable but content has drifted from what
@@ -116,41 +116,13 @@ pub enum IntegrationCheck {
     Skipped { name: String, detail: String },
 }
 
-impl IntegrationCheck {
-    /// Convenience accessor used historically by external callers of
-    /// `runex-core`. After Phase C absorbed runex-core into the bin
-    /// crate the accessors have no internal callers; the
-    /// `#[allow(dead_code)]` keeps them on the API surface so the
-    /// `cmd::doctor` formatter can switch to using them later
-    /// without having to re-add the methods.
-    #[allow(dead_code)]
-    pub fn name(&self) -> &str {
-        match self {
-            IntegrationCheck::Ok { name, .. }
-            | IntegrationCheck::Outdated { name, .. }
-            | IntegrationCheck::Missing { name, .. }
-            | IntegrationCheck::Skipped { name, .. } => name,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn detail(&self) -> &str {
-        match self {
-            IntegrationCheck::Ok { detail, .. }
-            | IntegrationCheck::Outdated { detail, .. }
-            | IntegrationCheck::Missing { detail, .. }
-            | IntegrationCheck::Skipped { detail, .. } => detail,
-        }
-    }
-}
-
 /// Compare the user's clink integration script against `current_export`
 /// (= what `runex export clink` produces today).
 ///
 /// `search_paths` is the ordered list of file paths to probe. The first
 /// existing file wins; subsequent paths are not consulted. This lets
 /// callers decide policy (env var override, default location, …).
-pub fn check_clink_lua_freshness(current_export: &str, search_paths: &[PathBuf]) -> IntegrationCheck {
+pub(crate) fn check_clink_lua_freshness(current_export: &str, search_paths: &[PathBuf]) -> IntegrationCheck {
     for candidate in search_paths {
         if let Some(on_disk) = read_capped_regular_file(candidate) {
             return if normalize_newlines(&on_disk) == normalize_newlines(current_export) {
@@ -188,7 +160,7 @@ pub fn check_clink_lua_freshness(current_export: &str, search_paths: &[PathBuf])
 /// `rcfile_override` is for tests; production callers pass `None` and
 /// fall back to [`crate::infra::env::rc_file_for`] with the
 /// production [`SystemHomeDir`] resolver.
-pub fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) -> IntegrationCheck {
+pub(crate) fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) -> IntegrationCheck {
     let name = format!("integration:{}", shell_short_name(shell));
     let path = match rcfile_override {
         Some(p) => p.to_path_buf(),
@@ -246,7 +218,7 @@ pub fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) -> Inte
 
 /// Default ordered list of paths to probe for the clink lua file on
 /// this platform. Callers may extend or override this list.
-pub fn default_clink_lua_paths() -> Vec<PathBuf> {
+pub(crate) fn default_clink_lua_paths() -> Vec<PathBuf> {
     default_clink_lua_paths_with(&crate::infra::env::SystemHomeDir)
 }
 
@@ -256,7 +228,7 @@ pub fn default_clink_lua_paths() -> Vec<PathBuf> {
 /// Used by tests that need to probe behaviour with a known set of
 /// `RUNEX_CLINK_LUA_PATH` / `LOCALAPPDATA` / `home_dir` values
 /// without leaking into the process env.
-pub fn default_clink_lua_paths_with(env: &dyn crate::infra::env::HomeDirResolver) -> Vec<PathBuf> {
+pub(crate) fn default_clink_lua_paths_with(env: &dyn crate::infra::env::HomeDirResolver) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Some(p) = env.env_var("RUNEX_CLINK_LUA_PATH") {
         out.push(PathBuf::from(p));

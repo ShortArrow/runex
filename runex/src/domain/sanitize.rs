@@ -55,7 +55,7 @@ fn is_tag(c: char) -> bool {
 /// Covers NEL (U+0085), Line Separator (U+2028), and Paragraph Separator (U+2029).
 /// These behave like newlines in some runtimes and must be dropped from shell
 /// string literals where they cannot be safely escaped.
-pub fn is_unicode_line_separator(c: char) -> bool {
+pub(crate) fn is_unicode_line_separator(c: char) -> bool {
     matches!(c, '\u{0085}' | '\u{2028}'..='\u{2029}')
 }
 
@@ -64,7 +64,7 @@ pub fn is_unicode_line_separator(c: char) -> bool {
 /// These characters are invisible or visually ambiguous in terminal output and
 /// can be used to mislead users about the content of a string (e.g., RLO for
 /// right-to-left override, BOM, zero-width spaces).
-pub fn is_deceptive_unicode(c: char) -> bool {
+pub(crate) fn is_deceptive_unicode(c: char) -> bool {
     is_soft_hyphen(c)
         || is_combining_grapheme_joiner(c)
         || is_arabic_letter_mark(c)
@@ -85,7 +85,7 @@ pub fn is_deceptive_unicode(c: char) -> bool {
 /// This is a superset of [`is_deceptive_unicode`]: it also covers ASCII control
 /// characters (which can move the cursor, clear the screen, etc.) and Unicode
 /// line/paragraph separators that behave like newlines.
-pub fn is_unsafe_for_display(c: char) -> bool {
+pub(crate) fn is_unsafe_for_display(c: char) -> bool {
     c.is_ascii_control()
         || is_unicode_line_separator(c)
         || is_deceptive_unicode(c)
@@ -94,7 +94,7 @@ pub fn is_unsafe_for_display(c: char) -> bool {
 /// Strip characters unsafe for terminal display from a string.
 ///
 /// Removes all characters for which [`is_unsafe_for_display`] returns `true`.
-pub fn sanitize_for_display(s: &str) -> String {
+pub(crate) fn sanitize_for_display(s: &str) -> String {
     s.chars().filter(|&c| !is_unsafe_for_display(c)).collect()
 }
 
@@ -102,7 +102,7 @@ pub fn sanitize_for_display(s: &str) -> String {
 ///
 /// Like [`sanitize_for_display`] but allows `\n`, `\r`, and `\t` so that
 /// multi-line messages (e.g. TOML parse errors) remain readable.
-pub fn sanitize_multiline_for_display(s: &str) -> String {
+pub(crate) fn sanitize_multiline_for_display(s: &str) -> String {
     s.chars()
         .filter(|&c| c == '\n' || c == '\r' || c == '\t' || !is_unsafe_for_display(c))
         .collect()
@@ -114,7 +114,7 @@ pub fn sanitize_multiline_for_display(s: &str) -> String {
 /// double-quoted string literal (`\`, `"`, `\n`, `\r`, `\t`), and `None` for
 /// everything else.  Used by Nu and Lua quote functions to avoid repeating the
 /// same five `match` arms.
-pub fn double_quote_escape(c: char) -> Option<&'static str> {
+pub(crate) fn double_quote_escape(c: char) -> Option<&'static str> {
     match c {
         '\\' => Some("\\\\"),
         '"' => Some("\\\""),
@@ -131,7 +131,7 @@ pub fn double_quote_escape(c: char) -> Option<&'static str> {
 /// Nu string escaping handles `\n`, `\r`, and `\t` as explicit two-character
 /// sequences, so those three are excluded here.  Everything else that is unsafe
 /// for terminal display is dropped rather than escaped.
-pub fn is_nu_drop_char(c: char) -> bool {
+pub(crate) fn is_nu_drop_char(c: char) -> bool {
     !matches!(c, '\n' | '\r' | '\t') && is_unsafe_for_display(c)
 }
 

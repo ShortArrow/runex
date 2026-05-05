@@ -42,7 +42,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 /// `which::which_in`. The breakdown counts let `runex doctor` report
 /// "process=N, +user=M, +system=K" so a degraded PATH stands out.
 #[derive(Debug, Clone)]
-pub struct EffectiveSearchPath {
+pub(crate) struct EffectiveSearchPath {
     pub combined: OsString,
     /// Number of unique entries originating from the process PATH.
     pub from_process: usize,
@@ -58,7 +58,7 @@ impl EffectiveSearchPath {
     /// [`doctor::EffectiveSearchPathSummary::total`] which mirrors the
     /// same arithmetic on a Serialize-friendly summary type.
     #[cfg(test)]
-    pub fn total(&self) -> usize {
+    pub(crate) fn total(&self) -> usize {
         self.from_process + self.from_user_registry + self.from_system_registry
     }
 }
@@ -68,7 +68,7 @@ impl EffectiveSearchPath {
 /// See module docs for the rationale. Always succeeds: if registry reads
 /// fail (unlikely outside of locked-down environments), the corresponding
 /// counts simply stay zero.
-pub fn effective_search_path() -> EffectiveSearchPath {
+pub(crate) fn effective_search_path() -> EffectiveSearchPath {
     let mut combined = OsString::new();
     let mut seen: HashSet<Vec<u16>> = HashSet::new();
 

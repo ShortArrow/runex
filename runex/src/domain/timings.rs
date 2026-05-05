@@ -2,14 +2,14 @@ use std::time::{Duration, Instant};
 
 /// A recorded phase with its name and duration.
 #[derive(Debug, Clone)]
-pub struct Phase {
+pub(crate) struct Phase {
     pub name: String,
     pub duration: Duration,
 }
 
 /// A recorded `command_exists` call with result and duration.
 #[derive(Debug, Clone)]
-pub struct CommandExistsCall {
+pub(crate) struct CommandExistsCall {
     pub command: String,
     pub found: bool,
     pub duration: Duration,
@@ -19,39 +19,39 @@ pub struct CommandExistsCall {
 
 /// Collects timing data for expand phases and command_exists calls.
 #[derive(Debug, Default)]
-pub struct Timings {
+pub(crate) struct Timings {
     phases: Vec<Phase>,
     command_exists_calls: Vec<CommandExistsCall>,
 }
 
 /// Lightweight timer — just wraps `Instant::now()`.
-pub struct PhaseTimer {
+pub(crate) struct PhaseTimer {
     start: Instant,
 }
 
 impl PhaseTimer {
-    pub fn start() -> Self {
+    pub(crate) fn start() -> Self {
         Self { start: Instant::now() }
     }
 
-    pub fn elapsed(&self) -> Duration {
+    pub(crate) fn elapsed(&self) -> Duration {
         self.start.elapsed()
     }
 }
 
 impl Timings {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn record_phase(&mut self, name: &str, duration: Duration) {
+    pub(crate) fn record_phase(&mut self, name: &str, duration: Duration) {
         self.phases.push(Phase {
             name: name.to_string(),
             duration,
         });
     }
 
-    pub fn record_command_exists(&mut self, command: &str, found: bool, duration: Duration, cached: bool) {
+    pub(crate) fn record_command_exists(&mut self, command: &str, found: bool, duration: Duration, cached: bool) {
         self.command_exists_calls.push(CommandExistsCall {
             command: command.to_string(),
             found,
@@ -60,15 +60,15 @@ impl Timings {
         });
     }
 
-    pub fn phases(&self) -> &[Phase] {
+    pub(crate) fn phases(&self) -> &[Phase] {
         &self.phases
     }
 
-    pub fn command_exists_calls(&self) -> &[CommandExistsCall] {
+    pub(crate) fn command_exists_calls(&self) -> &[CommandExistsCall] {
         &self.command_exists_calls
     }
 
-    pub fn total_duration(&self) -> Duration {
+    pub(crate) fn total_duration(&self) -> Duration {
         self.phases.iter().map(|p| p.duration).sum()
     }
 }
