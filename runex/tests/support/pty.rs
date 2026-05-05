@@ -38,6 +38,10 @@ pub enum PtyShell {
     Bash,
     Zsh,
     Pwsh,
+    /// nushell. Sources runex.nu via `source` after writing the
+    /// generated script to a tempfile (nu resolves `source` paths at
+    /// parse time so we cannot generate-and-source in one step).
+    Nu,
 }
 
 /// A live PTY session with the runex integration sourced and the
@@ -115,6 +119,12 @@ fn launch_command(shell: PtyShell, _runex_bin: &str) -> String {
         // distribution so no extra import is needed for the runex
         // integration to bind.
         PtyShell::Pwsh => "pwsh -NoLogo -NoProfile".to_string(),
+        // nu --no-config-file: skip the user's $env / config.nu so
+        // unrelated keybindings don't interfere. We still need an
+        // interactive REPL so reedline reads keystrokes; nu defaults
+        // to interactive when stdin is a tty (which the PTY provides),
+        // so no extra flag is needed.
+        PtyShell::Nu => "nu --no-config-file".to_string(),
     }
 }
 
@@ -166,6 +176,44 @@ fn bootstrap(
                 .send_line(&format!(
                     "Invoke-Expression (& '{runex_bin}' export pwsh --bin '{runex_bin}' | Out-String)"
                 ))
+                .ok()?;
+        }
+        PtyShell::Nu => {
+            // nu's `source` resolves paths at parse time, so we cannot
+            // pipe `runex export nu` into source the way bash/zsh's
+            // `eval "$(...)"` works. We use the test runner's $TMPDIR
+            // (or /tmp) to write runex.nu and then source it. The path
+            // ends up uniquely named per session, so concurrent test
+            // invocations don't clobber each other.
+            let nu_path = std::env::temp_dir()
+                .join(format!("runex-pty-{}.nu", std::process::id()));
+            // Generate the script *outside* the PTY to avoid having
+            // to wait for a sentinel between the save and the source.
+            let out = std::process::Command::new(runex_bin)
+                .args(["--config"])
+                .arg(config)
+                .args(["export", "nu", "--bin", runex_bin])
+                .output()
+                .ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            std::fs::write(&nu_path, &out.stdout).ok()?;
+
+            // Install a custom prompt by setting PROMPT_COMMAND. nu's
+            // PROMPT_COMMAND is evaluated each render, so a static
+            // string is fine. PROMPT_INDICATOR* vars must be cleared
+            // so reedline doesn't append `> ` after our sentinel.
+            session
+                .send_line(&format!(
+                    "$env.PROMPT_COMMAND = '{SENTINEL_PROMPT}'; $env.PROMPT_COMMAND_RIGHT = ''; $env.PROMPT_INDICATOR = ''; $env.PROMPT_INDICATOR_VI_INSERT = ''; $env.PROMPT_INDICATOR_VI_NORMAL = ''; $env.PROMPT_MULTILINE_INDICATOR = ''"
+                ))
+                .ok()?;
+            session
+                .send_line(&format!("$env.RUNEX_CONFIG = '{cfg}'"))
+                .ok()?;
+            session
+                .send_line(&format!("source '{}'", nu_path.display()))
                 .ok()?;
         }
     }
