@@ -170,8 +170,36 @@ spaces causes the runex binding to fire mid-paste, and the
 line at fire time. Everything after the first triggering space gets
 dropped. This is upstream nu behaviour, not specific to runex.
 
-If you regularly paste shell snippets into nu, switch nu's trigger
-to a chord that paste streams won't contain:
+**1st choice (since 0.1.14):** add a Ctrl+V binding that reads the
+system clipboard directly, bypassing the per-keystroke trigger:
+
+```toml
+[keybind.trigger]
+default = "space"
+
+[keybind.paste_intercept]
+nu = "ctrl-v"
+```
+
+**Try it:** paste `echo a b c d` with Ctrl+V — the whole line stays
+intact. Type `gst<Space>` to expand normally. Plain Space remains
+the trigger; Ctrl+V is a separate path that pipes the clipboard
+into the buffer via `runex paste-clipboard` (a hidden subcommand
+the binding calls automatically).
+
+Provider chain: Windows uses native `OpenClipboard`; Linux tries
+`wl-paste` → `xclip` → `xsel`; WSL adds `powershell.exe
+Get-Clipboard` as a final fallback; macOS uses `pbpaste`. Install
+one if `runex paste-clipboard` reports "no clipboard provider
+found".
+
+**Note:** mouse middle-click paste and terminal right-click paste
+inject characters through the keymap (not Ctrl+V), so they remain
+affected by the upstream limitation. Use Ctrl+V from the keyboard
+or fall back to choice 2 below.
+
+**2nd choice — switch the trigger to a chord paste streams cannot
+contain:**
 
 ```toml
 [keybind.trigger]
@@ -179,12 +207,11 @@ default = "space"
 nu      = "shift-space"
 ```
 
-**Try it:** paste `echo a b c d` into nu — the whole line stays
-intact. Type `gst<Shift+Space>` to expand. Bash/zsh/pwsh/clink keep
-plain Space as their trigger because they handle paste-time chord
-events correctly (pwsh sets a paste-pending flag, clink only fires
-the lua binding on standalone keypresses, bash/zsh have no
-trigger-on-paste race in the first place).
+Then paste `echo a b c d` and type `gst<Shift+Space>` to expand.
+Bash/zsh/pwsh/clink keep plain Space as their trigger because they
+handle paste-time chord events correctly (pwsh sets a paste-pending
+flag, clink only fires the lua binding on standalone keypresses,
+bash/zsh have no trigger-on-paste race in the first place).
 
 ---
 

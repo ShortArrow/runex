@@ -7,26 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.14] - 2026-05-06
 
+### Added
+
+- **`runex paste-clipboard` (hidden subcommand) and nu Ctrl+V paste
+  binding.** Reads the system clipboard text and writes it to stdout;
+  the nu integration uses it to inject paste content via
+  `commandline edit --insert`, sidestepping nu's per-keystroke
+  abbreviation trigger. Enable by adding to `config.toml`:
+  ```toml
+  [keybind.paste_intercept]
+  nu = "ctrl-v"
+  ```
+  Provider chain: Windows uses native `OpenClipboard` /
+  `GetClipboardData(CF_UNICODETEXT)` via `windows-sys`; Linux tries
+  `wl-paste` → `xclip -selection clipboard -o` → `xsel --clipboard
+  --output`; WSL falls back to `powershell.exe Get-Clipboard` when
+  no Linux clipboard daemon is available; macOS uses `pbpaste`.
+  Cap is 1 MiB; per-provider timeout is 500 ms. The paste_intercept
+  binding is not generated when the config does not opt in, so
+  existing nu setups are unaffected.
+- **Config schema: `[keybind.paste_intercept]` and `TriggerKey::ctrl-v`.**
+  Currently only `nu = "ctrl-v"` is supported. Setting `ctrl-v` as a
+  regular trigger or self-insert binding is rejected with
+  `CtrlVAsTrigger` / `CtrlVAsSelfInsert`; setting paste_intercept on
+  bash/zsh/pwsh is rejected with `PasteInterceptUnsupportedShell`
+  (those shells either have no trigger-on-paste race, or
+  short-circuit via `paste_pending`).
+
 ### Known limitations
 
 - **nu (`nushell` 0.111): pasting content that contains the trigger
-  space drops everything after the first triggering space.** nu's
-  reedline delivers paste characters one keystroke at a time, and the
-  `executehostcommand` event the runex binding uses resets the
+  space drops everything after the first triggering space — UNLESS
+  you opt into the `[keybind.paste_intercept] nu = "ctrl-v"` binding
+  added in this release.** Without paste_intercept, nu's reedline
+  delivers paste characters one keystroke at a time, and the
+  `executehostcommand` event the runex space binding uses resets the
   command line at fire time, so paste content arriving after the
-  triggering space is lost. Workarounds:
-  1. Configure a non-space trigger for nu in `config.toml`:
+  triggering space is lost. Workarounds, in order of preference:
+  1. **(Recommended)** Configure the Ctrl+V paste binding:
+     ```toml
+     [keybind.paste_intercept]
+     nu = "ctrl-v"
+     ```
+     Then paste with Ctrl+V — runex reads the clipboard and inserts
+     it without the abbr binding ever seeing the spaces. Mouse
+     middle-click and terminal right-click paste still go through
+     the keymap and remain affected.
+  2. Switch nu's trigger to a chord paste streams cannot contain:
      ```toml
      [keybind.trigger]
-     nu = "shift+space"
+     nu = "shift-space"
      ```
-  2. Quote/escape paste content, or paste it in pieces.
-  This is upstream behaviour and applies to every nu keymap binding,
-  not just runex; the generated `runex.nu` template documents it
-  inline. Other shells (bash, zsh, pwsh, clink) handle paste
-  correctly: bash/zsh have no trigger-on-paste race, pwsh sets
-  `paste_pending` so the hook short-circuits, and clink's lua
-  binding only fires on standalone keypresses.
+  3. Quote/escape paste content, or paste it in pieces.
+  This is upstream behaviour for every nu keymap binding, not just
+  runex; bash/zsh/pwsh/clink are unaffected (no trigger-on-paste
+  race, `paste_pending` short-circuit, or standalone-keypress-only
+  bindings respectively).
 
 ### Security
 

@@ -28,10 +28,11 @@ Override with the `RUNEX_CONFIG` environment variable or the `--config` flag.
 
 Controls which key triggers expansion in each shell. Both subtables are optional.
 
-`[keybind]` has two subtables:
+`[keybind]` has three subtables:
 
 - `[keybind.trigger]` — the key that triggers abbreviation expansion
 - `[keybind.self_insert]` — a key that inserts a plain space without expanding (optional)
+- `[keybind.paste_intercept]` — a key that bypasses the per-keystroke trigger and reads the system clipboard directly (optional, currently nu only)
 
 Each subtable accepts the following fields:
 
@@ -63,6 +64,7 @@ bash    = "alt-space"   # bash uses Alt+Space; other shells use Space
 | `"tab"` | Tab |
 | `"alt-space"` | Alt + Space |
 | `"shift-space"` | Shift + Space (pwsh and nu only) |
+| `"ctrl-v"` | Ctrl + V (`[keybind.paste_intercept]` only — see below) |
 
 ### `[keybind.self_insert]`
 
@@ -87,6 +89,39 @@ Shell support for `self_insert`:
 | clink | — | — |
 
 > **Note:** Setting `self_insert.default = "shift-space"` (or `self_insert.bash`/`self_insert.zsh`) produces a warning from `runex doctor` because Shift+Space cannot be reliably detected in bash or zsh. Use `"alt-space"` for cross-shell support.
+
+### `[keybind.paste_intercept]`
+
+Binds a key (currently only `"ctrl-v"`) to a paste-from-clipboard action that bypasses the per-keystroke abbreviation trigger. Available since 0.1.14, currently supported only on `nu`.
+
+```toml
+[keybind.trigger]
+default = "space"
+
+[keybind.paste_intercept]
+nu = "ctrl-v"   # Ctrl+V reads the system clipboard via `runex paste-clipboard`
+```
+
+**Why nu only:** nu's reedline delivers paste content as individual keystrokes, so a paste containing the trigger space fires the runex binding mid-paste and the rest of the paste is lost (`executehostcommand` resets the command line at fire time). The paste_intercept binding wraps Ctrl+V to read the clipboard directly via the hidden `runex paste-clipboard` subcommand and inject the text via `commandline edit --insert`, sidestepping the keystroke trigger entirely. bash/zsh have no trigger-on-paste race, pwsh sets `paste_pending` so the hook short-circuits, and clink's lua binding only fires on standalone keypresses.
+
+**Provider chain for `runex paste-clipboard`:**
+
+| Platform | Provider |
+|---|---|
+| Windows | Native `OpenClipboard` / `GetClipboardData(CF_UNICODETEXT)` |
+| Linux | `wl-paste --no-newline` → `xclip -selection clipboard -o` → `xsel --clipboard --output` |
+| WSL | Linux providers first; falls back to `powershell.exe -NoProfile -Command Get-Clipboard` |
+| macOS | `pbpaste` |
+
+Each external command has a 500 ms timeout. Maximum clipboard size is 1 MiB. Empty clipboard → empty stdout (the binding's `is-empty` check no-ops the insert).
+
+**Validation:**
+
+- `paste_intercept` set on `default` / `bash` / `zsh` / `pwsh` is rejected by `runex doctor` and `parse_config` — those shells don't have the paste-mid-trigger problem and don't need a workaround.
+- Setting `paste_intercept.nu` to anything other than `"ctrl-v"` is rejected. The binding is locked to a single chord that paste streams cannot contain.
+- Setting `"ctrl-v"` on `[keybind.trigger]` or `[keybind.self_insert]` is rejected — Ctrl+V is reserved for `paste_intercept`.
+
+**Limitation:** mouse middle-click paste and terminal right-click paste inject characters through the keymap rather than triggering Ctrl+V, so they remain affected by nu's upstream paste-mid-trigger limitation. Use Ctrl+V from the keyboard for paste-safe operation.
 
 ---
 
