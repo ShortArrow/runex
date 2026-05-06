@@ -37,6 +37,7 @@ pub mod export;
 pub mod hook;
 pub mod init;
 pub mod list;
+pub mod paste_clipboard;
 pub mod precache;
 pub mod timings;
 pub mod version;

@@ -14,6 +14,7 @@
 //! split; moving it here is a separate commit to keep this one
 //! move-only across the runex-core absorption.
 
+pub mod clipboard;
 pub mod config_store;
 pub mod env;
 pub mod integration_check;

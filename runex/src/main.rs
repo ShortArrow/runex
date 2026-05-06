@@ -233,6 +233,13 @@ enum Commands {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    /// Read the system clipboard and write the text to stdout.
+    /// Hidden — only intended caller is the nu Ctrl+V binding generated
+    /// by `runex export nu` when `[keybind.paste_intercept]` is set.
+    /// Exit code 1 with a stderr hint when no clipboard provider is
+    /// available (e.g. Linux without xclip / wl-clipboard / xsel).
+    #[command(hide = true)]
+    PasteClipboard,
     /// Per-keystroke hook — called by the shell integration wrapper on every
     /// trigger-key press. Returns shell-specific eval text describing the new
     /// buffer/cursor state. Exit code 2 means "nothing to do; shell may
@@ -575,6 +582,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &infra::env::SystemHomeDir,
             )?
         }
+        Commands::PasteClipboard => cmd::paste_clipboard::handle()?,
         Commands::Hook { shell, line, cursor, paste_pending } => cmd::hook::handle(
             &shell,
             &line,

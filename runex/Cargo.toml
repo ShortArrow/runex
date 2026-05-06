@@ -39,6 +39,16 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# Microsoft-published auto-generated FFI bindings. Used by
+# `infra::clipboard` to call the Win32 clipboard API directly
+# (OpenClipboard / GetClipboardData(CF_UNICODETEXT) / GlobalLock).
+# Lighter than `winapi` and MIT/Apache-licensed; selected over
+# `arboard` to keep the dependency tree minimal.
+windows-sys = { version = "0.59", features = [
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_Foundation",
+] }
 
 [dev-dependencies]
 tempfile = "3"

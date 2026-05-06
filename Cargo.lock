@@ -567,6 +567,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "which",
+ "windows-sys 0.59.0",
  "winreg",
 ]
 
