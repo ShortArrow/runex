@@ -5,3 +5,9 @@
 # AI agents
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Local generated artefacts for the winget-pkgs PR. The actual
+# manifests live in the upstream microsoft/winget-pkgs repo;
+# anything we generate here is a working copy for the PR and
+# should not be committed back to the runex source tree.
+/manifests/
