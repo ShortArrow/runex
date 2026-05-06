@@ -162,6 +162,66 @@ hatch.
 
 ---
 
+## 6b. nu: avoid the paste-eats-content issue
+
+**Use case:** in nu (≥ 0.111 / reedline), pasting text that contains
+spaces causes the runex binding to fire mid-paste, and the
+`executehostcommand` event nu uses for keybinds resets the command
+line at fire time. Everything after the first triggering space gets
+dropped. This is upstream nu behaviour, not specific to runex.
+
+**1st choice (since 0.1.14):** add a Ctrl+V binding that reads the
+system clipboard directly, bypassing the per-keystroke trigger:
+
+```toml
+[keybind.trigger]
+default = "space"
+
+[keybind.paste_intercept]
+nu = "ctrl-v"
+```
+
+**Try it:** paste `echo a b c d` with Ctrl+V — the whole line stays
+intact. Type `gst<Space>` to expand normally. Plain Space remains
+the trigger; Ctrl+V is a separate path that pipes the clipboard
+into the buffer via `runex paste-clipboard` (a hidden subcommand
+the binding calls automatically).
+
+Provider chain: Windows uses native `OpenClipboard`; Linux tries
+`wl-paste` → `xclip` → `xsel`; WSL adds `powershell.exe
+Get-Clipboard` as a final fallback; macOS uses `pbpaste`. Install
+one if `runex paste-clipboard` reports "no clipboard provider
+found".
+
+**Caveats:**
+- Mouse middle-click paste and terminal right-click paste inject
+  characters through the keymap (not Ctrl+V), so they remain
+  affected by the upstream limitation. Use Ctrl+V from the keyboard
+  or fall back to choice 2 below.
+- **Windows Terminal intercepts Ctrl+V** before nu sees it (it is
+  the default `paste` binding). Either use a different terminal
+  (WezTerm and Alacritty are confirmed to pass Ctrl+V through), or
+  remap the Windows Terminal binding in `settings.json`. macOS
+  Terminal.app and most Linux terminal emulators pass Ctrl+V to nu
+  unchanged.
+
+**2nd choice — switch the trigger to a chord paste streams cannot
+contain:**
+
+```toml
+[keybind.trigger]
+default = "space"
+nu      = "shift-space"
+```
+
+Then paste `echo a b c d` and type `gst<Shift+Space>` to expand.
+Bash/zsh/pwsh/clink keep plain Space as their trigger because they
+handle paste-time chord events correctly (pwsh sets a paste-pending
+flag, clink only fires the lua binding on standalone keypresses,
+bash/zsh have no trigger-on-paste race in the first place).
+
+---
+
 ## 7. Different commands on Windows and Unix
 
 **Use case:** `rm -i` on Unix, `Remove-Item` in PowerShell.
@@ -188,8 +248,11 @@ when_command_exists = { default = ["rm"], pwsh = ["Remove-Item"] }
 
 ## 8. Platform-specific dependency check
 
-**Use case:** the abbreviation depends on a tool that's named differently
-per platform — `wsl` from inside Windows pwsh, `lsb_release` on Linux.
+**Use case:** the abbreviation depends on a tool that's only available
+on certain platforms — `wslpath` only exists inside WSL, for example.
+On the platform that doesn't need a precondition (here pwsh, where the
+expansion uses native PowerShell variables), an empty
+`when_command_exists` list says "no precondition, always expand".
 
 ```toml
 [[abbr]]
@@ -199,9 +262,9 @@ when_command_exists = { default = ["wslpath"], pwsh = [] }
 ```
 
 **Try it:** in WSL bash, `winhome<Space>` expands only when `wslpath`
-exists. In pwsh the empty list means "no precondition" — always
-expand. An empty `when_command_exists` list is treated as "no
-condition", not "fail".
+is on PATH (i.e. you really are inside WSL). In pwsh the empty list
+short-circuits the precondition — always expand. An empty
+`when_command_exists` list is treated as "no condition", not "fail".
 
 ---
 

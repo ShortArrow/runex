@@ -1,6 +1,6 @@
 [package]
 name = "runex"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2024"
 build = "build.rs"
 description = "Cross-shell abbreviation engine that expands short tokens into full commands"
@@ -15,19 +15,53 @@ readme = "README.md"
 name = "runex"
 path = "src/main.rs"
 
+# Bin-only crate. There is intentionally no `[lib]` target — the
+# absorbed runex-core code from Phase C lives entirely under the bin's
+# `domain`/`app`/`infra` modules and is `pub(crate)`. External users
+# install the CLI via `cargo install runex`; programmatic consumers
+# would need to embed the bin or the source. See `runex/src/main.rs`
+# crate-root docstring for the layering contract.
+
 [dependencies]
-runex-core = { version = "0.1.13", path = "../runex-core" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 which = "7"
+# Absorbed from runex-core's Cargo.toml in Phase C. The `runex-core`
+# crate that previously held these no longer compiles anything.
+toml = "0.8"
+toml_edit = "0.22"
+dirs = "6"
+thiserror = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# Microsoft-published auto-generated FFI bindings. Used by
+# `infra::clipboard` to call the Win32 clipboard API directly
+# (OpenClipboard / GetClipboardData(CF_UNICODETEXT) / GlobalLock).
+# Lighter than `winapi` and MIT/Apache-licensed; selected over
+# `arboard` to keep the dependency tree minimal.
+windows-sys = { version = "0.59", features = [
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_Foundation",
+] }
 
 [dev-dependencies]
 tempfile = "3"
 base64 = "0.22"
+# `serial_test` is needed for tests that mutate process-global state
+# ($PATH on Windows). Without it, the multi-threaded test runner can
+# interleave a $PATH-mutating test with a $PATH-reading test and
+# produce non-deterministic failures.
+serial_test = "3"
+
+# PTY-driven keystroke tests for the bash integration. Linux only;
+# the only consumer is `runex/tests/bash_pty_integration.rs`. expectrl
+# 0.7 ships a Windows backend via ConPTY but it is unstable, so we
+# gate the dependency to unix targets to keep Windows builds lean.
+[target.'cfg(unix)'.dev-dependencies]
+expectrl = "0.7"

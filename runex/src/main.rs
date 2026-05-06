@@ -1,24 +1,55 @@
+//! `runex` — cross-shell abbreviation expansion CLI.
+//!
+//! ## Layering
+//!
+//! ```text
+//!   cmd  → app  → domain
+//!     ↓     ↓
+//!   util   infra → domain
+//! ```
+//!
+//! - `domain/`  — pure data types and rule-evaluation logic. No I/O,
+//!   no env, no time. Imports from sibling layers are forbidden.
+//! - `app/`     — orchestration / use-case wrappers. Composes
+//!   `domain` types with `infra` adapters to answer "what should
+//!   `runex doctor` actually check?", "what should `expand` return
+//!   for this token?". No `std::fs::*` calls.
+//! - `infra/`   — file system, environment, registry adapters.
+//!   Implements injection traits (`HomeDirResolver`) for `app/`.
+//!   `infra → domain` only.
+//! - `cmd/`     — per-subcommand handlers. Reach behaviour through
+//!   `app/`; reach leaf utilities through `util/`. The architecture
+//!   test forbids `cmd → domain::{expand, hook}` and
+//!   `cmd → domain::shell::export_script`.
+//! - `util/`    — leaf helpers shared by `cmd/*` (shell detection,
+//!   prompt confirmation, command-existence factory). No
+//!   command-specific policy.
+//! - `format` / `shell_alias` / `win_path` — single-purpose modules
+//!   pre-dating the layering split; safe in their current location.
+//!
+//! Cycles are prevented at compile-time by
+//! `runex/tests/architecture.rs` (`no_infra_to_app_imports`,
+//! `no_domain_to_anyone_else_imports`,
+//! `no_cmd_to_domain_behavior_imports`,
+//! `no_filesystem_calls_in_app_layer`).
+
+mod app;
+mod cmd;
+mod domain;
 mod format;
+mod infra;
 mod shell_alias;
+mod util;
 #[cfg(windows)]
 mod win_path;
 
 use clap::{Parser, Subcommand};
-use format::{
-    format_check_line, format_dry_run_result, format_which_result, version_line,
-    which_result_to_json,
-};
-use runex_core::config::{default_config_path, load_config};
-use runex_core::doctor;
-use runex_core::expand;
-use runex_core::init as runex_init;
-use runex_core::model::{Config, ExpandResult};
-use runex_core::sanitize::sanitize_for_display;
-use runex_core::shell::Shell;
-use shell_alias::add_shell_alias_conflicts;
+use crate::app::config::{default_config_path, load_config};
+use crate::domain::model::Config;
+use crate::domain::sanitize::sanitize_for_display;
+use crate::domain::shell::Shell;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -36,15 +67,15 @@ pub(crate) const GIT_COMMIT: Option<&str> = option_env!("RUNEX_GIT_COMMIT");
 pub(crate) const CHECK_TAG_WIDTH: usize = 8;
 
 /// Maximum byte length of the `--bin` argument passed to `export`.
-const MAX_BIN_LEN: usize = 255;
+pub(crate) const MAX_BIN_LEN: usize = 255;
 
-struct Spinner {
+pub(crate) struct Spinner {
     done: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
 impl Spinner {
-    fn start(message: &'static str) -> Self {
+    pub(crate) fn start(message: &'static str) -> Self {
         if !io::stderr().is_terminal() {
             return Self {
                 done: Arc::new(AtomicBool::new(true)),
@@ -73,7 +104,7 @@ impl Spinner {
         }
     }
 
-    fn stop(mut self) {
+    pub(crate) fn stop(mut self) {
         self.done.store(true, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
@@ -202,6 +233,13 @@ enum Commands {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    /// Read the system clipboard and write the text to stdout.
+    /// Hidden — only intended caller is the nu Ctrl+V binding generated
+    /// by `runex export nu` when `[keybind.paste_intercept]` is set.
+    /// Exit code 1 with a stderr hint when no clipboard provider is
+    /// available (e.g. Linux without xclip / wl-clipboard / xsel).
+    #[command(hide = true)]
+    PasteClipboard,
     /// Per-keystroke hook — called by the shell integration wrapper on every
     /// trigger-key press. Returns shell-specific eval text describing the new
     /// buffer/cursor state. Exit code 2 means "nothing to do; shell may
@@ -227,7 +265,7 @@ enum Commands {
 
 /// Load config, erroring if the path or parse fails. Used by commands that
 /// require a valid config (Expand, List, Which).
-fn resolve_config(
+pub(crate) fn resolve_config(
     config_override: Option<&Path>,
 ) -> Result<(PathBuf, Config), Box<dyn std::error::Error>> {
     if let Some(path) = config_override {
@@ -247,7 +285,7 @@ fn resolve_config(
 /// gracefully when config is absent (Doctor, Export).
 ///
 /// Returns the config path, the parsed config (or None), and the error message if parsing failed.
-fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config>, Option<String>) {
+pub(crate) fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config>, Option<String>) {
     if let Some(path) = config_override {
         let result = load_config(path);
         let err = result.as_ref().err().map(|e| e.to_string());
@@ -261,943 +299,305 @@ fn resolve_config_opt(config_override: Option<&Path>) -> (PathBuf, Option<Config
 
 
 /// Compute the precache fingerprint for the current environment.
-fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> String {
+pub(crate) fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> String {
     let path_env = std::env::var("PATH").unwrap_or_default();
-    let mtime = runex_core::precache::config_mtime(config_path);
-    runex_core::precache::compute_fingerprint(&path_env, mtime, shell)
+    let mtime = crate::app::precache::config_mtime(config_path);
+    crate::app::precache::compute_fingerprint(&path_env, mtime, shell)
 }
 
-/// Build a `command_exists` closure with precache hint layer.
+/// Per-invocation runtime context shared by every command handler
+/// that needs config + resolved shell + a `command_exists` probe.
 ///
-/// When `path_prepend` is `Some(dir)`, files inside `dir` are checked first
-/// (bare name, and `.exe` on Windows). Falls through to `which::which`.
+/// Pre-B2 the `(config_path, config) = resolve_config(...);
+/// shell = resolve_shell(...).unwrap_or(Shell::Bash); fp =
+/// compute_precache_fingerprint(...); command_exists =
+/// make_command_exists(path_prepend, Some(&fp));` four-line dance
+/// was open-coded in `which`, `expand`, `timings`, `precache`,
+/// `hook`, and `doctor` (5+ sites, all subtly different in fp /
+/// command_exists tuning). Putting it behind one constructor
+/// removes the "five places to change" tax on any future runtime
+/// change and turns the precache-fingerprint policy (`Some(fp)` vs
+/// `None`) into a single decision per command rather than five
+/// scattered ones.
 ///
-/// Rejects any `cmd` containing `/`, `\`, or `:` because `when_command_exists`
-/// values must be bare command names, not filesystem paths. Accepting paths would
-/// allow directory traversal and absolute-path probing via `dir.join(cmd)`.
-///
-/// ## Hint layer (precache)
-///
-/// If `RUNEX_CMD_CACHE_V1` env var contains a valid cache with matching fingerprint:
-/// - `cache[cmd] == true` → return true immediately (skip `which`)
-/// - `cache[cmd] == false` → re-check live (avoid stale false negatives after installs)
-/// - `cmd` not in cache → live check
-///
-/// Results are also cached in a `RefCell<HashMap>` per invocation to avoid
-/// repeated `which` calls within the same CLI run.
-///
-/// ## Windows-specific PATH augmentation
-///
-/// On Windows we feed `which::which_in` the *augmented* search path from
-/// [`win_path::effective_search_path`] (process PATH + HKCU + HKLM) instead
-/// of relying on the inherited `PATH` env var alone.
-///
-/// The reason is that some parent processes — most notably the cmd.exe
-/// children that clink's Lua `io.popen` spawns — inherit a PATH that's
-/// missing the User-scope entries the registry holds. Without
-/// augmentation, `runex hook` running under clink would fail to find
-/// binaries installed under `~/.cargo/bin`,
-/// `~/AppData/Local/Microsoft/WinGet/Links`, or `~/AppData/Local/mise/shims`.
-/// `when_command_exists` rules pointing at those binaries would then
-/// silently evaluate false and abbreviations would no-op — looking like
-/// an integration bug while the real cause is environmental. The
-/// regression test `runex/tests/windows_path_isolation.rs` pins this
-/// behavior so the failure mode can't return unnoticed.
-fn make_command_exists<'a>(
-    path_prepend: Option<&'a Path>,
-    precache_fingerprint: Option<&str>,
-) -> impl Fn(&str) -> bool + 'a {
-    use runex_core::precache;
+/// `command_exists` is `Box<dyn Fn>` so the context is movable;
+/// the underlying closure owns its `path_prepend` so the context
+/// has no lifetime parameter.
+pub(crate) struct AppContext {
+    /// Path actually loaded — kept on the context for diagnostics
+    /// (and for handlers that may want to surface it). Currently
+    /// only constructed; future code may surface it on errors.
+    #[allow(dead_code)]
+    pub(crate) config_path: PathBuf,
+    pub(crate) config: Config,
+    /// `None` only when `--shell` was omitted *and* the command is
+    /// shell-agnostic (e.g. `list` shows all shells). Most handlers
+    /// fall back to `Shell::Bash` themselves; `AppContext` keeps the
+    /// raw `Option` so each handler can decide.
+    pub(crate) shell: Option<Shell>,
+    /// Stable digest of `(config_path, shell)`. Threaded through to
+    /// the precache layer for cache-key isolation; not read after
+    /// construction in this file but kept on the struct for
+    /// completeness of the context shape.
+    #[allow(dead_code)]
+    pub(crate) fingerprint: String,
+    pub(crate) command_exists: Box<dyn Fn(&str) -> bool>,
+}
 
-    let hint = precache_fingerprint.and_then(precache::load_cache);
-    let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
-    // On Windows we resolve commands against an *augmented* search path
-    // (process PATH + HKCU + HKLM) to cope with degraded environments
-    // such as the cmd.exe children that clink's Lua `io.popen` spawns.
-    // See `runex/src/win_path.rs` for the rationale and history. The
-    // value is computed once per CLI invocation and reused.
-    #[cfg(windows)]
-    let effective_path = win_path::effective_search_path();
+impl AppContext {
+    /// Build a context for commands that *require* a loadable config
+    /// (`which`, `expand`, `timings`, `precache`). Fails fast if the
+    /// config is missing or unparseable.
+    ///
+    /// `precache_enabled` controls whether the `command_exists`
+    /// closure consults the on-disk precache hint. Most commands
+    /// pass `true`; the historical `make_command_exists(.., None)`
+    /// callers (precache itself, doctor) pass `false`.
+    pub(crate) fn build(
+        config_flag: Option<&Path>,
+        shell_flag: Option<&str>,
+        path_prepend: Option<&Path>,
+        precache_enabled: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let (config_path, config) = resolve_config(config_flag)?;
+        Ok(Self::assemble(config_path, config, shell_flag, path_prepend, precache_enabled)?)
+    }
 
-    move |cmd: &str| -> bool {
-        if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
-            return false;
-        }
-
-        // Per-invocation memoization (covers repeated checks within one run)
-        if let Some(&cached) = cache.borrow().get(cmd) {
-            return cached;
-        }
-
-        // Precache hint: trust true, re-check false
-        if let Some(ref h) = hint {
-            if let Some(&cached) = h.commands.get(cmd) {
-                if cached {
-                    cache.borrow_mut().insert(cmd.to_owned(), true);
-                    return true;
-                }
-                // cached == false → fall through to live check (may have been installed)
-            }
-        }
-
-        let live_check = |c: &str| -> bool {
-            #[cfg(windows)]
-            {
-                let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                which::which_in(c, Some(&effective_path.combined), &cwd).is_ok()
-            }
-            #[cfg(not(windows))]
-            {
-                which::which(c).is_ok()
-            }
-        };
-
-        let exists = if let Some(dir) = path_prepend {
-            if dir.join(cmd).is_file() {
-                true
-            } else {
-                #[cfg(windows)]
-                {
-                    if dir.join(format!("{cmd}.exe")).is_file() {
-                        true
-                    } else {
-                        live_check(cmd)
-                    }
-                }
-                #[cfg(not(windows))]
-                {
-                    live_check(cmd)
-                }
-            }
+    /// Graceful variant: missing/unparseable config is *not* a hard
+    /// error; callers (`hook`, `doctor`) want to keep running and
+    /// surface the error themselves rather than abort. Returns the
+    /// parse-error message in `parse_error` when applicable.
+    ///
+    /// `OptionalContext` is the same shape as `AppContext` but with
+    /// `Option<Config>` so the caller can branch on absence.
+    pub(crate) fn build_optional(
+        config_flag: Option<&Path>,
+        shell_flag: Option<&str>,
+        path_prepend: Option<&Path>,
+        precache_enabled: bool,
+    ) -> OptionalContext {
+        let (config_path, config_opt, parse_error) = resolve_config_opt(config_flag);
+        let shell = resolve_shell(shell_flag).ok().flatten();
+        let resolved_shell = shell.unwrap_or(Shell::Bash);
+        let fingerprint = compute_precache_fingerprint(
+            &config_path,
+            &format!("{resolved_shell:?}").to_lowercase(),
+        );
+        let path_prepend_owned = path_prepend.map(|p| p.to_path_buf());
+        let command_exists: Box<dyn Fn(&str) -> bool> = if precache_enabled {
+            Box::new(make_command_exists_owned(path_prepend_owned, Some(fingerprint.clone())))
         } else {
-            live_check(cmd)
+            Box::new(make_command_exists_owned(path_prepend_owned, None))
         };
-
-        cache.borrow_mut().insert(cmd.to_owned(), exists);
-        exists
-    }
-}
-
-/// Maximum byte size of an rc file that `init` will read for marker detection.
-/// Files larger than this are treated as if the marker is absent so that init
-/// fails safe (appends the integration line) rather than consuming unbounded memory.
-const MAX_RC_FILE_BYTES: usize = 1024 * 1024; // 1 MB
-
-/// Read a shell rc file for RUNEX_INIT_MARKER detection.
-///
-/// Returns the file contents as a string, or an empty string if:
-/// - the file does not exist (init should append)
-/// - the file exceeds MAX_RC_FILE_BYTES (safety: never read enormous files)
-/// - the file cannot be read for any other I/O reason
-///
-/// Uses a single file descriptor for both the metadata check and the read to
-/// eliminate the TOCTOU race that exists when `metadata()` and `read_to_string()`
-/// open the file separately.  On Unix, `O_NONBLOCK` prevents `open()` from
-/// blocking if the path points to a named pipe (FIFO) with no writer.
-fn read_rc_content(path: &Path) -> String {
-    use std::io::Read;
-    #[cfg(unix)]
-    let mut file = {
-        use std::os::unix::fs::OpenOptionsExt;
-        match std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(path)
-        {
-            Ok(f) => f,
-            Err(_) => return String::new(),
-        }
-    };
-    #[cfg(not(unix))]
-    let mut file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return String::new(),
-    };
-    let meta = match file.metadata() {
-        Ok(m) => m,
-        Err(_) => return String::new(),
-    };
-    if !meta.is_file() {
-        return String::new();
-    }
-    if meta.len() > MAX_RC_FILE_BYTES as u64 {
-        return String::new();
-    }
-    let mut content = String::new();
-    file.read_to_string(&mut content).unwrap_or_default();
-    content
-}
-
-/// Infer the current shell from environment variables.
-///
-/// On Unix, reads `$SHELL`. On Windows, the presence of `PSModulePath` indicates
-/// a PowerShell parent process.
-fn detect_shell() -> Option<Shell> {
-    if let Ok(sh) = std::env::var("SHELL") {
-        let base = Path::new(&sh)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-        if let Ok(s) = base.parse::<Shell>() {
-            return Some(s);
+        OptionalContext {
+            config_path,
+            config: config_opt,
+            parse_error,
+            shell,
+            fingerprint,
+            command_exists,
         }
     }
-    if std::env::var("PSModulePath").is_ok() {
-        return Some(Shell::Pwsh);
+
+    fn assemble(
+        config_path: PathBuf,
+        config: Config,
+        shell_flag: Option<&str>,
+        path_prepend: Option<&Path>,
+        precache_enabled: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let shell = resolve_shell(shell_flag)?;
+        let resolved_shell = shell.unwrap_or(Shell::Bash);
+        let fingerprint = compute_precache_fingerprint(
+            &config_path,
+            &format!("{resolved_shell:?}").to_lowercase(),
+        );
+        let path_prepend_owned = path_prepend.map(|p| p.to_path_buf());
+        let command_exists: Box<dyn Fn(&str) -> bool> = if precache_enabled {
+            Box::new(make_command_exists_owned(path_prepend_owned, Some(fingerprint.clone())))
+        } else {
+            Box::new(make_command_exists_owned(path_prepend_owned, None))
+        };
+        Ok(Self {
+            config_path,
+            config,
+            shell,
+            fingerprint,
+            command_exists,
+        })
     }
-    None
 }
 
-/// Resolve shell from optional `--shell` flag, falling back to `detect_shell()`.
-///
-/// Returns `None` when no shell could be determined (both flag absent and detection failed).
-fn resolve_shell(shell_flag: Option<&str>) -> Result<Option<Shell>, Box<dyn std::error::Error>> {
-    if let Some(s) = shell_flag {
-        let sh = s.parse::<Shell>().map_err(|e: runex_core::shell::ShellParseError| {
-            Box::<dyn std::error::Error>::from(e.to_string())
-        })?;
-        return Ok(Some(sh));
-    }
-    Ok(detect_shell())
+/// Same fields as [`AppContext`] but `config` is optional and a
+/// `parse_error` is carried forward — used by commands that must
+/// survive a missing or broken config (`hook`, `doctor`).
+pub(crate) struct OptionalContext {
+    #[allow(dead_code)]
+    pub(crate) config_path: PathBuf,
+    pub(crate) config: Option<Config>,
+    #[allow(dead_code)]
+    pub(crate) parse_error: Option<String>,
+    #[allow(dead_code)]
+    pub(crate) shell: Option<Shell>,
+    #[allow(dead_code)]
+    pub(crate) fingerprint: String,
+    pub(crate) command_exists: Box<dyn Fn(&str) -> bool>,
 }
 
-/// Maximum byte length accepted from a single `prompt_confirm` read.
-/// A real y/N answer is at most a few bytes; anything beyond this limit
-/// is treated as "no" to prevent unbounded memory growth from piped input.
-const MAX_CONFIRM_BYTES: usize = 1_024;
+/// Items at crate root use the util fns directly. cmd/* and util/*
+/// reach the rest of util via fully-qualified paths. After B5 the
+/// only crate-root caller of these is `AppContext` (for
+/// `make_command_exists_owned`) and the `Commands::List` dispatch
+/// arm (for `resolve_shell`).
+use util::path::make_command_exists_owned;
+use util::shell::resolve_shell;
 
-/// Inner implementation of `prompt_confirm` that reads from an arbitrary `BufRead`.
-/// Returns true only for trimmed, case-insensitive "y" or "yes" responses
-/// that fit within MAX_CONFIRM_BYTES. Oversized input is treated as "no".
-fn prompt_confirm_from(reader: &mut impl io::BufRead) -> bool {
-    use io::{BufRead as _, Read as _};
-    let mut input = String::new();
-    let mut limited = reader.by_ref().take(MAX_CONFIRM_BYTES as u64 + 1);
-    match limited.read_line(&mut input) {
-        Err(_) => return false,
-        Ok(0) => return false,
-        Ok(_) => {}
-    }
-    if input.len() > MAX_CONFIRM_BYTES {
-        return false;
-    }
-    matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
-}
-
-fn prompt_confirm(msg: &str) -> bool {
-    eprint!("{msg} [y/N] ");
-    let _ = io::stderr().flush();
-    let stdin = io::stdin();
-    let mut reader = io::BufReader::new(stdin.lock());
-    prompt_confirm_from(&mut reader)
-}
+#[cfg(test)]
+use util::prompt::{prompt_confirm_from, MAX_CONFIRM_BYTES, MAX_RC_FILE_BYTES};
 
 
 /// Maximum byte length accepted for `--token` (expand) and `which <token>`.
 /// Tokens longer than any possible abbr key (MAX_KEY_BYTES = 1024 in config.rs)
 /// can never match and would cause needless memory allocation in sanitize_for_display.
-const MAX_TOKEN_BYTES: usize = 1_024;
+pub(crate) const MAX_TOKEN_BYTES: usize = 1_024;
 
-type CmdResult = Result<(), Box<dyn std::error::Error>>;
-
-fn handle_version(json: bool) -> CmdResult {
-    if json {
-        #[derive(serde::Serialize)]
-        struct VersionJson<'a> {
-            version: &'a str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            commit: Option<&'a str>,
-        }
-        let v = VersionJson {
-            version: env!("CARGO_PKG_VERSION"),
-            commit: GIT_COMMIT.filter(|s| !s.is_empty()),
-        };
-        println!("{}", serde_json::to_string_pretty(&v)?);
-    } else {
-        println!("{}", version_line());
-    }
-    Ok(())
+/// Outcome of a CLI subcommand handler. The handler reports either
+/// success (the process should exit 0) or a request to exit with a
+/// non-zero code. `main()` is the *only* function that calls
+/// `process::exit` — handlers return outcomes so they can be
+/// exercised from unit tests without taking the test process down
+/// with them. Unrecoverable errors still bubble up via the `Err`
+/// variant of `CmdResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CmdOutcome {
+    /// Handler succeeded; main exits with 0.
+    Ok,
+    /// Handler requests a specific exit code (typically 1 for
+    /// validation failures or doctor-found-errors). Used in place
+    /// of `std::process::exit(n)` inside handlers.
+    ExitCode(i32),
 }
 
-fn handle_list(config: &Config, shell: Option<Shell>, json: bool) -> CmdResult {
-    if json {
-        println!("{}", serde_json::to_string_pretty(&config.abbr)?);
-    } else {
-        for (key, exp) in expand::list(config, shell) {
-            println!("{}\t{}", sanitize_for_display(key), sanitize_for_display(&exp));
-        }
-    }
-    Ok(())
-}
+pub(crate) type CmdResult = Result<CmdOutcome, Box<dyn std::error::Error>>;
 
-fn handle_which(
-    token: String,
-    config: &Config,
-    shell: Shell,
-    command_exists: &dyn Fn(&str) -> bool,
-    json: bool,
-    why: bool,
-) -> CmdResult {
-    if token.len() > MAX_TOKEN_BYTES {
-        eprintln!(
-            "error: token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
-            token.len()
-        );
-        std::process::exit(1);
-    }
-    let result = expand::which_abbr(config, &token, shell, command_exists);
-    if json {
-        println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
-    } else {
-        println!("{}", format_which_result(&result, why));
-    }
-    Ok(())
-}
+// Per-subcommand handlers live in `cmd::*`. main()'s dispatch just
+// forwards there.
 
-fn handle_expand(
-    token: String,
-    config: &Config,
-    shell: Shell,
-    command_exists: &dyn Fn(&str) -> bool,
-    json: bool,
-    dry_run: bool,
-) -> CmdResult {
-    if token.len() > MAX_TOKEN_BYTES {
-        eprintln!(
-            "error: --token is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
-            token.len()
-        );
-        std::process::exit(1);
-    }
-    if dry_run {
-        let result = expand::which_abbr(config, &token, shell, command_exists);
-        if json {
-            println!("{}", serde_json::to_string_pretty(&which_result_to_json(&result))?);
-        } else {
-            print!("{}", format_dry_run_result(&token, &result));
-        }
-    } else {
-        let result = expand::expand(config, &token, shell, command_exists);
-        if json {
-            let v = match &result {
-                ExpandResult::Expanded { text: s, .. } => serde_json::json!({
-                    "result": "expanded",
-                    "token": token,
-                    "expansion": s,
-                }),
-                ExpandResult::PassThrough(s) => serde_json::json!({
-                    "result": "pass_through",
-                    "token": s,
-                }),
-            };
-            println!("{}", serde_json::to_string_pretty(&v)?);
-        } else {
-            match result {
-                ExpandResult::Expanded { text, cursor_offset } => {
-                    if let Some(offset) = cursor_offset {
-                        // Output text + unit separator + cursor offset for shell templates
-                        print!("{text}\x1f{offset}");
-                    } else {
-                        print!("{text}");
-                    }
-                }
-                ExpandResult::PassThrough(s) => print!("{s}"),
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Validate and parse the `--bin` argument for `export`.
-///
-/// Rejects values that are empty, whitespace-only, too long, contain control
-/// characters, or contain non-printable-ASCII characters.  Only printable ASCII
-/// is allowed to prevent Unicode homoglyphs and bidirectional overrides from
-/// being silently embedded in generated shell scripts.
-fn validate_bin(bin: &str) {
-    if bin.trim().is_empty() {
-        eprintln!("error: --bin must not be empty or whitespace-only");
-        std::process::exit(1);
-    }
-    if bin.len() > MAX_BIN_LEN {
-        eprintln!("error: --bin is too long ({} bytes); maximum is {MAX_BIN_LEN}", bin.len());
-        std::process::exit(1);
-    }
-    if bin.chars().any(|c| c.is_ascii_control() || c == '\u{0085}' || c == '\u{2028}' || c == '\u{2029}') {
-        eprintln!("error: --bin contains an invalid control character");
-        std::process::exit(1);
-    }
-    if bin.chars().any(|c| !c.is_ascii() || !c.is_ascii_graphic()) {
-        eprintln!("error: --bin must contain only printable ASCII characters");
-        std::process::exit(1);
-    }
-}
-
-fn handle_export(
-    shell: String,
-    bin: String,
-    config_flag: Option<&Path>,
-) -> CmdResult {
-    validate_bin(&bin);
-    let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
-        Box::<dyn std::error::Error>::from(e.to_string())
-    })?;
-    let config = if config_flag.is_some() {
-        let (_path, cfg) = resolve_config(config_flag)?;
-        Some(cfg)
-    } else {
-        let (_path, cfg, _err) = resolve_config_opt(None);
-        cfg
-    };
-    // For clink, default-bin must resolve to an absolute path.
-    //
-    // Why: clink invokes runex via Lua's `io.popen` which spawns a fresh
-    // cmd.exe child. That child inherits whatever PATH the clink-injected
-    // host process happens to have, and on real machines that PATH is
-    // sometimes degraded (e.g. system-only, with the User scope from
-    // HKCU not yet merged in). A bare `runex` command in the lua script
-    // would then fail to resolve. Embedding the absolute path of the
-    // currently-running executable (which is by definition reachable —
-    // we ourselves were just launched from it) sidesteps the entire
-    // PATH-inheritance question for clink.
-    //
-    // Other shells (bash/zsh/pwsh/nu) rely on PATH-resolved bare names
-    // because they're invoked from rcfiles where PATH is already correct,
-    // and because users can plausibly want to override which `runex`
-    // gets used. Only clink gets the absolute-path treatment.
-    let effective_bin = if matches!(s, Shell::Clink) && bin == "runex" {
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.to_str().map(|s| s.to_string()))
-            .unwrap_or(bin)
-    } else {
-        bin
-    };
-    print!("{}", runex_core::shell::export_script(s, &effective_bin, config.as_ref()));
-    Ok(())
-}
-
-fn handle_precache(
-    shell: String,
-    list_commands: bool,
-    resolved: Option<String>,
-    config_flag: Option<&Path>,
-    path_prepend: Option<&Path>,
-) -> CmdResult {
-    use runex_core::precache;
-
-    let s: Shell = shell.parse().map_err(|e: runex_core::shell::ShellParseError| {
-        Box::<dyn std::error::Error>::from(e.to_string())
-    })?;
-    let shell_name = format!("{s:?}").to_lowercase();
-
-    let (config_path, config) = resolve_config(config_flag)?;
-
-    // Mode 1: print comma-separated list of commands to check externally.
-    // When path_only is true, output nothing so the shell template falls
-    // back to which-based precache.
-    if list_commands {
-        if !config.precache.path_only {
-            let cmds = precache::collect_unique_commands(&config);
-            print!("{}", cmds.join(","));
-        }
-        return Ok(());
-    }
-
-    let fp = compute_precache_fingerprint(&config_path, &shell_name);
-
-    // Mode 2: use externally resolved results instead of which::which()
-    if let Some(resolved_str) = resolved {
-        let cache = precache::build_cache_from_resolved(&config, &fp, &resolved_str);
-        let json = precache::cache_to_json(&cache);
-        println!("{}", precache::export_statement(&shell_name, &json));
-        return Ok(());
-    }
-
-    // Default: use which::which() for command existence checks
-    let command_exists = make_command_exists(path_prepend, None);
-    let cache = precache::build_cache(&config, &fp, &command_exists);
-    let json = precache::cache_to_json(&cache);
-
-    println!("{}", precache::export_statement(&shell_name, &json));
-    Ok(())
-}
-
-fn handle_timings(
-    key: Option<String>,
-    shell_str: Option<String>,
-    config_flag: Option<&Path>,
-    path_prepend: Option<&Path>,
-    json: bool,
-) -> CmdResult {
-    use runex_core::timings::{PhaseTimer, Timings};
-
-    let mut timings = Timings::new();
-
-    let t = PhaseTimer::start();
-    let (config_path, config) = resolve_config(config_flag)?;
-    timings.record_phase("config_load", t.elapsed());
-
-    let t = PhaseTimer::start();
-    let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
-    timings.record_phase("shell_resolve", t.elapsed());
-
-    let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
-    let command_exists = make_command_exists(path_prepend, Some(&fp));
-
-    match key {
-        Some(k) => {
-            if k.len() > MAX_TOKEN_BYTES {
-                eprintln!(
-                    "error: key is too long ({} bytes); maximum is {MAX_TOKEN_BYTES}",
-                    k.len()
-                );
-                std::process::exit(1);
-            }
-            expand::expand_timed(&config, &k, shell, &command_exists, &mut timings);
-        }
-        None => {
-            // Time each unique abbr key
-            let keys: Vec<String> = config.abbr.iter().map(|a| a.key.clone()).collect();
-            let unique_keys: Vec<String> = {
-                let mut seen = std::collections::HashSet::new();
-                keys.into_iter().filter(|k| seen.insert(k.clone())).collect()
-            };
-            for key in &unique_keys {
-                expand::expand_timed(&config, key, shell, &command_exists, &mut timings);
-            }
-        }
-    }
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&format::format_timings_json(&timings))?);
-    } else {
-        print!("{}", format::format_timings_table(&timings));
-    }
-    Ok(())
-}
-
-/// Compose the [`doctor::DoctorEnvInfo`] that the `doctor` subcommand
-/// passes alongside the config checks. Today this only sets the
-/// Windows effective-search-path breakdown; on other platforms only
-/// the integration-check fields apply.
-fn build_doctor_env_info(config: Option<&Config>) -> doctor::DoctorEnvInfo {
-    let mut info = doctor::DoctorEnvInfo::default();
-
-    #[cfg(windows)]
-    {
-        let p = win_path::effective_search_path();
-        info.effective_search_path = Some(doctor::EffectiveSearchPathSummary {
-            from_process: p.from_process,
-            from_user_registry: p.from_user_registry,
-            from_system_registry: p.from_system_registry,
-        });
-    }
-
-    // Render the canonical clink export so doctor can detect drift on
-    // disk. Use the absolute path of our own executable as the bin
-    // (matching `handle_export`'s clink full-path fallback) so a fresh
-    // `runex doctor` after upgrade matches what `runex init clink`
-    // would write today.
-    let clink_bin = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "runex".to_string());
-    info.clink_export_for_drift_check = Some(runex_core::shell::export_script(
-        Shell::Clink,
-        &clink_bin,
-        config,
-    ));
-
-    // We always want to know whether the user ran `runex init <shell>`
-    // for each rcfile-bearing shell. doctor itself decides whether to
-    // emit each row based on rcfile existence (a missing rcfile means
-    // "user doesn't use that shell" and the check is skipped silently).
-    info.check_rcfile_markers = doctor::RcfileMarkerSelection::all();
-
-    info
-}
-
-fn handle_doctor(
-    config_flag: Option<&Path>,
-    path_prepend: Option<&Path>,
-    no_shell_aliases: bool,
-    verbose: bool,
-    strict: bool,
-    json: bool,
-) -> CmdResult {
-    let (config_path, config, parse_error) = resolve_config_opt(config_flag);
-    // Doctor checks live command existence — no precache (intentional)
-    let command_exists = make_command_exists(path_prepend, None);
-    let spinner = Spinner::start("Checking environment...");
-    // Build informational env-info that doctor renders alongside the
-    // config checks: Windows effective_search_path breakdown (see
-    // `runex/src/win_path.rs`), per-shell rcfile marker checks, and a
-    // clink-lua drift check. The current config is forwarded so the
-    // generated clink export reflects the user's keybinds & abbrs.
-    let env_info = build_doctor_env_info(config.as_ref());
-    let mut result = doctor::diagnose(
-        &config_path,
-        config.as_ref(),
-        parse_error.as_deref(),
-        &env_info,
-        &command_exists,
-    );
-    if !no_shell_aliases {
-        add_shell_alias_conflicts(&mut result, config.as_ref());
-    }
-    // Read config source once (O_NOFOLLOW, size-capped) and share across checks.
-    let source = runex_core::config::read_config_source(&config_path).ok();
-
-    // Always: report every rule rejected by per-field validation so users know
-    // *all* the invalid fields, not just the first one that tripped parse_config.
-    if let Some(src) = source.as_deref() {
-        result.checks.extend(doctor::check_rejected_rules(src));
-    }
-
-    if strict {
-        if let Some(src) = source.as_deref() {
-            result.checks.extend(doctor::check_unknown_fields(src));
-            result.checks.extend(doctor::check_precache_deprecation(src));
-        }
-        // Check for unreachable duplicate rules
-        if let Some(cfg) = config.as_ref() {
-            result.checks.extend(doctor::check_unreachable_duplicates(cfg));
-        }
-    }
-    spinner.stop();
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&result.checks)?);
-    } else {
-        for check in &result.checks {
-            println!("{}", format_check_line(check, verbose));
-        }
-    }
-
-    if !result.is_healthy() {
-        std::process::exit(1);
-    }
-    Ok(())
-}
-
-fn handle_init(config_path: PathBuf, shell_override: Option<&str>, yes: bool) -> CmdResult {
-    let msg = format!("Create config at {}?", sanitize_for_display(&config_path.display().to_string()));
-    if yes || prompt_confirm(&msg) {
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&config_path)
-        {
-            Ok(mut f) => {
-                f.write_all(runex_init::default_config_content().as_bytes())?;
-                println!("Created: {}", sanitize_for_display(&config_path.display().to_string()));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                println!("Config already exists: {}", sanitize_for_display(&config_path.display().to_string()));
-            }
-            Err(e) => return Err(e.into()),
-        }
-    } else {
-        println!("Skipped config creation.");
-    }
-
-    let shell = if let Some(s) = shell_override {
-        s.parse::<Shell>().map_err(|e: runex_core::shell::ShellParseError| {
-            Box::<dyn std::error::Error>::from(e.to_string())
-        })?
-    } else {
-        detect_shell().unwrap_or_else(|| {
-            eprintln!(
-                "Could not detect shell. Defaulting to bash. \
-                 Use `runex init <shell>` (e.g. `runex init pwsh`) to target a specific shell."
-            );
-            Shell::Bash
-        })
-    };
-
-    let rc_path_for_next_steps = match shell {
-        Shell::Clink => {
-            install_clink_lua(yes, &config_path)?;
-            None
-        }
-        _ => install_rcfile_integration(shell, yes)?,
-    };
-
-    println!();
-    println!("{}", runex_init::next_steps_message(shell, rc_path_for_next_steps.as_deref()));
-    Ok(())
-}
-
-/// Append the integration block to the rcfile for `shell`. Returns the
-/// rcfile path so the caller can show it in the Next-steps blurb.
-///
-/// Safety properties (documented in `docs/setup.md` for users):
-///
-/// - `OpenOptions::append` so existing rcfile content is **never**
-///   overwritten — every byte we write goes after the file's current
-///   end.
-/// - `O_NOFOLLOW` on Unix so a symlink at `rc_path` doesn't redirect
-///   the write to a different file.
-/// - Idempotent: if `RUNEX_INIT_MARKER` is already present in the
-///   file, we skip the append entirely (no duplicate blocks).
-/// - User confirmation per write unless `--yes`.
-fn install_rcfile_integration(shell: Shell, yes: bool) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
-    let Some(rc_path) = runex_init::rc_file_for(shell) else {
-        println!(
-            "Shell integration for {:?} must be added manually. \
-             Run `runex export {:?}` for the script.",
-            shell, shell
-        );
-        return Ok(None);
-    };
-    let existing = read_rc_content(&rc_path);
-    if existing.contains(runex_init::RUNEX_INIT_MARKER) {
-        println!(
-            "Shell integration already present in {}",
-            sanitize_for_display(&rc_path.display().to_string())
-        );
-        return Ok(Some(rc_path));
-    }
-    let msg = format!(
-        "Append shell integration to {}?",
-        sanitize_for_display(&rc_path.display().to_string())
-    );
-    if !(yes || prompt_confirm(&msg)) {
-        println!("Skipped shell integration.");
-        return Ok(Some(rc_path));
-    }
-    let line = runex_init::integration_line(shell, "runex");
-    let block = format!("\n{}\n{}\n", runex_init::RUNEX_INIT_MARKER, line);
-    if let Some(parent) = rc_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut open_opts = std::fs::OpenOptions::new();
-    open_opts.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        open_opts.custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut file = open_opts.open(&rc_path)?;
-    file.write_all(block.as_bytes())?;
-    println!("Appended integration to {}", sanitize_for_display(&rc_path.display().to_string()));
-    Ok(Some(rc_path))
-}
-
-/// Write the clink lua integration to the resolved install path.
-///
-/// Unlike the rcfile flow, clink's lua file is a *static copy* of the
-/// `runex export clink` output. There's no marker block to detect, so
-/// we compare full file content against what would be emitted now and
-/// only ask before overwriting if the on-disk content has actually
-/// drifted. Identical content is a no-op (silent OK).
-///
-/// `config_path` is consulted so the export reflects the user's
-/// keybind / abbr config (clink's lua bakes a `RUNEX_BIN` reference,
-/// not abbreviation tables, so the dependency is light — but still
-/// correct to thread through).
-fn install_clink_lua(yes: bool, config_path: &Path) -> CmdResult {
-    use runex_core::integration_check::{check_clink_lua_freshness, IntegrationCheck};
-
-    // Compute the canonical export content for *this* runex binary.
-    let bin = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "runex".to_string());
-    let (_path, config, _err) = resolve_config_opt(Some(config_path));
-    let new_content = runex_core::shell::export_script(Shell::Clink, &bin, config.as_ref());
-
-    let install_path = runex_init::default_clink_lua_install_path();
-
-    // Decide what to do based on what's already on disk at any of the
-    // probe paths. We only write to `install_path`; the freshness check
-    // is purely informational ("would this PR-style overwrite be a no-op?").
-    let probe = check_clink_lua_freshness(
-        &new_content,
-        &runex_core::integration_check::default_clink_lua_paths(),
-    );
-    match probe {
-        IntegrationCheck::Ok { detail, .. } => {
-            println!("clink integration already up-to-date ({detail}).");
-            return Ok(());
-        }
-        IntegrationCheck::Outdated { path, .. } => {
-            let msg = format!(
-                "clink lua at {} is out of date. Overwrite with the current export?",
-                sanitize_for_display(&path.display().to_string())
-            );
-            if !(yes || prompt_confirm(&msg)) {
-                println!("Skipped clink integration update.");
-                return Ok(());
-            }
-        }
-        IntegrationCheck::Skipped { .. } | IntegrationCheck::Missing { .. } => {
-            // No clink lua on disk yet; ask before creating it.
-            let msg = format!(
-                "Write clink integration to {}?",
-                sanitize_for_display(&install_path.display().to_string())
-            );
-            if !(yes || prompt_confirm(&msg)) {
-                println!("Skipped clink integration.");
-                return Ok(());
-            }
-        }
-    }
-
-    if let Some(parent) = install_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&install_path, new_content.as_bytes())?;
-    println!(
-        "Wrote clink integration to {}",
-        sanitize_for_display(&install_path.display().to_string())
-    );
-    Ok(())
-}
 
 
 /// Per-keystroke hook handler. Writes the shell-specific eval text to stdout
 /// on success. On config-load failure we silently emit nothing and return
 /// exit code 2; the shell wrapper treats that as "insert a literal space"
 /// (so runex never breaks the user's terminal even with a broken config).
-fn handle_hook(
-    shell_str: &str,
-    line: &str,
-    cursor: usize,
-    paste_pending: bool,
-    config_override: Option<&Path>,
-    path_prepend: Option<&Path>,
-) -> CmdResult {
-    let shell = Shell::from_str(shell_str)
-        .map_err(|e| format!("{}", e))?;
-
-    // If the user pasted a block, the pwsh wrapper sets this flag so we skip
-    // expansion entirely and behave like a normal space keypress.
-    if paste_pending {
-        let action = runex_core::hook::HookAction::InsertSpace {
-            line: {
-                let mut s = String::with_capacity(line.len() + 1);
-                let cursor = cursor.min(line.len());
-                s.push_str(&line[..cursor]);
-                s.push(' ');
-                s.push_str(&line[cursor..]);
-                s
-            },
-            cursor: cursor.min(line.len()) + 1,
-        };
-        println!("{}", runex_core::hook::render_action(shell, &action));
-        return Ok(());
-    }
-
-    // Config load failures are treated as "no expansion" — we still return the
-    // InsertSpace action so the wrapper inserts a literal space on behalf of
-    // the user.
-    let (config_path, config_opt, _err) = resolve_config_opt(config_override);
-    let Some(config) = config_opt else {
-        // No valid config: emit a plain InsertSpace and return. This avoids
-        // making every keypress a no-op (which would swallow the trigger key)
-        // when a user has a malformed config they haven't fixed yet.
-        let cursor_safe = cursor.min(line.len());
-        let mut s = String::with_capacity(line.len() + 1);
-        s.push_str(&line[..cursor_safe]);
-        s.push(' ');
-        s.push_str(&line[cursor_safe..]);
-        let action = runex_core::hook::HookAction::InsertSpace { line: s, cursor: cursor_safe + 1 };
-        println!("{}", runex_core::hook::render_action(shell, &action));
-        return Ok(());
-    };
-
-    let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
-    let command_exists = make_command_exists(path_prepend, Some(&fp));
-    let action = runex_core::hook::hook(&config, shell, line, cursor, command_exists);
-    println!("{}", runex_core::hook::render_action(shell, &action));
-    Ok(())
-}
+/// Maximum byte length of the `--line` value `runex hook` will
+/// process. The hook runs on every keystroke, so the worst-case cost
+/// of token extraction and is_command_position scanning has to stay
+/// bounded. 16 KiB is far above any realistic shell buffer (a long
+/// pasted command is typically a few KiB at most) and comfortably
+/// below the Windows `CreateProcess` ~32 KiB argv limit, which lets
+/// integration tests feed an oversize value through argv without
+/// exceeding the OS cap before our own.
+///
+/// When the cap is exceeded the handler short-circuits to InsertSpace
+/// at the cursor and returns. This is the same fall-back the trigger
+/// key would have produced anyway, so the user only loses expansion
+/// on that single keypress.
+pub(crate) const MAX_HOOK_LINE_BYTES: usize = 16 * 1024;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    match cli.command {
-        Commands::Version => handle_version(cli.json)?,
+    let outcome: CmdOutcome = match cli.command {
+        Commands::Version => cmd::version::handle(cli.json)?,
         Commands::List { shell: shell_str } => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let shell = resolve_shell(shell_str.as_deref())?;
-            handle_list(&config, shell, cli.json)?;
+            cmd::list::handle(&config, shell, cli.json)?
         }
         Commands::Which { token, why, shell: shell_str } => {
-            let (config_path, config) = resolve_config(cli.config.as_deref())?;
-            let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
-            let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
-            let command_exists = make_command_exists(cli.path_prepend.as_deref(), Some(&fp));
-            handle_which(token, &config, shell, &command_exists, cli.json, why)?;
+            let ctx = AppContext::build(
+                cli.config.as_deref(),
+                shell_str.as_deref(),
+                cli.path_prepend.as_deref(),
+                true,
+            )?;
+            cmd::which::handle(
+                token,
+                &ctx.config,
+                ctx.shell.unwrap_or(Shell::Bash),
+                &*ctx.command_exists,
+                cli.json,
+                why,
+            )?
         }
         Commands::Expand { token, dry_run, shell: shell_str } => {
-            let (config_path, config) = resolve_config(cli.config.as_deref())?;
-            let shell = resolve_shell(shell_str.as_deref())?.unwrap_or(Shell::Bash);
-            let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
-            let command_exists = make_command_exists(cli.path_prepend.as_deref(), Some(&fp));
-            handle_expand(token, &config, shell, &command_exists, cli.json, dry_run)?;
-        }
-        Commands::Export { shell, bin } => {
-            handle_export(shell, bin, cli.config.as_deref())?;
-        }
-        Commands::Doctor { no_shell_aliases, verbose, strict } => {
-            handle_doctor(
+            let ctx = AppContext::build(
                 cli.config.as_deref(),
+                shell_str.as_deref(),
                 cli.path_prepend.as_deref(),
-                no_shell_aliases,
-                verbose,
-                strict,
-                cli.json,
+                true,
             )?;
-        }
-        Commands::Precache { shell, list_commands, resolved } => {
-            handle_precache(shell, list_commands, resolved, cli.config.as_deref(), cli.path_prepend.as_deref())?;
-        }
-        Commands::Timings { key, shell: shell_str } => {
-            handle_timings(
-                key,
-                shell_str,
-                cli.config.as_deref(),
-                cli.path_prepend.as_deref(),
+            cmd::expand::handle(
+                token,
+                &ctx.config,
+                ctx.shell.unwrap_or(Shell::Bash),
+                &*ctx.command_exists,
                 cli.json,
-            )?;
+                dry_run,
+            )?
         }
+        Commands::Export { shell, bin } => cmd::export::handle(shell, bin, cli.config.as_deref())?,
+        Commands::Doctor { no_shell_aliases, verbose, strict } => cmd::doctor::handle(
+            cli.config.as_deref(),
+            cli.path_prepend.as_deref(),
+            no_shell_aliases,
+            verbose,
+            strict,
+            cli.json,
+        )?,
+        Commands::Precache { shell, list_commands, resolved } => cmd::precache::handle(
+            shell,
+            list_commands,
+            resolved,
+            cli.config.as_deref(),
+            cli.path_prepend.as_deref(),
+        )?,
+        Commands::Timings { key, shell: shell_str } => cmd::timings::handle(
+            key,
+            shell_str,
+            cli.config.as_deref(),
+            cli.path_prepend.as_deref(),
+            cli.json,
+        )?,
         Commands::Init { shell, yes } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
                 p.to_path_buf()
             } else {
                 default_config_path()?
             };
-            handle_init(config_path, shell.as_deref(), yes)?;
+            cmd::init::handle(
+                config_path,
+                shell.as_deref(),
+                yes,
+                &infra::env::SystemHomeDir,
+            )?
         }
-        Commands::Hook { shell, line, cursor, paste_pending } => {
-            handle_hook(
-                &shell,
-                &line,
-                cursor,
-                paste_pending,
-                cli.config.as_deref(),
-                cli.path_prepend.as_deref(),
-            )?;
-        }
+        Commands::PasteClipboard => cmd::paste_clipboard::handle()?,
+        Commands::Hook { shell, line, cursor, paste_pending } => cmd::hook::handle(
+            &shell,
+            &line,
+            cursor,
+            paste_pending,
+            cli.config.as_deref(),
+            cli.path_prepend.as_deref(),
+        )?,
         Commands::Add { key, expand, when } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
                 p.to_path_buf()
             } else {
                 default_config_path()?
             };
-            runex_core::config::append_abbr_to_file(
-                &config_path,
-                &key,
-                &expand,
-                when.as_deref(),
-            )?;
-            println!("Added: {} -> {}", sanitize_for_display(&key), sanitize_for_display(&expand));
+            cmd::add_remove::handle_add(&config_path, &key, &expand, when.as_deref())?
         }
         Commands::Remove { key } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
@@ -1205,16 +605,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 default_config_path()?
             };
-            let removed = runex_core::config::remove_abbr_from_file(&config_path, &key)?;
-            if removed > 0 {
-                println!("Removed {} rule(s) for '{}'", removed, sanitize_for_display(&key));
-            } else {
-                println!("No rule found for '{}'", sanitize_for_display(&key));
-            }
+            cmd::add_remove::handle_remove(&config_path, &key)?
         }
-    }
+    };
 
-    Ok(())
+    // Single point of `process::exit` for the whole CLI. Handlers
+    // never call `std::process::exit` themselves — they return
+    // `CmdOutcome::ExitCode(n)` and main translates that here. This
+    // is what makes handlers unit-testable: a test harness can call
+    // them directly and inspect the returned outcome instead of
+    // having the test process silently die.
+    match outcome {
+        CmdOutcome::Ok => Ok(()),
+        CmdOutcome::ExitCode(code) => std::process::exit(code),
+    }
 }
 
 #[cfg(test)]
@@ -1222,12 +626,11 @@ mod tests {
     use super::*;
 
     mod command_exists {
-        use super::*;
 
     #[test]
     /// `cargo` is guaranteed to be on PATH in a Rust build environment.
     fn make_command_exists_no_prepend_uses_which() {
-        let exists = make_command_exists(None, None);
+        let exists = crate::util::path::make_command_exists(None, None);
         assert!(exists("cargo"));
         assert!(!exists("__runex_fake_cmd_that_does_not_exist__"));
     }
@@ -1237,7 +640,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fake_bin = dir.path().join("myfaketool");
         std::fs::write(&fake_bin, b"").unwrap();
-        let exists = make_command_exists(Some(dir.path()), None);
+        let exists = crate::util::path::make_command_exists(Some(dir.path()), None);
         assert!(exists("myfaketool"));
         assert!(!exists("__runex_other_fake__"));
     }
@@ -1253,7 +656,16 @@ mod tests {
     /// binary by consulting the registry's User PATH.
     #[test]
     #[cfg(windows)]
+    #[serial_test::serial(env_path)]
     fn make_command_exists_finds_user_path_binary_when_process_path_is_minimal() {
+        // `serial(env_path)` shares an exclusion group with the
+        // AppContext fingerprint stability test: both mutate / read
+        // $PATH and would otherwise produce flakes when run in
+        // parallel on Windows. The comment about "tests run
+        // sequentially within this test module" below predates B2 —
+        // that's no longer true crate-wide, hence the explicit
+        // `serial` attribute.
+
         // Probe whether cargo is on the registry User PATH; if not, this test
         // can't reliably assert anything (e.g. CI without cargo in user PATH).
         let user_path = read_user_path_for_test();
@@ -1272,7 +684,7 @@ mod tests {
         // mutate PATH from any other test, and we restore it before returning.
         unsafe { std::env::set_var("PATH", r"C:\Windows\System32;C:\Windows"); }
 
-        let exists = make_command_exists(None, None);
+        let exists = crate::util::path::make_command_exists(None, None);
         let found = exists("cargo");
 
         // SAFETY: see above.
@@ -1360,7 +772,7 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         use std::io::Write;
         f.write_all(b"# runex-init\n").unwrap();
-        let content = read_rc_content(f.path());
+        let content = crate::util::prompt::read_rc_content(f.path());
         assert!(content.contains("# runex-init"), "normal rc file must be readable");
     }
 
@@ -1369,7 +781,7 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         use std::io::Write;
         f.write_all(&vec![b'x'; MAX_RC_FILE_BYTES + 1]).unwrap();
-        let content = read_rc_content(f.path());
+        let content = crate::util::prompt::read_rc_content(f.path());
         assert!(
             content.is_empty(),
             "read_rc_content must return empty string for oversized rc file"
@@ -1378,7 +790,7 @@ mod tests {
 
     #[test]
     fn read_rc_content_returns_empty_for_missing_file() {
-        let content = read_rc_content(std::path::Path::new("/nonexistent/runex_test.rc"));
+        let content = crate::util::prompt::read_rc_content(std::path::Path::new("/nonexistent/runex_test.rc"));
         assert!(content.is_empty(), "missing rc file must return empty string");
     }
 
@@ -1391,7 +803,7 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         use std::io::Write;
         f.write_all(&vec![b'x'; MAX_RC_FILE_BYTES]).unwrap();
-        let content = read_rc_content(f.path());
+        let content = crate::util::prompt::read_rc_content(f.path());
         assert_eq!(
             content.len(),
             MAX_RC_FILE_BYTES,
@@ -1487,7 +899,7 @@ mod tests {
         let pipe = dir.path().join("fake_rc.sh");
         let path_c = CString::new(pipe.to_str().unwrap()).unwrap();
         unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) };
-        let content = read_rc_content(&pipe);
+        let content = crate::util::prompt::read_rc_content(&pipe);
         assert_eq!(
             content, "",
             "read_rc_content must return empty string for a named pipe (FIFO), not block"
@@ -1498,7 +910,7 @@ mod tests {
     #[cfg(unix)]
     fn read_rc_content_rejects_dev_zero() {
         let path = std::path::Path::new("/dev/zero");
-        let content = read_rc_content(path);
+        let content = crate::util::prompt::read_rc_content(path);
         assert_eq!(
             content, "",
             "read_rc_content must return empty string for /dev/zero (device file)"
@@ -1506,5 +918,160 @@ mod tests {
     }
 
     } // mod rc_file_non_regular
+
+    /// `AppContext` collapses the `resolve_config + resolve_shell +
+    /// compute_precache_fingerprint + make_command_exists` four-line
+    /// dance that used to live in five handlers. These tests pin the
+    /// builder's contract: same inputs produce same fingerprints
+    /// (cache stability), graceful builder survives missing config.
+    mod app_context {
+        use super::*;
+        use std::io::Write;
+
+        fn write_minimal_config(toml: &str) -> tempfile::NamedTempFile {
+            let mut f = tempfile::NamedTempFile::new().unwrap();
+            f.write_all(toml.as_bytes()).unwrap();
+            f.flush().unwrap();
+            f
+        }
+
+        #[test]
+        #[cfg_attr(windows, serial_test::serial(env_path))]
+        fn build_returns_same_fingerprint_for_identical_args() {
+            // The fingerprint depends on $PATH (via
+            // `compute_precache_fingerprint`). The Windows-only
+            // `make_command_exists_finds_user_path_binary_…` test
+            // also mutates $PATH; without the `serial` attribute on
+            // both, the two can interleave on a multi-threaded test
+            // runner and the fingerprints diverge. Linux has no
+            // equivalent mutator so the gating is Windows-only.
+            let cfg = write_minimal_config("version = 1\n");
+            let a = AppContext::build(Some(cfg.path()), Some("bash"), None, true)
+                .expect("build must succeed for a valid config");
+            let b = AppContext::build(Some(cfg.path()), Some("bash"), None, true)
+                .expect("build must succeed twice");
+            assert_eq!(
+                a.fingerprint, b.fingerprint,
+                "two builds with the same inputs must produce the same fingerprint, \
+                 otherwise on-disk precache hits would alternate between calls"
+            );
+        }
+
+        #[test]
+        fn build_optional_returns_none_config_when_path_missing() {
+            let nonexistent = std::path::Path::new("/nonexistent/runex/config.toml");
+            let ctx = AppContext::build_optional(Some(nonexistent), Some("bash"), None, true);
+            assert!(
+                ctx.config.is_none(),
+                "build_optional must return None config (not an Err) when the file is missing — \
+                 hook depends on this so it can fall back to InsertSpace"
+            );
+        }
+
+        #[test]
+        fn build_fails_when_config_path_missing() {
+            let nonexistent = std::path::Path::new("/nonexistent/runex/config.toml");
+            let result = AppContext::build(Some(nonexistent), Some("bash"), None, true);
+            assert!(
+                result.is_err(),
+                "build (non-graceful) must Err on missing config — \
+                 which/expand depend on this to surface the error"
+            );
+        }
+    }
+
+    /// Handlers that previously called `std::process::exit(1)`
+    /// directly are now testable from inside the process. These
+    /// tests confirm the new contract: a validation failure
+    /// returns `Ok(CmdOutcome::ExitCode(1))` instead of bringing
+    /// the test process down with it.
+    ///
+    /// The handlers exercised here are the ones that owned the
+    /// pre-B1 exits: handle_which / handle_expand / handle_timings
+    /// for over-long tokens, validate_bin (via handle_export) for
+    /// invalid bin strings.
+    mod handler_outcomes {
+        use super::*;
+        use crate::domain::model::Config;
+
+        fn over_long_token() -> String {
+            // MAX_TOKEN_BYTES is 1_024; 1025 trips the guard with
+            // exactly one byte of slack.
+            "a".repeat(MAX_TOKEN_BYTES + 1)
+        }
+
+        fn never_exists(_: &str) -> bool {
+            false
+        }
+
+        #[test]
+        fn handle_which_over_long_token_returns_exit_code_1() {
+            let cfg = Config {
+                version: 1,
+                keybind: Default::default(),
+                precache: Default::default(),
+                abbr: Vec::new(),
+            };
+            let outcome = cmd::which::handle(
+                over_long_token(),
+                &cfg,
+                Shell::Bash,
+                &never_exists,
+                false,
+                false,
+            )
+            .expect("cmd::which::handle must return Ok, not Err, for an over-long token");
+            assert_eq!(outcome, CmdOutcome::ExitCode(1));
+        }
+
+        #[test]
+        fn handle_expand_over_long_token_returns_exit_code_1() {
+            let cfg = Config {
+                version: 1,
+                keybind: Default::default(),
+                precache: Default::default(),
+                abbr: Vec::new(),
+            };
+            let outcome = cmd::expand::handle(
+                over_long_token(),
+                &cfg,
+                Shell::Bash,
+                &never_exists,
+                false,
+                false,
+            )
+            .expect("cmd::expand::handle must return Ok, not Err, for an over-long token");
+            assert_eq!(outcome, CmdOutcome::ExitCode(1));
+        }
+
+        #[test]
+        fn validate_bin_rejects_empty() {
+            assert!(cmd::export::validate_bin("").is_err());
+            assert!(cmd::export::validate_bin("   ").is_err());
+        }
+
+        #[test]
+        fn validate_bin_rejects_oversize() {
+            let huge = "a".repeat(MAX_BIN_LEN + 1);
+            assert!(cmd::export::validate_bin(&huge).is_err());
+        }
+
+        #[test]
+        fn validate_bin_rejects_control_characters() {
+            assert!(cmd::export::validate_bin("ru\nnex").is_err()); // literal newline
+            assert!(cmd::export::validate_bin("ru\x07nex").is_err()); // BEL
+        }
+
+        #[test]
+        fn validate_bin_rejects_non_ascii() {
+            assert!(cmd::export::validate_bin("rünex").is_err());
+        }
+
+        #[test]
+        fn validate_bin_accepts_normal_name() {
+            assert!(cmd::export::validate_bin("runex").is_ok());
+            assert!(cmd::export::validate_bin("/usr/local/bin/runex").is_ok());
+        }
+    }
 
 }

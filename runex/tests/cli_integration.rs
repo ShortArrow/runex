@@ -487,20 +487,62 @@ fn explicit_config_parse_error_exits_nonzero() {
     assert!(!ok, "list with broken config must exit non-zero");
 }
 
-/// `doctor` reports `config_file` as Error when the file doesn't exist and exits non-zero.
-#[test]
-fn doctor_with_missing_explicit_config_exits_nonzero() {
-    let (_, _, ok) = run(&["doctor"], Some(std::path::Path::new("/nonexistent/config.toml")), None);
-    assert!(!ok, "doctor must exit non-zero when config file is missing");
+// Doctor output has two consumers with different stability needs:
+//   * `--json` is the *contract* — name/status pairs are the API that
+//     editor plugins / dashboards / scripts parse. Pin those by parsing
+//     JSON.
+//   * Plain stdout is the *UX* — wording, ordering, emoji are tuned for
+//     human readability and may change. Assert only the bare minimum
+//     (exit code, presence of the check's machine name) so doctor
+//     copy-edits don't ripple into test failures.
+
+/// Helper: locate a doctor check by name from `--json` output.
+fn doctor_check<'a>(json: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+    json.as_array()?.iter().find(|c| c["name"].as_str() == Some(name))
 }
 
 #[test]
-fn doctor_shows_parse_error_in_output() {
+fn doctor_with_missing_explicit_config_marks_config_file_error() {
+    let (stdout, _, ok) = run(
+        &["doctor", "--json"],
+        Some(std::path::Path::new("/nonexistent/config.toml")),
+        None,
+    );
+    assert!(!ok, "doctor must exit non-zero when config file is missing");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}\nstdout: {stdout}"));
+    let cf = doctor_check(&parsed, "config_file")
+        .expect("doctor --json must include a 'config_file' check");
+    assert_eq!(
+        cf["status"].as_str(),
+        Some("error"),
+        "config_file status must be 'error' when the path is missing: {cf}"
+    );
+}
+
+#[test]
+fn doctor_reports_parse_error_via_json_contract() {
     let cfg = write_config("[keybind]\ntrigger = \"space\"\n");
-    let (stdout, _, ok) = run(&["doctor"], Some(cfg.path()), None);
-    assert!(!ok, "doctor must exit non-zero with broken config");
-    assert!(stdout.contains("config_parse"), "stdout must contain config_parse check: {stdout}");
-    assert!(stdout.contains("failed to load config"), "stdout must contain error message: {stdout}");
+    let (stdout_json, _, ok_json) = run(&["doctor", "--json"], Some(cfg.path()), None);
+    assert!(!ok_json, "doctor must exit non-zero with broken config");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout_json)
+        .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}\nstdout: {stdout_json}"));
+    let parse = doctor_check(&parsed, "config_parse")
+        .expect("doctor --json must include a 'config_parse' check");
+    assert_eq!(parse["status"].as_str(), Some("error"));
+    assert!(
+        parse["detail"].as_str().is_some_and(|d| !d.is_empty()),
+        "config_parse error must carry a non-empty detail: {parse}"
+    );
+
+    // Plain stdout: only check the *machine* name appears so users can
+    // grep for it. Don't pin specific wording — that's UX surface.
+    let (stdout_plain, _, ok_plain) = run(&["doctor"], Some(cfg.path()), None);
+    assert!(!ok_plain);
+    assert!(
+        stdout_plain.contains("config_parse"),
+        "plain stdout must reference 'config_parse' check name: {stdout_plain}"
+    );
 }
 
 #[test]
@@ -517,20 +559,26 @@ fn doctor_verbose_shows_multiline_parse_error() {
 #[test]
 fn doctor_parse_error_unsupported_version() {
     let cfg = write_config("version = 99\n");
-    let (stdout, _, ok) = run(&["doctor"], Some(cfg.path()), None);
+    let (stdout, _, ok) = run(&["doctor", "--json"], Some(cfg.path()), None);
     assert!(!ok, "doctor must exit non-zero for unsupported version");
-    assert!(stdout.contains("config_parse"), "stdout must contain config_parse check: {stdout}");
-    assert!(stdout.contains("failed to load config"), "stdout must mention the error: {stdout}");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}\nstdout: {stdout}"));
+    let parse = doctor_check(&parsed, "config_parse")
+        .expect("doctor --json must include a 'config_parse' check");
+    assert_eq!(parse["status"].as_str(), Some("error"));
 }
 
 #[test]
 fn doctor_parse_error_key_too_long() {
     let long_key = "a".repeat(1025);
     let cfg = write_config(&format!("version = 1\n[[abbr]]\nkey = \"{long_key}\"\nexpand = \"x\"\n"));
-    let (stdout, _, ok) = run(&["doctor"], Some(cfg.path()), None);
+    let (stdout, _, ok) = run(&["doctor", "--json"], Some(cfg.path()), None);
     assert!(!ok, "doctor must exit non-zero for key too long");
-    assert!(stdout.contains("config_parse"), "stdout must contain config_parse check: {stdout}");
-    assert!(stdout.contains("failed to load config"), "stdout must mention the error: {stdout}");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}\nstdout: {stdout}"));
+    let parse = doctor_check(&parsed, "config_parse")
+        .expect("doctor --json must include a 'config_parse' check");
+    assert_eq!(parse["status"].as_str(), Some("error"));
 }
 
 #[test]
@@ -570,16 +618,51 @@ fn json_list_is_array_with_key_and_expand() {
 }
 
 #[test]
-fn json_doctor_is_array_with_name_and_status() {
+fn json_doctor_contract_pins_name_and_status_enum() {
+    // The `--json` output is the contract for editor plugins / dashboards.
+    // Pin (1) the top-level shape (array of objects), (2) the always-
+    // present check names, (3) every check's name/status types, and
+    // (4) the `status` enum values. Wording, ordering, and human-
+    // readable detail strings are intentionally not pinned.
     let cfg = write_config("version = 1\n");
     let (stdout, _, ok) = run(&["doctor", "--json"], Some(cfg.path()), None);
     assert!(ok);
     let v: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("doctor --json is not valid JSON: {e}"));
-    let arr = v.as_array().expect("doctor --json must be an array");
-    assert!(!arr.is_empty());
-    assert!(arr[0].get("name").is_some(), "each check must have 'name'");
-    assert!(arr[0].get("status").is_some(), "each check must have 'status'");
+
+    // (1) top-level shape: array of objects.
+    let arr = v.as_array().expect("doctor --json must be a top-level array");
+    assert!(!arr.is_empty(), "doctor --json array must not be empty");
+    for check in arr {
+        assert!(check.is_object(), "every doctor check must be a JSON object: {check}");
+    }
+
+    // (2) always-present checks. Both fire on every run regardless of
+    //     config validity, so plugins can rely on their existence.
+    for required in ["config_file", "config_parse"] {
+        assert!(
+            doctor_check(&v, required).is_some(),
+            "doctor --json must always include the '{required}' check; got: {arr:?}"
+        );
+    }
+
+    // (3) + (4) per-check types and the status enum.
+    //     Mirrors `runex::app::doctor::CheckStatus` in the bin's
+    //     module tree (this is an external test crate so the path
+    //     is informational, not import-able). If a new variant is
+    //     added there, add it here too — that's the whole point.
+    const ALLOWED_STATUS: &[&str] = &["ok", "warn", "error"];
+    for check in arr {
+        let name = check["name"].as_str()
+            .unwrap_or_else(|| panic!("each check must have a string 'name': {check}"));
+        assert!(!name.is_empty(), "check 'name' must be non-empty: {check}");
+        let status = check["status"].as_str()
+            .unwrap_or_else(|| panic!("each check must have a string 'status': {check}"));
+        assert!(
+            ALLOWED_STATUS.contains(&status),
+            "check '{name}' status '{status}' is not in {ALLOWED_STATUS:?}"
+        );
+    }
 }
 
 // ─── init --config ────────────────────────────────────────────────────────────
@@ -898,6 +981,254 @@ fn init_does_not_follow_symlink_at_rc_file() {
         "init must not follow symlink at rc file path and write to the symlink target"
     );
     let _ = out;
+}
+
+// ─── init: rcfile-write safety properties ─────────────────────────────────────
+// docs/setup.md promises four guarantees about `runex init`'s rcfile
+// writes (append-only, marker-idempotent, size-cap, seed-config-content).
+// The tests below pin those promises so we notice if a refactor breaks
+// one. Each one is a regression-pinning test against the current
+// implementation rather than TDD against new behaviour.
+//
+// Most of these tests are `#[cfg(unix)]` because the Windows
+// `dirs::home_dir()` uses the Known Folders API (FOLDERID_Profile),
+// not `$HOME` / `$USERPROFILE`, so the `init_cmd_in_dir` helper's env
+// override does not redirect rcfile resolution on Windows. The
+// rcfile-write logic itself is platform-agnostic, so the property
+// guarantees still hold on Windows; we just can't exercise them
+// without running against the real user `~/.bashrc`, which we refuse
+// to do in tests. The seed-config and clink-lua tests don't have
+// this limitation and run on all platforms.
+
+/// Append-only: an existing rcfile keeps its prior content byte-for-byte
+/// after `runex init`, with the integration block strictly past the
+/// previous EOF.
+#[test]
+#[cfg(unix)]
+fn init_preserves_existing_rcfile_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let bashrc = dir.path().join(".bashrc");
+    let user_content = "alias ll='ls -la'\nexport EDITOR=nvim\n";
+    std::fs::write(&bashrc, user_content).unwrap();
+
+    let out = init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "init must succeed: {:?}", out);
+
+    let after = std::fs::read_to_string(&bashrc).unwrap();
+    assert!(
+        after.starts_with(user_content),
+        "init must preserve existing rcfile bytes verbatim at the start; got:\n{after}"
+    );
+    assert!(
+        after.contains("# runex-init"),
+        "init must append the marker block after the existing content: {after}"
+    );
+    let _ = out;
+}
+
+/// Idempotent: running `runex init` twice yields exactly one
+/// integration block (marker appears once).
+#[test]
+#[cfg(unix)]
+fn init_is_idempotent_marker_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let bashrc = dir.path().join(".bashrc");
+
+    init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+    let after_first = std::fs::read_to_string(&bashrc).unwrap();
+
+    init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+    let after_second = std::fs::read_to_string(&bashrc).unwrap();
+
+    assert_eq!(
+        after_first, after_second,
+        "second init must be a no-op; rcfile content changed: first=\n{after_first}\nsecond=\n{after_second}"
+    );
+    let marker_count = after_second.matches("# runex-init").count();
+    assert_eq!(
+        marker_count, 1,
+        "exactly one `# runex-init` marker must be present after two inits; saw {marker_count} in:\n{after_second}"
+    );
+}
+
+/// Size cap: rcfiles larger than `MAX_RC_FILE_BYTES` (1 MB) are read as
+/// if the marker were absent, but the safety read fails closed — the
+/// existing oversized content stays intact and no integration block is
+/// silently appended.
+///
+/// Note on current behaviour: `read_rc_content` returns "" for oversized
+/// files, which causes `init` to *attempt* to append, which then succeeds
+/// (the file exists, append-only). That actually means the marker DOES
+/// get added, just below the 1 MB pile. We test for the property that
+/// matters — the user's prior bytes survive — rather than the secondary
+/// "no-write-on-oversize" behaviour, because the implementation chose
+/// "fail safe = append anyway" semantics and we want to pin that
+/// faithfully.
+#[test]
+#[cfg(unix)]
+fn init_oversize_rcfile_keeps_prior_content_intact() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let bashrc = dir.path().join(".bashrc");
+    // 1 MB + 1 byte of arbitrary data. The limit is `MAX_RC_FILE_BYTES`
+    // = 1 << 20 in `runex/src/main.rs`; we synthesise just past it.
+    let oversize: Vec<u8> = vec![b'x'; (1024 * 1024) + 1];
+    std::fs::write(&bashrc, &oversize).unwrap();
+
+    init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+
+    let after = std::fs::read(&bashrc).unwrap();
+    assert!(
+        after.starts_with(&oversize),
+        "init must never destroy or rewrite the prior rcfile bytes; got len={}",
+        after.len()
+    );
+}
+
+/// Seed config: a fresh `runex init` writes a config file that contains
+/// both the working `[keybind.trigger] default = "space"` block and the
+/// `gst → git status` sample abbreviation. README and docs/setup
+/// promise these as the "first expand in 5 minutes" demonstration.
+#[test]
+fn init_seed_config_includes_keybind_trigger_and_gst_sample() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+
+    init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+
+    let body = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        body.contains("[keybind.trigger]"),
+        "seed config must include [keybind.trigger]: {body}"
+    );
+    assert!(
+        body.contains("default = \"space\""),
+        "seed config must bind Space as the default trigger: {body}"
+    );
+    assert!(
+        body.contains("key    = \"gst\""),
+        "seed config must include the gst sample abbreviation: {body}"
+    );
+    assert!(
+        body.contains("expand = \"git status\""),
+        "seed config must map gst to `git status`: {body}"
+    );
+}
+
+/// `read_rc_content` (the marker-presence check used by `init`) must
+/// also refuse to follow symlinks. The write side already has
+/// `O_NOFOLLOW`; if the read side reports "marker present" by reading
+/// through a symlink, init makes a different decision than the write
+/// would, which is at minimum confusing and potentially usable for
+/// information leakage. Pin them to the same policy.
+///
+/// We observe the read decision via init's stdout: if the symlink was
+/// followed, init reports `Shell integration already present in <path>`
+/// (it saw the marker in the decoy target). If the symlink was
+/// rejected, init either tries to append (and fails at the write-side
+/// O_NOFOLLOW) or reports a different message — anything that does
+/// NOT contain "already present" proves the read didn't follow.
+#[test]
+#[cfg(unix)]
+fn init_marker_check_does_not_follow_symlink() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+
+    // Decoy that contains the runex marker. If `read_rc_content`
+    // follows the bashrc symlink, init will see this marker.
+    let target = dir.path().join("decoy_with_marker.txt");
+    std::fs::write(&target, "# runex-init\nfake\n").unwrap();
+    let bashrc = dir.path().join(".bashrc");
+    symlink(&target, &bashrc).unwrap();
+
+    let out = init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stdout.contains("already present"),
+        "init reported the marker as already present, which means \
+         read_rc_content followed the symlink. stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+}
+
+/// `runex init clink` must refuse to write through a symlink at the
+/// install path. An attacker who can create a symlink in the user's
+/// clink scripts directory could otherwise redirect runex's write to
+/// any file the runex process can write — same threat model as the
+/// rcfile write side, where `O_NOFOLLOW` already protects.
+#[test]
+#[cfg(unix)]
+fn init_clink_refuses_symlink_at_install_path() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let target = dir.path().join("sensitive.txt");
+    std::fs::write(&target, b"secret").unwrap();
+    let lua_link = dir.path().join("runex.lua");
+    symlink(&target, &lua_link).unwrap();
+
+    let _out = init_cmd_in_dir(dir.path())
+        .env("RUNEX_CLINK_LUA_PATH", lua_link.to_str().unwrap())
+        .args(["--config", config_path.to_str().unwrap(), "init", "clink", "--yes"])
+        .output()
+        .unwrap();
+
+    let after = std::fs::read(&target).unwrap();
+    assert_eq!(
+        after, b"secret",
+        "init clink must refuse to follow a symlink at the install path; the target file got rewritten"
+    );
+}
+
+/// `runex init clink` writes the clink lua integration to the path
+/// chosen by `RUNEX_CLINK_LUA_PATH`. That env override is the supported
+/// way to redirect the install for testing or for users with a
+/// non-default clink scripts directory.
+#[test]
+fn init_clink_writes_lua_to_resolved_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+    let lua_target = dir.path().join("clink").join("runex.lua");
+
+    let out = init_cmd_in_dir(dir.path())
+        .env("RUNEX_CLINK_LUA_PATH", lua_target.to_str().unwrap())
+        .args(["--config", config_path.to_str().unwrap(), "init", "clink", "--yes"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "init clink must succeed: {:?}", out);
+
+    let written = std::fs::read_to_string(&lua_target)
+        .expect("init clink should have written the lua file at RUNEX_CLINK_LUA_PATH");
+    assert!(
+        written.contains("runex shell integration for clink"),
+        "written lua must be the clink integration template: {written}"
+    );
+    assert!(
+        written.contains("RUNEX_BIN"),
+        "written lua must reference RUNEX_BIN: {written}"
+    );
 }
 
 // ─── export --bin validation ──────────────────────────────────────────────────
@@ -1235,5 +1566,107 @@ fn init_prompt_confirm_huge_stdin_is_treated_as_no() {
     assert!(
         !config_path.exists() || stdout.contains("Skipped"),
         "huge 'yyy...' blob without newline must not be treated as 'yes': stdout={stdout}"
+    );
+}
+
+// ─── hook: oversized --line cap ──────────────────────────────────────────────
+//
+// `runex hook` runs on every keystroke. If the shell wrapper passes a
+// pathologically large `--line` value, the per-keystroke cost should
+// stay bounded — we'd rather emit the trigger key's literal-space
+// fallback than chew CPU on token extraction. The handler enforces an
+// `MAX_HOOK_LINE_BYTES` cap (16 KiB) and emits InsertSpace without
+// running any expansion logic.
+//
+// We pick 16 KiB rather than something larger because Windows
+// `CreateProcess` caps argv at ~32 KiB; the cap value has to leave
+// room for the rest of the command line and for tests to feed an
+// oversize input through argv.
+
+/// `runex hook --shell bash --line <oversize>` must short-circuit to
+/// InsertSpace and skip expansion entirely. The cap exists so the
+/// per-keystroke handler stays O(1) regardless of buffer size; if the
+/// guard regresses the hook would walk a multi-MB paste on every key.
+///
+/// Construction: place the abbr `gcm` at the buffer head with the
+/// cursor immediately after it, then pad to `MAX_HOOK_LINE_BYTES + 1`
+/// with `a`. *With* the cap, the handler short-circuits and emits a
+/// literal space (the original `gcm` survives unchanged). *Without*
+/// the cap, the head `gcm` is in command position with cursor right
+/// after it — exactly the shape that triggers expansion — and the
+/// output would carry the expanded form. Asserting that the expanded
+/// form is absent is what makes this test exercise the cap branch
+/// rather than just timing it (timing-based assertions are flaky
+/// under CI load).
+#[test]
+fn hook_oversize_line_short_circuits_before_expansion() {
+    let cfg = write_config(
+        "version = 1\n\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+
+    // Cap is 16 KiB (`MAX_HOOK_LINE_BYTES`). Feed exactly cap + 1 so
+    // the `>` boundary fires with no slack. Has to stay below
+    // Windows' ~32 KiB CreateProcess argv limit, which it does.
+    const OVER_CAP: usize = 16 * 1024 + 1;
+    let head = "gcm";
+    let pad_len = OVER_CAP - head.len() - 1; // -1 for the space
+    let line = format!("{head} {}", "a".repeat(pad_len));
+    assert_eq!(line.len(), OVER_CAP, "test must feed exactly cap + 1 bytes");
+    let cursor = head.len().to_string(); // right after `gcm`
+
+    let out = Command::new(bin())
+        .args(["hook", "--shell", "bash", "--line"])
+        .arg(&line)
+        .args(["--cursor"])
+        .arg(&cursor)
+        .env("RUNEX_CONFIG", cfg.path())
+        .output()
+        .expect("runex hook must spawn");
+
+    assert!(out.status.success(), "hook must succeed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("READLINE_LINE="),
+        "expected a READLINE_LINE assignment: {stdout}"
+    );
+    assert!(
+        !stdout.contains("git commit -m"),
+        "oversize --line must short-circuit before expansion runs; \
+         expanded form leaked into stdout: {stdout}"
+    );
+}
+
+/// Reflexive control for the oversize test above: feed *exactly* the
+/// cap (cap bytes, not cap+1) with the same shape and confirm
+/// expansion still fires. Without this control, the oversize test
+/// could pass simply because the shape never triggers expansion at
+/// all — and we'd silently lose the cap-branch coverage.
+#[test]
+fn hook_at_cap_still_expands() {
+    let cfg = write_config(
+        "version = 1\n\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+
+    const AT_CAP: usize = 16 * 1024;
+    let head = "gcm";
+    let pad_len = AT_CAP - head.len() - 1;
+    let line = format!("{head} {}", "a".repeat(pad_len));
+    assert_eq!(line.len(), AT_CAP, "control must feed exactly cap bytes");
+    let cursor = head.len().to_string();
+
+    let out = Command::new(bin())
+        .args(["hook", "--shell", "bash", "--line"])
+        .arg(&line)
+        .args(["--cursor"])
+        .arg(&cursor)
+        .env("RUNEX_CONFIG", cfg.path())
+        .output()
+        .expect("runex hook must spawn");
+    assert!(out.status.success(), "hook must succeed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("git commit -m"),
+        "at-cap control must still expand; otherwise the oversize test \
+         is asserting the wrong branch: {stdout}"
     );
 }

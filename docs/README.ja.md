@@ -6,6 +6,15 @@
 
 runex は、短いトークンをリアルタイムに完全なコマンドへ展開する、クロスシェル対応の略語エンジンです。
 
+## どこから読むか
+
+| 目的 | 読む場所 |
+|------|---------|
+| インストールしてとりあえず試す | この README → [Install](install.ja.md) → [Setup](setup.ja.md) |
+| やりたいシナリオ用の config を探す | [docs/recipes.ja.md](recipes.ja.md) |
+| フィールドの正確な意味を確認する | [docs/config-reference.md](config-reference.md) (英語) |
+| 設定したのに動かない時の切り分け | [docs/setup.ja.md#トラブルシューティング](setup.ja.md#トラブルシューティング) |
+
 ## 特性
 
 - クロスシェル対応（bash / zsh / pwsh / cmd / nushell）
@@ -100,41 +109,28 @@ expand = "git commit -am '{}'"   # {} = 展開後ここにカーソルが残る
 
 ## コマンド
 
-```
-runex expand --token <token>              トークンを展開
-runex expand --token <token> --dry-run   展開せずマッチトレースを表示
-runex list                               全略語を一覧表示
-runex which <token>                      マッチするルールを表示
-runex which <token> --why                スキップ理由を含む全トレースを表示
-runex doctor                             設定と環境をチェック
-runex doctor --no-shell-aliases          alias 競合チェックをスキップ
-runex doctor --strict                    不明な設定フィールドも警告
-runex add <key> <expand>                 略語ルールを設定に追加
-runex add <key> <expand> --when <cmd>    when_command_exists 付きで追加
-runex remove <key>                       略語ルールを設定から削除
-runex init                               設定ファイルを作成し、シェル連携を追記 (auto-detect)
-runex init <shell>                       特定のシェルを対象 (bash/zsh/pwsh/clink/nu)
-runex init -y                            確認プロンプトをスキップ
-runex export <shell>                     シェル連携スクリプトを生成
-runex export <shell> --bin <name>        スクリプト内のバイナリ名を変更
-runex timings <key>                      展開フローのフェーズ別所要時間を表示
-runex timings                            全ルールの所要時間を計測
-runex version                            バージョンとビルドコミットを表示
-```
-
-グローバルフラグ（全サブコマンドで使用可能）：
+日常的に使うのは次の 5 つです:
 
 ```
---config <path>      設定ファイルパスを上書き
---path-prepend <dir> コマンド存在チェック用に DIR を PATH の先頭に追加
---json               JSON 形式で出力（対応コマンド: list, doctor, version, expand, which, timings）
+runex init                       設定 + シェル連携をセットアップ (各書き込み前に確認)
+runex doctor                     全体の健康診断
+runex add <key> <expand>         略語ルールを設定ファイルに追加
+runex which <token> --why        トークンが展開されるか・理由は何かを説明
+runex export <shell>             シェル連携スクリプトを出力 (init 経由で source される)
 ```
 
-`runex doctor` は設定検証と並んで環境レベルのチェックも表示します:
-`effective_search_path` (Windows 専用の PATH 補強概要、詳細は
-[`docs/config-reference.md`](config-reference.md#runex-doctor--environment--integration-health))
-と `integration:<shell>` (rcfile マーカーの有無、clink lua のドリフト検知)。
-出力例は [`docs/setup.ja.md`](setup.ja.md#runex-doctor-で動作確認) を参照。
+CLI 全体のリファレンスは `runex --help` (または `runex <subcommand>
+--help`)。グローバルフラグ `--config`, `--path-prepend`, `--json` は意
+味のある全サブコマンドで動きます。`--json` 対応は `list`, `doctor`,
+`version`, `expand`, `which`, `timings`。
+
+`runex doctor` は設定検証と並んで環境レベルのチェックも表示します。
+`effective_search_path` (Windows 専用の PATH 補強概要) と
+`integration:<shell>` (rcfile マーカーの有無、clink lua のドリフト検知)
+の各行の意味は
+[`docs/config-reference.md`](config-reference.md#runex-doctor--environment--integration-health)
+で詳述されており、出力例は
+[`docs/setup.ja.md`](setup.ja.md#runex-doctor-で動作確認) にあります。
 
 ## 展開を回避したいとき
 

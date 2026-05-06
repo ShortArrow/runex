@@ -7,6 +7,277 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-05-06
+
+### Added
+
+- **`runex paste-clipboard` (hidden subcommand) and nu Ctrl+V paste
+  binding.** Reads the system clipboard text and writes it to stdout;
+  the nu integration uses it to inject paste content via
+  `commandline edit --insert`, sidestepping nu's per-keystroke
+  abbreviation trigger. Enable by adding to `config.toml`:
+  ```toml
+  [keybind.paste_intercept]
+  nu = "ctrl-v"
+  ```
+  Provider chain: Windows uses native `OpenClipboard` /
+  `GetClipboardData(CF_UNICODETEXT)` via `windows-sys`; Linux tries
+  `wl-paste` → `xclip -selection clipboard -o` → `xsel --clipboard
+  --output`; WSL falls back to `powershell.exe Get-Clipboard` when
+  no Linux clipboard daemon is available; macOS uses `pbpaste`.
+  Cap is 1 MiB; per-provider timeout is 500 ms. The paste_intercept
+  binding is not generated when the config does not opt in, so
+  existing nu setups are unaffected.
+- **Config schema: `[keybind.paste_intercept]` and `TriggerKey::ctrl-v`.**
+  Currently only `nu = "ctrl-v"` is supported. Setting `ctrl-v` as a
+  regular trigger or self-insert binding is rejected with
+  `CtrlVAsTrigger` / `CtrlVAsSelfInsert`; setting paste_intercept on
+  bash/zsh/pwsh is rejected with `PasteInterceptUnsupportedShell`
+  (those shells either have no trigger-on-paste race, or
+  short-circuit via `paste_pending`).
+
+### Known limitations
+
+- **nu (`nushell` 0.111): pasting content that contains the trigger
+  space drops everything after the first triggering space — UNLESS
+  you opt into the `[keybind.paste_intercept] nu = "ctrl-v"` binding
+  added in this release.** Without paste_intercept, nu's reedline
+  delivers paste characters one keystroke at a time, and the
+  `executehostcommand` event the runex space binding uses resets the
+  command line at fire time, so paste content arriving after the
+  triggering space is lost. Workarounds, in order of preference:
+  1. **(Recommended)** Configure the Ctrl+V paste binding:
+     ```toml
+     [keybind.paste_intercept]
+     nu = "ctrl-v"
+     ```
+     Then paste with Ctrl+V — runex reads the clipboard and inserts
+     it without the abbr binding ever seeing the spaces. Mouse
+     middle-click and terminal right-click paste still go through
+     the keymap and remain affected.
+  2. Switch nu's trigger to a chord paste streams cannot contain:
+     ```toml
+     [keybind.trigger]
+     nu = "shift-space"
+     ```
+  3. Quote/escape paste content, or paste it in pieces.
+  This is upstream behaviour for every nu keymap binding, not just
+  runex; bash/zsh/pwsh/clink are unaffected (no trigger-on-paste
+  race, `paste_pending` short-circuit, or standalone-keypress-only
+  bindings respectively).
+- **Windows Terminal swallows `Ctrl+V` (and several other chords)
+  before nu sees them.** This breaks the new
+  `[keybind.paste_intercept] nu = "ctrl-v"` workaround on Windows
+  Terminal even when the runex binding is correctly registered
+  (verified via reedline `keybindings list`). Workarounds:
+  1. Use a terminal that does not intercept Ctrl+V — WezTerm and
+     Alacritty pass it through to nu unchanged.
+  2. Remap or disable Ctrl+V in Windows Terminal settings (the
+     `paste` binding) so the chord reaches the shell.
+  3. Fall back to `[keybind.trigger] nu = "shift-space"` (Known
+     limitation entry above), which sidesteps the trigger-on-paste
+     issue without needing a Ctrl+V binding at all.
+  bash/zsh/pwsh/clink are unaffected because they don't use
+  paste_intercept.
+  *Needs investigation:* during hand-check, `Ctrl+Shift+V` (the
+  alternative paste chord on many Windows setups) also failed to
+  reach a registered nu binding under both Windows Terminal and
+  WezTerm. The root cause was not pinned down — it could be the
+  terminal emulator, reedline's modifier name parsing, or nu's
+  bracketed-paste handling. Until that's investigated, treat
+  `Ctrl+Shift+V` as not a viable alternative chord and stick with
+  the workarounds listed above.
+
+### Security
+
+- **clink (cmd.exe) integration: rejected `%` and `!` in shell buffer
+  content to block cmd.exe injection.** The clink template's
+  `runex_is_safe_line` gate previously rejected only ASCII control
+  characters. cmd.exe expands `%FOO%` even inside double-quoted
+  argv, and `!FOO!` when SETLOCAL ENABLEDELAYEDEXPANSION is in
+  effect anywhere upstream — so a buffer containing `%PATH%` or
+  worse `%X%" & calc & "%Y%` was rewritten by cmd before runex hook
+  saw it, including being able to inject extra commands. The gate
+  now drops on either of those metacharacters; users typing literal
+  `%` or `!` lose the runex expansion on that keypress (the trigger
+  key's plain literal-space fallback applies instead) but cmd
+  itself still executes the typed command normally.
+- **`runex init clink` now writes the lua via atomic-temp + rename**
+  and refuses to follow a symlink at the install path. Previously a
+  pre-existing symlink would silently redirect the export to
+  whatever the symlink pointed at, and a crash mid-write left a
+  half-written lua file that clink would parse-fail on the next cmd
+  window.
+- **`runex init`'s rcfile marker check now uses `O_NOFOLLOW`** on
+  Unix, matching the policy of the rcfile write side. Previously
+  the read could decide "marker already present" by following a
+  symlink target while the write would refuse to follow — confusing
+  at minimum and potentially usable for information leakage about
+  the target file's contents via init's stdout.
+- **Windows registry `Environment\Path` reads are now bounded** to
+  64 KiB and 256 entries per hive, preventing an attacker (or a
+  runaway installer) who can write to HKCU from making every
+  `runex hook` keystroke spend extra CPU on a giant PATH walk.
+- **Documented why `read_config_source` allows symlinks at the final
+  path component** — the dotfiles pattern
+  (`~/.config/runex/config.toml -> ~/dotfiles/...`) is widely used
+  and a deliberate trade-off; the previous docstring claimed
+  stricter behaviour than the code delivered.
+
+### Internal
+
+Phase B refactor — internal-only restructure, **no user-visible
+behaviour change**: config schema, hook output format, and `runex
+doctor --json` are all unchanged from 0.1.13.
+
+- **`runex/src/main.rs` split into per-subcommand handlers under
+  `runex/src/cmd/`** (one file per `Commands` enum variant). The
+  pre-Phase-B 1542-line `main.rs` shrinks to dispatch + `Cli` /
+  `Commands` derives + the runtime builder. Each handler is now
+  unit-testable from inside the process — `cmd::which::handle("a"
+  .repeat(1025), …)` returns `CmdOutcome::ExitCode(1)` instead of
+  killing the test process.
+- **`std::process::exit` calls collapsed from 8 sites to 1.**
+  Handlers report failures by returning `Ok(CmdOutcome::ExitCode(n))`
+  through the new `CmdResult` type; only `main()` ever calls
+  `process::exit`.
+- **`AppContext` runtime builder** centralises the
+  `resolve_config + resolve_shell + compute_precache_fingerprint
+  + make_command_exists` four-line dance that used to be open-
+  coded in five handlers. `AppContext::build` for the strict
+  path; `AppContext::build_optional` (returning `OptionalContext`)
+  for hook / doctor where missing config is non-fatal.
+- **Leaf utilities extracted to `runex/src/util/`**
+  (`shell` / `path` / `prompt`). Command-specific policy stays
+  with the owning handler — `validate_bin` in `cmd/export.rs`,
+  `install_rcfile_integration` in `cmd/init.rs`, etc.
+- **Shared PTY/subprocess test harness** at
+  `runex/tests/support/`. `PtySession::spawn(PtyShell::Bash | Zsh
+  | Pwsh, …)` factors out the per-shell launch flags and prompt
+  setup that were previously open-coded in each shell test.
+- **`runex-core::env::HomeDirResolver`** — new resolver trait with
+  `SystemHomeDir` (production) and `EnvHomeDir` (test, closure-
+  driven) implementations. `_with` variants of `rc_file_for`,
+  `xdg_config_home`, and `default_clink_lua_paths` accept a
+  resolver so init-handler tests can be hermetic without touching
+  process env. The non-`_with` variants remain as thin wrappers
+  over `SystemHomeDir`; **public API is additive only**.
+
+### Tests
+
+- New `bash_pty_integration.rs` (rewritten via the support
+  harness — 1 scenario), `zsh_pty_integration.rs` (1 scenario),
+  `pwsh_pty_integration.rs` (1 scenario). Linux only: expectrl's
+  Windows ConPTY backend is still flagged unstable in the dep
+  declaration, so Windows continues to rely on the existing
+  `*_integration.rs` subprocess tests.
+- `tests::handler_outcomes` (7 unit tests) pin the new
+  `CmdOutcome::ExitCode(1)` contract for `handle_which`,
+  `handle_expand`, and `validate_bin`.
+- `tests::app_context` (3 unit tests) pin fingerprint stability
+  (same args → same fingerprint) and the missing-config branches
+  for both builder variants.
+- 18 new unit tests in `runex-core` covering the
+  `HomeDirResolver` trait and the `_with` variants
+  (`rc_file_for_with`, `default_clink_lua_paths_with`,
+  `xdg_config_home_with`).
+
+### Changed
+
+Phase C refactor — workspace single-crate switch, **no user-visible
+behaviour change**: config schema, hook output format, and `runex
+doctor --json` are all unchanged from 0.1.13. `cargo install runex`
+keeps working exactly as before.
+
+- **`runex-core` absorbed into `runex`.** The two-crate workspace
+  the project shipped since 0.1.0 collapses to a single crate.
+  Every module that lived under `runex-core/src/` is now under
+  `runex/src/{domain,app,infra}/`:
+  - `domain/` (pure logic, no I/O): `model`, `expand`, `hook`,
+    `sanitize`, `timings`, `shell` (+ embedded shell-script
+    templates).
+  - `app/` (orchestration / parse / validate / generate):
+    `config`, `doctor`, `init`, `precache`.
+  - `infra/` (file / registry / env access): `env` (with
+    `HomeDirResolver`), `integration_check`.
+  Rationale: `runex-core` had zero external reverse dependencies
+  on crates.io but was published every release because `cargo
+  publish` requires version-pinned path-deps to be on the index.
+  The internal `pub` boundary it carried was inappropriate (the
+  crate was always internal-only — see the
+  "Not a public API" disclaimer the 0.1.13 docstring carried).
+  Folding the modules into the bin crate removes the publish
+  ceremony and lets the dependency direction (`cmd → app →
+  domain`, `cmd → util/infra`, `infra → domain`) be enforced by
+  module visibility instead of crate boundaries.
+- **crates.io publish reduced to one crate.** The release
+  workflow's `publish-crates` job no longer publishes
+  `runex-core`; only `runex` ships. The Trusted Publisher
+  registration for `runex-core` on crates.io is left in place
+  (harmless), and `runex-core 0.1.13` (the last published
+  version) stays on crates.io un-yanked for any cargo lockfile
+  that still pins it.
+
+### Refactor
+
+Phase D — strict Clean Architecture cleanup on top of the Phase C
+single-crate layout. **No user-visible behaviour change**: config
+schema, hook output, and `runex doctor --json` remain identical to
+0.1.13.
+
+- **`infra → app` import cycle removed.** `RUNEX_INIT_MARKER` and
+  `rc_file_for*` moved out of `app::init` into
+  `infra::integration_check` and `infra::env` respectively. The
+  former cycle (`app::doctor → infra::integration_check →
+  app::init`) is now gone.
+- **`domain::shell` split.** Orchestration symbols
+  (`export_script`, `trigger_for`, `*_bind_lines`, etc.) moved to
+  `app::shell_export`. `domain::shell` retains only the `Shell`
+  enum and pure quoting helpers — no `Config` dependency.
+- **`app::config` file I/O moved to `infra::config_store`.**
+  `default_config_path`, `read_config_source`, `load_config`'s
+  body, `append_abbr_block`, `remove_abbr_block`, and the atomic
+  write/symlink-reject helpers all live under `infra/` now.
+  `app::config` keeps parse + validate; thin wrappers preserve the
+  call-site API.
+- **`app::expand` and `app::hook` use-case wrappers added.** Every
+  `cmd/*` handler that used to import `crate::domain::expand` or
+  `crate::domain::hook` now goes through `app/`. The
+  `HookAction` type is re-exported from `app::hook` so cmd code
+  doesn't reach into `domain` for it either.
+- **`HomeDirResolver` injection wired to the production
+  `cmd::init::handle` path.** The handler now accepts
+  `&dyn HomeDirResolver`; main dispatch passes `&SystemHomeDir`.
+  Inline `cmd::init::tests` drive the handler with `EnvHomeDir` for
+  hermetic end-to-end coverage. The standalone `_with` /
+  resolver-less helper variants are removed in favour of the single
+  resolver-injectable form.
+- **Architecture rules pinned in CI.**
+  `runex/tests/architecture.rs` adds four compile-time-ish tests:
+  `no_infra_to_app_imports` (with a small exempt list for
+  type-only imports), `no_domain_to_anyone_else_imports`,
+  `no_cmd_to_domain_behavior_imports`,
+  `no_filesystem_calls_in_app_layer`. Future regressions surface
+  in CI rather than in code review.
+
+### Internal
+
+- **Visibility tightened crate-wide: every `pub` item is now
+  `pub(crate)`.** `runex` is bin-only; there is no library API to
+  preserve. The narrower visibility makes accidental cross-layer
+  reach harder and shrinks the surface clippy needs to lint.
+- **Dropped unused `IntegrationCheck::{name, detail}` accessors.**
+  Every consumer destructures via `match`; the methods had zero
+  callers and were carried over from the dropped runex-core public
+  surface.
+- **`Cargo.toml` `[lib] deferred` comment removed**, replaced with
+  the actual bin-only contract (no `[lib]` is intentional).
+- **`util/`, `cmd/`, `infra/env`, `app/` module docstrings updated**
+  to describe the post-Phase-D layering instead of the
+  Phase-C-future tense they were written in. `main.rs` crate-root
+  docstring documents the layering diagram and points at the
+  architecture test.
+
 ## [0.1.13] - 2026-05-04
 
 ### Added

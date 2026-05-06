@@ -42,7 +42,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 /// `which::which_in`. The breakdown counts let `runex doctor` report
 /// "process=N, +user=M, +system=K" so a degraded PATH stands out.
 #[derive(Debug, Clone)]
-pub struct EffectiveSearchPath {
+pub(crate) struct EffectiveSearchPath {
     pub combined: OsString,
     /// Number of unique entries originating from the process PATH.
     pub from_process: usize,
@@ -58,7 +58,7 @@ impl EffectiveSearchPath {
     /// [`doctor::EffectiveSearchPathSummary::total`] which mirrors the
     /// same arithmetic on a Serialize-friendly summary type.
     #[cfg(test)]
-    pub fn total(&self) -> usize {
+    pub(crate) fn total(&self) -> usize {
         self.from_process + self.from_user_registry + self.from_system_registry
     }
 }
@@ -68,7 +68,7 @@ impl EffectiveSearchPath {
 /// See module docs for the rationale. Always succeeds: if registry reads
 /// fail (unlikely outside of locked-down environments), the corresponding
 /// counts simply stay zero.
-pub fn effective_search_path() -> EffectiveSearchPath {
+pub(crate) fn effective_search_path() -> EffectiveSearchPath {
     let mut combined = OsString::new();
     let mut seen: HashSet<Vec<u16>> = HashSet::new();
 
@@ -102,10 +102,33 @@ pub fn effective_search_path() -> EffectiveSearchPath {
     }
 }
 
+/// Hard limit on the number of bytes read from a single registry
+/// `Path` value. Anything beyond this is truncated at the last
+/// `;`-separator that still fits, which means the trailing entry is
+/// dropped rather than split mid-string. The cap exists to bound
+/// `runex hook`'s per-keystroke cost when an attacker (or a runaway
+/// installer) has stuffed an absurdly long PATH into HKCU/HKLM.
+///
+/// 64 KiB comfortably exceeds any realistic developer PATH (the
+/// author's own ~7 KiB Windows PATH fits in well under 1 KiB after
+/// dedup) while keeping the worst case linear-bounded.
+const MAX_REGISTRY_PATH_BYTES: usize = 64 * 1024;
+
+/// Hard limit on the number of `;`-separated entries pulled from a
+/// single registry `Path` value. With both HKCU and HKLM contributing
+/// 256 entries each, a `which::which_in` walk in the hot path still
+/// stays microsecond-class. Past 256 the user has bigger problems
+/// than runex.
+const MAX_PATH_ENTRIES: usize = 256;
+
 /// Read `Path` from the given registry hive, expand `%VAR%` references,
 /// and append every novel segment to `combined`. Returns the count of
 /// segments that were newly added (segments already in `seen` are
 /// skipped, so the count reflects only this hive's contribution).
+///
+/// Bounded by [`MAX_REGISTRY_PATH_BYTES`] (read-side cap) and
+/// [`MAX_PATH_ENTRIES`] (segment-count cap) so an oversized registry
+/// value cannot turn `runex hook` into a per-keystroke CPU hog.
 fn absorb_registry_path(
     hive: winreg::HKEY,
     subkey: &str,
@@ -116,8 +139,23 @@ fn absorb_registry_path(
         Some(v) => v,
         None => return 0,
     };
+    absorb_registry_path_str(&raw, combined, seen)
+}
+
+/// Pure variant of [`absorb_registry_path`] that accepts the raw
+/// registry value as a string. Exposed for tests.
+pub(crate) fn absorb_registry_path_str(
+    raw: &str,
+    combined: &mut OsString,
+    seen: &mut HashSet<Vec<u16>>,
+) -> usize {
     let mut added = 0usize;
+    let mut entries_taken = 0usize;
     for seg in raw.split(';') {
+        if entries_taken >= MAX_PATH_ENTRIES {
+            break;
+        }
+        entries_taken += 1;
         let expanded = expand_env_vars(seg);
         if push_dedup(&expanded, combined, seen) {
             added += 1;
@@ -129,7 +167,27 @@ fn absorb_registry_path(
 fn read_registry_path(hive: winreg::HKEY, subkey: &str) -> Option<String> {
     let key = winreg::RegKey::predef(hive).open_subkey(subkey).ok()?;
     let v: String = key.get_value("Path").ok()?;
-    if v.is_empty() { None } else { Some(v) }
+    Some(cap_registry_value(v))
+}
+
+/// Truncate an oversized registry `Path` value to the last `;`-
+/// separator that still fits within [`MAX_REGISTRY_PATH_BYTES`].
+/// Returning `None` for empty input keeps callers' option-chaining
+/// idiomatic.
+pub(crate) fn cap_registry_value(v: String) -> String {
+    if v.is_empty() {
+        return v;
+    }
+    if v.len() <= MAX_REGISTRY_PATH_BYTES {
+        return v;
+    }
+    // Truncate at the last ';' boundary that fits. If there isn't
+    // one within the cap, drop everything (the value is one giant
+    // entry, which we can't safely include).
+    match v[..MAX_REGISTRY_PATH_BYTES].rfind(';') {
+        Some(end) => v[..end].to_string(),
+        None => String::new(),
+    }
 }
 
 /// Append `seg` to `dst` (using `;` as a separator) if its case-insensitive
@@ -261,5 +319,47 @@ mod tests {
         // On any Windows machine running this test, PATH must have at
         // least one entry — the test runner itself comes from PATH.
         assert!(p.total() > 0, "effective_search_path should never be empty in practice");
+    }
+
+    /// Reading an oversized registry `Path` value must truncate at a
+    /// `;` boundary, not split mid-segment, so the worst-case
+    /// per-keystroke cost stays linear-bounded.
+    #[test]
+    fn cap_registry_value_truncates_at_semicolon_boundary() {
+        // Build a value with two entries:
+        //   - leading 70 KiB of 'a' (well past the 64 KiB cap)
+        //   - then a tail entry that would survive if we naively
+        //     truncated at exactly the byte cap
+        let leading = "a".repeat(70 * 1024);
+        let raw = format!("{leading};C:\\fits");
+        let capped = cap_registry_value(raw.clone());
+        assert!(capped.len() <= 64 * 1024, "cap must hold");
+        assert!(
+            !capped.contains(';'),
+            "with no semicolon under the cap on the leading run, the tail must be dropped: {}",
+            capped.len()
+        );
+    }
+
+    /// A registry value within the cap is returned unchanged.
+    #[test]
+    fn cap_registry_value_passes_small_input_through() {
+        let raw = "C:\\Windows;C:\\Users\\me\\.cargo\\bin".to_string();
+        assert_eq!(cap_registry_value(raw.clone()), raw);
+    }
+
+    /// `absorb_registry_path_str` stops after `MAX_PATH_ENTRIES`
+    /// segments, even when more are present.
+    #[test]
+    fn absorb_registry_path_str_caps_entry_count() {
+        // 300 unique entries; only the first 256 should be absorbed.
+        let raw: String = (0..300)
+            .map(|i| format!("C:\\fake{i}"))
+            .collect::<Vec<_>>()
+            .join(";");
+        let mut combined = OsString::new();
+        let mut seen: HashSet<Vec<u16>> = HashSet::new();
+        let added = absorb_registry_path_str(&raw, &mut combined, &mut seen);
+        assert_eq!(added, 256, "must stop at MAX_PATH_ENTRIES");
     }
 }

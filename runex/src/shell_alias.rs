@@ -2,9 +2,9 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::time::Duration;
 
-use runex_core::doctor::{Check, CheckStatus, DiagResult};
-use runex_core::model::{Abbr, Config};
-use runex_core::sanitize::sanitize_for_display;
+use crate::app::doctor::{Check, CheckStatus, DiagResult};
+use crate::domain::model::{Abbr, Config};
+use crate::domain::sanitize::sanitize_for_display;
 
 /// Maximum number of alias entries accepted from a single shell invocation.
 /// Prevents unbounded memory consumption if a misbehaving or compromised shell
@@ -368,12 +368,12 @@ pub(crate) fn add_shell_alias_conflicts(result: &mut DiagResult, config: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runex_core::model::Abbr;
+    use crate::domain::model::Abbr;
 
     fn test_abbr(key: &str) -> Abbr {
         Abbr {
             key: key.into(),
-            expand: runex_core::model::PerShellString::All(format!("expand-{key}")),
+            expand: crate::domain::model::PerShellString::All(format!("expand-{key}")),
             when_command_exists: None,
         }
     }

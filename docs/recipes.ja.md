@@ -11,7 +11,9 @@
 `runex --config <path>` で上書き可能。
 
 各フィールドの完全なリファレンスは [config-reference.md](config-reference.md)
-(英語のみ)、トリガーキーの設定は [setup.ja.md](setup.ja.md) を参照。
+(英語のみ — フィールド名・型・バリデーション規則・`runex doctor` 出力
+の意味を網羅) を、トリガーキーの設定は [setup.ja.md](setup.ja.md) を
+参照。
 
 ---
 
@@ -185,8 +187,11 @@ when_command_exists = { default = ["rm"], pwsh = ["Remove-Item"] }
 
 ## 8. プラットフォーム別の依存チェック
 
-**ユースケース:** ツール名がプラットフォームで違う場合 — Windows の
-pwsh では `wsl` 経由、Linux では `lsb_release` で判定など。
+**ユースケース:** 特定のプラットフォームでしか存在しないツールに依存
+する場合 — 例えば `wslpath` は WSL 内でしか使えない。展開先がプラッ
+トフォーム固有のシンタックス (PowerShell の `$env:USERPROFILE` など)
+を使う側では precondition は不要なので、`when_command_exists` を空配
+列にして「条件なし、常に展開」と表現する。
 
 ```toml
 [[abbr]]
@@ -195,8 +200,9 @@ expand = { default = "/mnt/c/Users/$USER", pwsh = "$env:USERPROFILE" }
 when_command_exists = { default = ["wslpath"], pwsh = [] }
 ```
 
-**動作:** WSL bash では `wslpath` がある時だけ `winhome<Space>` 展開、
-pwsh では空配列 = 「条件なし」で常に展開。空の
+**動作:** WSL bash では `wslpath` が PATH 上にある時 (= 実際に WSL の
+中) だけ `winhome<Space>` が展開される。pwsh では空配列が
+precondition を short-circuit する = 常に展開。空の
 `when_command_exists` は「失敗」ではなく「条件なし」扱い。
 
 ---
@@ -331,7 +337,7 @@ doctor 出力を読む:
 
 ## 次に読む
 
-- 全フィールドリファレンス: [config-reference.md](config-reference.md) (英語のみ)
+- 全フィールドリファレンス: [config-reference.md](config-reference.md) (英語のみ — `[keybind]` / `[[abbr]]` の各フィールド、バリデーション、`runex doctor` 各行の意味)
 - シェル別セットアップ詳細: [setup.ja.md](setup.ja.md)
 - トラブルシューティング: [setup.ja.md → トラブルシューティング](setup.ja.md#トラブルシューティング)
 - 設定変更後は `runex doctor` で検証する習慣をつける

@@ -8,6 +8,15 @@ runex is a cross-shell abbreviation engine that expands short tokens into full c
 
 ![runex demo](https://raw.githubusercontent.com/ShortArrow/runex/main/docs/vhs/demo.gif)
 
+## Where to start
+
+| Goal | Read |
+|------|------|
+| Just install and try it | This README → [Install](docs/install.md) → [Setup](docs/setup.md) |
+| Find a config snippet for X | [docs/recipes.md](docs/recipes.md) |
+| Look up a field's exact meaning | [docs/config-reference.md](docs/config-reference.md) |
+| Diagnose "I configured it but nothing happens" | [docs/setup.md#troubleshooting](docs/setup.md#troubleshooting) |
+
 ## Features
 
 - Cross-shell support (bash / zsh / pwsh / cmd / nushell)
@@ -102,41 +111,27 @@ See [docs/config-reference.md](docs/config-reference.md) for the full reference,
 
 ## Commands
 
-```
-runex expand --token <token>              expand a token
-runex expand --token <token> --dry-run   show match trace without expanding
-runex list                               list all abbreviations
-runex which <token>                      show which rule matches
-runex which <token> --why                show full match trace with skip reasons
-runex doctor                             check config and environment
-runex doctor --no-shell-aliases          skip alias conflict checks
-runex doctor --strict                    also warn about unknown config fields
-runex add <key> <expand>                 add an abbreviation rule to config
-runex add <key> <expand> --when <cmd>    add with when_command_exists condition
-runex remove <key>                       remove an abbreviation rule from config
-runex init                               create config and append shell integration (auto-detect shell)
-runex init <shell>                       target a specific shell (bash/zsh/pwsh/clink/nu)
-runex init -y                            same, skip confirmation prompts
-runex export <shell>                     generate shell integration script
-runex export <shell> --bin <name>        use a custom binary name in the script
-runex timings <key>                      show per-phase timing breakdown of expand
-runex timings                            time all abbreviation rules
-runex version                            show version and build commit
-```
-
-Global flags (available on every subcommand):
+The five you'll reach for daily:
 
 ```
---config <path>      override config file path
---path-prepend <dir> prepend a directory to PATH for command existence checks
---json               JSON output (supported by: list, doctor, version, expand, which, timings)
+runex init                       Set up config + shell integration (asks before each write)
+runex doctor                     Verify everything is wired up
+runex add <key> <expand>         Add an abbreviation rule to the config file
+runex which <token> --why        Explain whether a token would expand and why
+runex export <shell>             Print the shell integration script (sourced via init)
 ```
 
-`runex doctor` reports several environment-level checks alongside the
-config validation: `effective_search_path` (Windows-only PATH augmentation
-summary, see [`docs/config-reference.md`](docs/config-reference.md#runex-doctor--environment--integration-health))
-and `integration:<shell>` (rcfile-marker presence and clink lua drift
-detection). See [`docs/setup.md`](docs/setup.md) for an annotated example.
+Full CLI reference: `runex --help` (or `runex <subcommand> --help` for a
+specific one). Global flags `--config`, `--path-prepend`, and `--json`
+work on every subcommand where they make sense; `--json` is supported by
+`list`, `doctor`, `version`, `expand`, `which`, and `timings`.
+
+`runex doctor` reports environment-level checks alongside config
+validation: `effective_search_path` (Windows-only PATH augmentation
+summary) and `integration:<shell>` (rcfile-marker presence and clink lua
+drift detection). The semantics for each row are spelled out in
+[`docs/config-reference.md`](docs/config-reference.md#runex-doctor--environment--integration-health),
+and [`docs/setup.md`](docs/setup.md) shows an annotated example.
 
 ## Avoiding Expansion
 
