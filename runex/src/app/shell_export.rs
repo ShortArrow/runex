@@ -51,6 +51,20 @@ fn self_insert_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> 
     }
 }
 
+/// Resolve the paste-intercept chord for `shell`. Currently only nu
+/// honours this; other shells always return None and `parse_config`
+/// rejects configurations that try to set them.
+fn paste_intercept_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> {
+    let keybind = match config {
+        Some(config) => &config.keybind,
+        None => return None,
+    };
+    match shell {
+        Shell::Nu => keybind.paste_intercept.nu,
+        _ => None,
+    }
+}
+
 /// Common error message for `TriggerKey::CtrlV` reaching a chord
 /// generator. CtrlV is intentionally exclusive to
 /// `[keybind.paste_intercept]`; if it ever arrives here, the
@@ -212,6 +226,26 @@ fn nu_bindings(trigger: Option<TriggerKey>, bin: &str) -> String {
     blocks.join(" | append ")
 }
 
+/// Generate the Ctrl+V paste binding for nu when the user has set
+/// `[keybind.paste_intercept] nu = "ctrl-v"`. The generated binding
+/// reads the system clipboard via `^{bin} paste-clipboard` and
+/// inserts the text via `commandline edit --insert`, bypassing the
+/// per-keystroke abbreviation trigger entirely. Returns an empty
+/// string when the paste-intercept binding is not configured.
+///
+/// Unlike `nu_bindings`, this does not pipe through `| append`:
+/// the template fragment already includes the leading `| append`
+/// pipe so it composes with the existing chain in `nu.nu`.
+fn nu_paste_binding(paste_intercept: Option<TriggerKey>, bin: &str) -> String {
+    match paste_intercept {
+        Some(TriggerKey::CtrlV) => include_str!("../domain/templates/nu_paste_binding.nu")
+            .replace("{NU_BIN}", &nu_quote_string_embedded(bin)),
+        // Other variants are rejected by parse_config / first_keybind_error;
+        // CtrlV is the only legal value for paste_intercept.nu.
+        _ => String::new(),
+    }
+}
+
 fn nu_self_insert_lines(self_insert: Option<TriggerKey>) -> String {
     let key = match self_insert {
         Some(TriggerKey::ShiftSpace) => Some(("shift", "space")),
@@ -258,6 +292,7 @@ pub(crate) fn export_script(shell: Shell, bin: &str, config: Option<&Config>) ->
     };
     let trigger = trigger_for(shell, config);
     let self_insert = self_insert_for(shell, config);
+    let paste_intercept = paste_intercept_for(shell, config);
     template
         .replace("\r\n", "\n")
         .replace("{BASH_BIN}", &bash_quote_string(bin))
@@ -273,6 +308,7 @@ pub(crate) fn export_script(shell: Shell, bin: &str, config: Option<&Config>) ->
         .replace("{PWSH_SELF_INSERT_LINES}", &pwsh_self_insert_lines(self_insert))
         .replace("{NU_BIN}", &nu_quote_string(bin))
         .replace("{NU_BINDINGS}", &nu_bindings(trigger, bin))
+        .replace("{NU_PASTE_BINDING}", &nu_paste_binding(paste_intercept, bin))
         .replace("{NU_SELF_INSERT_BINDINGS}", &nu_self_insert_lines(self_insert))
 }
 
@@ -1295,6 +1331,102 @@ mod tests {
             assert!(
                 !lines.iter().any(|l| l.trim() == "source /tmp/evil.nu"),
                 "newline must not create an injected source line: {s}"
+            );
+        }
+
+        /// When `[keybind.paste_intercept]` is unset (the default),
+        /// the generated nu script must not contain a Ctrl+V paste
+        /// binding — only the filter line that clears any stale one.
+        #[test]
+        fn nu_export_omits_paste_binding_when_not_configured() {
+            let config = Config {
+                version: 1,
+                keybind: KeybindConfig {
+                    trigger: PerShellKey {
+                        default: Some(TriggerKey::Space),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                precache: PrecacheConfig::default(),
+                abbr: vec![],
+            };
+            let s = export_script(Shell::Nu, "runex", Some(&config));
+            assert!(
+                !s.contains("name: runex_paste"),
+                "no paste-intercept config must produce no paste binding body: {s}"
+            );
+            assert!(
+                s.contains(r#"where name != "runex_paste""#),
+                "the cleanup filter must always be present so re-sourcing removes a stale binding: {s}"
+            );
+        }
+
+        /// When `paste_intercept.nu = "ctrl-v"`, the generated nu
+        /// script must contain a Ctrl+V binding that calls the hidden
+        /// `runex paste-clipboard` subcommand.
+        #[test]
+        fn nu_export_emits_ctrl_v_binding_when_configured() {
+            let config = Config {
+                version: 1,
+                keybind: KeybindConfig {
+                    trigger: PerShellKey {
+                        default: Some(TriggerKey::Space),
+                        ..Default::default()
+                    },
+                    paste_intercept: PerShellKey {
+                        nu: Some(TriggerKey::CtrlV),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                precache: PrecacheConfig::default(),
+                abbr: vec![],
+            };
+            let s = export_script(Shell::Nu, "runex", Some(&config));
+            assert!(s.contains("name: runex_paste"), "binding header missing: {s}");
+            assert!(s.contains("modifier: control"), "Ctrl modifier missing: {s}");
+            assert!(s.contains("keycode: char_v"), "char_v keycode missing: {s}");
+            assert!(
+                s.contains("paste-clipboard"),
+                "binding body must invoke `runex paste-clipboard`: {s}"
+            );
+            assert!(
+                s.contains("commandline edit --insert $clip"),
+                "binding body must inject clipboard text via `commandline edit --insert`: {s}"
+            );
+        }
+
+        /// The Ctrl+V binding must invoke the runex external command
+        /// with exactly one caret prefix (`^"runex"`). A bug in the
+        /// template that reused `^{NU_BIN}` produced `^^"runex"`,
+        /// which nu rejects as an invalid external invocation.
+        #[test]
+        fn nu_paste_binding_invokes_runex_with_single_caret() {
+            let config = Config {
+                version: 1,
+                keybind: KeybindConfig {
+                    trigger: PerShellKey {
+                        default: Some(TriggerKey::Space),
+                        ..Default::default()
+                    },
+                    paste_intercept: PerShellKey {
+                        nu: Some(TriggerKey::CtrlV),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                precache: PrecacheConfig::default(),
+                abbr: vec![],
+            };
+            let s = export_script(Shell::Nu, "runex", Some(&config));
+            assert!(
+                !s.contains(r#"^^\"runex\""#),
+                "double caret regression — binding must use a single ^ prefix: {s}"
+            );
+            assert!(
+                s.contains(r#"^\"runex\" paste-clipboard"#),
+                "binding must invoke `^\"runex\" paste-clipboard` (single caret): {s}"
             );
         }
     }
