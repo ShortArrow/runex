@@ -132,6 +132,13 @@ pub(crate) enum TriggerKey {
     Tab,
     AltSpace,
     ShiftSpace,
+    /// `Ctrl+V`. Paste-intercept only — used by
+    /// `[keybind.paste_intercept]`. Setting `CtrlV` as a regular
+    /// trigger (`[keybind.trigger]`) is rejected by `parse_config`
+    /// because the abbreviation engine expects a chord that fires
+    /// after a token, and a paste-intercept binding has different
+    /// semantics (read clipboard, inject as-is).
+    CtrlV,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -149,6 +156,15 @@ pub(crate) struct KeybindConfig {
     pub trigger: PerShellKey,
     #[serde(default)]
     pub self_insert: PerShellKey,
+    /// Paste-intercept binding. When set (currently only `nu` is
+    /// supported), the shell wraps the chord (typically
+    /// `TriggerKey::CtrlV`) so it reads the system clipboard via
+    /// `runex paste-clipboard` and inserts the text without going
+    /// through the per-keystroke abbreviation trigger. This works
+    /// around the nu-specific paste-mid-trigger limitation
+    /// documented in `domain/templates/nu.nu`.
+    #[serde(default)]
+    pub paste_intercept: PerShellKey,
 }
 
 /// A single abbreviation rule: rune → cast.
@@ -322,6 +338,7 @@ mod tests {
                 nu: None,
             },
             self_insert: PerShellKey::default(),
+            paste_intercept: PerShellKey::default(),
         };
         assert_eq!(k.trigger.default, Some(TriggerKey::Space));
         assert_eq!(k.trigger.bash, Some(TriggerKey::AltSpace));

@@ -51,12 +51,22 @@ fn self_insert_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> 
     }
 }
 
+/// Common error message for `TriggerKey::CtrlV` reaching a chord
+/// generator. CtrlV is intentionally exclusive to
+/// `[keybind.paste_intercept]`; if it ever arrives here, the
+/// validation layer let it through by mistake (`parse_config` should
+/// have rejected it).
+const CTRL_V_NOT_TRIGGER: &str =
+    "CtrlV is paste-intercept only and must not be used as a trigger; \
+     this is a bug — parse_config should have rejected the config";
+
 fn bash_chord(trigger: TriggerKey) -> &'static str {
     match trigger {
         TriggerKey::Space => "\\x20",
         TriggerKey::Tab => "\\C-i",
         TriggerKey::AltSpace => "\\e ",
         TriggerKey::ShiftSpace => unreachable!("ShiftSpace cannot be used as a trigger in bash"),
+        TriggerKey::CtrlV => unreachable!("{}", CTRL_V_NOT_TRIGGER),
     }
 }
 
@@ -66,6 +76,7 @@ fn zsh_chord(trigger: TriggerKey) -> &'static str {
         TriggerKey::Tab => "^I",
         TriggerKey::AltSpace => "^[ ",
         TriggerKey::ShiftSpace => unreachable!("ShiftSpace cannot be used as a trigger in zsh"),
+        TriggerKey::CtrlV => unreachable!("{}", CTRL_V_NOT_TRIGGER),
     }
 }
 fn pwsh_chord(trigger: TriggerKey) -> &'static str {
@@ -74,6 +85,7 @@ fn pwsh_chord(trigger: TriggerKey) -> &'static str {
         TriggerKey::Tab => "Tab",
         TriggerKey::AltSpace => "Alt+Spacebar",
         TriggerKey::ShiftSpace => unreachable!("ShiftSpace cannot be used as a trigger in pwsh"),
+        TriggerKey::CtrlV => unreachable!("{}", CTRL_V_NOT_TRIGGER),
     }
 }
 fn nu_modifier(trigger: TriggerKey) -> &'static str {
@@ -81,6 +93,7 @@ fn nu_modifier(trigger: TriggerKey) -> &'static str {
         TriggerKey::AltSpace => "alt",
         TriggerKey::ShiftSpace => "shift",
         TriggerKey::Space | TriggerKey::Tab => "none",
+        TriggerKey::CtrlV => unreachable!("{}", CTRL_V_NOT_TRIGGER),
     }
 }
 
@@ -88,6 +101,7 @@ fn nu_keycode(trigger: TriggerKey) -> &'static str {
     match trigger {
         TriggerKey::Space | TriggerKey::AltSpace | TriggerKey::ShiftSpace => "space",
         TriggerKey::Tab => "tab",
+        TriggerKey::CtrlV => unreachable!("{}", CTRL_V_NOT_TRIGGER),
     }
 }
 
@@ -97,6 +111,7 @@ fn clink_key_sequence(trigger: TriggerKey) -> &'static str {
         TriggerKey::Tab => r#""\t""#,
         TriggerKey::AltSpace => r#""\e ""#,
         TriggerKey::ShiftSpace => unreachable!("ShiftSpace cannot be used as a trigger in clink"),
+        TriggerKey::CtrlV => unreachable!("{}", CTRL_V_NOT_TRIGGER),
     }
 }
 

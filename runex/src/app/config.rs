@@ -65,6 +65,14 @@ pub(crate) enum ConfigError {
     ExpandEmpty(usize),
     #[error("abbr rule #{0}: expand contains only whitespace (a whitespace-only expansion is almost certainly a config mistake)")]
     ExpandWhitespaceOnly(usize),
+    #[error("[keybind.trigger.{0}] = \"ctrl-v\" is not a valid trigger; ctrl-v is reserved for [keybind.paste_intercept]")]
+    CtrlVAsTrigger(&'static str),
+    #[error("[keybind.self_insert.{0}] = \"ctrl-v\" is not a valid self-insert binding; ctrl-v is reserved for [keybind.paste_intercept]")]
+    CtrlVAsSelfInsert(&'static str),
+    #[error("[keybind.paste_intercept.{0}] is not supported (paste_intercept currently supports only nu); remove or move to nu")]
+    PasteInterceptUnsupportedShell(&'static str),
+    #[error("[keybind.paste_intercept.{0}] = \"{1}\" is not a valid paste-intercept binding; only ctrl-v is supported")]
+    PasteInterceptInvalidKey(&'static str, &'static str),
 }
 
 /// Reason a validation check failed. Shared across the walker (for doctor
@@ -480,10 +488,84 @@ pub(crate) fn parse_config_lenient(s: &str) -> Result<Config, ConfigError> {
 /// traversal order.
 pub(crate) fn parse_config(s: &str) -> Result<Config, ConfigError> {
     let config = parse_config_lenient(s)?;
+    if let Some(e) = first_keybind_error(&config) {
+        return Err(e);
+    }
     if let Some(e) = first_validation_error(&config) {
         return Err(e);
     }
     Ok(config)
+}
+
+/// Reject keybind configurations that are syntactically valid (the
+/// enum variant exists) but semantically wrong:
+///
+/// - `[keybind.trigger]` / `[keybind.self_insert]` with `ctrl-v`:
+///   `CtrlV` is exclusively for `[keybind.paste_intercept]`. Using
+///   it as a trigger would route Ctrl+V into the abbreviation
+///   engine, which has no chord representation for it.
+/// - `[keybind.paste_intercept]` for any shell other than nu:
+///   only nu has the paste-mid-trigger limitation that
+///   paste_intercept solves; other shells either have no problem
+///   (bash/zsh/clink) or already short-circuit via `paste_pending`
+///   (pwsh).
+/// - `[keybind.paste_intercept]` set to anything other than
+///   `ctrl-v`: paste interception is bound to a single chord by
+///   design (a chord that paste streams cannot contain).
+fn first_keybind_error(config: &Config) -> Option<ConfigError> {
+    use crate::domain::model::TriggerKey;
+
+    let trigger = &config.keybind.trigger;
+    for (label, value) in [
+        ("default", trigger.default),
+        ("bash", trigger.bash),
+        ("zsh", trigger.zsh),
+        ("pwsh", trigger.pwsh),
+        ("nu", trigger.nu),
+    ] {
+        if value == Some(TriggerKey::CtrlV) {
+            return Some(ConfigError::CtrlVAsTrigger(label));
+        }
+    }
+
+    let self_insert = &config.keybind.self_insert;
+    for (label, value) in [
+        ("default", self_insert.default),
+        ("bash", self_insert.bash),
+        ("zsh", self_insert.zsh),
+        ("pwsh", self_insert.pwsh),
+        ("nu", self_insert.nu),
+    ] {
+        if value == Some(TriggerKey::CtrlV) {
+            return Some(ConfigError::CtrlVAsSelfInsert(label));
+        }
+    }
+
+    let paste = &config.keybind.paste_intercept;
+    for (label, value) in [
+        ("default", paste.default),
+        ("bash", paste.bash),
+        ("zsh", paste.zsh),
+        ("pwsh", paste.pwsh),
+    ] {
+        if value.is_some() {
+            return Some(ConfigError::PasteInterceptUnsupportedShell(label));
+        }
+    }
+    if let Some(k) = paste.nu {
+        if k != TriggerKey::CtrlV {
+            let key_str = match k {
+                TriggerKey::Space => "space",
+                TriggerKey::Tab => "tab",
+                TriggerKey::AltSpace => "alt-space",
+                TriggerKey::ShiftSpace => "shift-space",
+                TriggerKey::CtrlV => unreachable!(),
+            };
+            return Some(ConfigError::PasteInterceptInvalidKey("nu", key_str));
+        }
+    }
+
+    None
 }
 
 /// Default config file path. Re-exported wrapper around
@@ -661,6 +743,89 @@ nu   = "shift-space"
                 "must reject unknown keybind value for field '{field}'"
             );
         }
+    }
+
+    /// `ctrl-v` is reserved for `[keybind.paste_intercept]`; it must
+    /// not be silently accepted as a regular trigger or self-insert.
+    #[test]
+    fn parse_config_rejects_ctrl_v_as_trigger() {
+        for field in ["default", "bash", "zsh", "pwsh", "nu"] {
+            let toml = format!("version = 1\n[keybind.trigger]\n{field} = \"ctrl-v\"\n");
+            let err = parse_config(&toml).expect_err(
+                "ctrl-v must be rejected when used as a regular trigger",
+            );
+            assert!(
+                matches!(err, ConfigError::CtrlVAsTrigger(label) if label == field),
+                "expected CtrlVAsTrigger({field}), got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_config_rejects_ctrl_v_as_self_insert() {
+        for field in ["default", "bash", "zsh", "pwsh", "nu"] {
+            let toml = format!(
+                "version = 1\n[keybind.self_insert]\n{field} = \"ctrl-v\"\n"
+            );
+            let err = parse_config(&toml).expect_err(
+                "ctrl-v must be rejected when used as a self-insert binding",
+            );
+            assert!(
+                matches!(err, ConfigError::CtrlVAsSelfInsert(label) if label == field),
+                "expected CtrlVAsSelfInsert({field}), got {err:?}"
+            );
+        }
+    }
+
+    /// `[keybind.paste_intercept]` only supports nu today; setting it
+    /// for any other shell must be rejected so users don't think they
+    /// configured something useful.
+    #[test]
+    fn parse_config_rejects_paste_intercept_on_non_nu_shells() {
+        for field in ["default", "bash", "zsh", "pwsh"] {
+            let toml = format!(
+                "version = 1\n[keybind.paste_intercept]\n{field} = \"ctrl-v\"\n"
+            );
+            let err = parse_config(&toml).expect_err(
+                "paste_intercept on non-nu shells must be rejected",
+            );
+            assert!(
+                matches!(err, ConfigError::PasteInterceptUnsupportedShell(label) if label == field),
+                "expected PasteInterceptUnsupportedShell({field}), got {err:?}"
+            );
+        }
+    }
+
+    /// nu's paste_intercept must be `ctrl-v` (the only chord paste
+    /// streams cannot contain). Anything else is rejected so we don't
+    /// silently degrade back to the paste-mid-trigger limitation.
+    #[test]
+    fn parse_config_rejects_paste_intercept_non_ctrl_v_for_nu() {
+        for key in ["space", "tab", "alt-space", "shift-space"] {
+            let toml = format!(
+                "version = 1\n[keybind.paste_intercept]\nnu = \"{key}\"\n"
+            );
+            let err = parse_config(&toml).expect_err(
+                "paste_intercept.nu must require ctrl-v",
+            );
+            assert!(
+                matches!(&err, ConfigError::PasteInterceptInvalidKey(shell, k) if *shell == "nu" && *k == key),
+                "expected PasteInterceptInvalidKey(nu, {key}), got {err:?}"
+            );
+        }
+    }
+
+    /// Sanity check: `paste_intercept.nu = "ctrl-v"` is the
+    /// canonical accepted configuration.
+    #[test]
+    fn parse_config_accepts_paste_intercept_ctrl_v_for_nu() {
+        let toml = "version = 1\n[keybind.paste_intercept]\nnu = \"ctrl-v\"\n";
+        let config = parse_config(toml).expect("ctrl-v on nu must be accepted");
+        assert_eq!(
+            config.keybind.paste_intercept.nu,
+            Some(TriggerKey::CtrlV),
+            "round-trip must preserve CtrlV"
+        );
     }
 
     #[test]
