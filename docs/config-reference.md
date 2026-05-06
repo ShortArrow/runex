@@ -121,7 +121,10 @@ Each external command has a 500 ms timeout. Maximum clipboard size is 1 MiB. Emp
 - Setting `paste_intercept.nu` to anything other than `"ctrl-v"` is rejected. The binding is locked to a single chord that paste streams cannot contain.
 - Setting `"ctrl-v"` on `[keybind.trigger]` or `[keybind.self_insert]` is rejected — Ctrl+V is reserved for `paste_intercept`.
 
-**Limitation:** mouse middle-click paste and terminal right-click paste inject characters through the keymap rather than triggering Ctrl+V, so they remain affected by nu's upstream paste-mid-trigger limitation. Use Ctrl+V from the keyboard for paste-safe operation.
+**Limitations:**
+
+- Mouse middle-click paste and terminal right-click paste inject characters through the keymap rather than triggering Ctrl+V, so they remain affected by nu's upstream paste-mid-trigger limitation. Use Ctrl+V from the keyboard for paste-safe operation.
+- **Windows Terminal intercepts Ctrl+V** before nu sees it (it ships with `Ctrl+V` bound to its `paste` action). On Windows Terminal you have two options: (a) switch to a terminal that passes Ctrl+V through (WezTerm and Alacritty are confirmed working), or (b) remap or disable the Windows Terminal `paste` binding in `settings.json`. WezTerm, Alacritty, macOS Terminal.app, and most Linux terminal emulators pass Ctrl+V to nu unchanged.
 
 ---
 

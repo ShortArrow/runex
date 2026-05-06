@@ -193,10 +193,17 @@ Get-Clipboard` as a final fallback; macOS uses `pbpaste`. Install
 one if `runex paste-clipboard` reports "no clipboard provider
 found".
 
-**Note:** mouse middle-click paste and terminal right-click paste
-inject characters through the keymap (not Ctrl+V), so they remain
-affected by the upstream limitation. Use Ctrl+V from the keyboard
-or fall back to choice 2 below.
+**Caveats:**
+- Mouse middle-click paste and terminal right-click paste inject
+  characters through the keymap (not Ctrl+V), so they remain
+  affected by the upstream limitation. Use Ctrl+V from the keyboard
+  or fall back to choice 2 below.
+- **Windows Terminal intercepts Ctrl+V** before nu sees it (it is
+  the default `paste` binding). Either use a different terminal
+  (WezTerm and Alacritty are confirmed to pass Ctrl+V through), or
+  remap the Windows Terminal binding in `settings.json`. macOS
+  Terminal.app and most Linux terminal emulators pass Ctrl+V to nu
+  unchanged.
 
 **2nd choice — switch the trigger to a chord paste streams cannot
 contain:**

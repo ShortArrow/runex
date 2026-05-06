@@ -63,6 +63,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runex; bash/zsh/pwsh/clink are unaffected (no trigger-on-paste
   race, `paste_pending` short-circuit, or standalone-keypress-only
   bindings respectively).
+- **Windows Terminal swallows `Ctrl+V` (and several other chords)
+  before nu sees them.** This breaks the new
+  `[keybind.paste_intercept] nu = "ctrl-v"` workaround on Windows
+  Terminal even when the runex binding is correctly registered
+  (verified via reedline `keybindings list`). Workarounds:
+  1. Use a terminal that does not intercept Ctrl+V — WezTerm and
+     Alacritty pass it through to nu unchanged.
+  2. Remap or disable Ctrl+V in Windows Terminal settings (the
+     `paste` binding) so the chord reaches the shell.
+  3. Fall back to `[keybind.trigger] nu = "shift-space"` (Known
+     limitation entry above), which sidesteps the trigger-on-paste
+     issue without needing a Ctrl+V binding at all.
+  bash/zsh/pwsh/clink are unaffected because they don't use
+  paste_intercept.
 
 ### Security
 
