@@ -77,6 +77,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      issue without needing a Ctrl+V binding at all.
   bash/zsh/pwsh/clink are unaffected because they don't use
   paste_intercept.
+  *Needs investigation:* during hand-check, `Ctrl+Shift+V` (the
+  alternative paste chord on many Windows setups) also failed to
+  reach a registered nu binding under both Windows Terminal and
+  WezTerm. The root cause was not pinned down — it could be the
+  terminal emulator, reedline's modifier name parsing, or nu's
+  bracketed-paste handling. Until that's investigated, treat
+  `Ctrl+Shift+V` as not a viable alternative chord and stick with
+  the workarounds listed above.
 
 ### Security
 
