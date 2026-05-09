@@ -1,4 +1,6 @@
 # runex shell integration for zsh
+# No-op when sourced by a non-interactive shell (`zsh -c`, scripts, CI).
+[[ -o interactive ]] || return 0
 function __runex_expand() {
     local line="$LBUFFER$RBUFFER"
     local cursor=${#LBUFFER}

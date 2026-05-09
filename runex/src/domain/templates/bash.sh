@@ -1,4 +1,9 @@
 # runex shell integration for bash
+# No-op when sourced by a non-interactive shell (`bash -c`, scripts, CI).
+case $- in
+  *i*) ;;
+  *) return 0 ;;
+esac
 __runex_expand() {
     local out
     if out=$({BASH_BIN} hook --shell bash --line "$READLINE_LINE" --cursor "$READLINE_POINT" 2>/dev/null) && [ -n "$out" ]; then

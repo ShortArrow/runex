@@ -23,9 +23,15 @@
 # far. The Ctrl+V workaround above is generated only when configured
 # in `[keybind.paste_intercept]`.
 
-$env.config.keybindings = (
-    $env.config.keybindings
-    | where name != "runex_expand"
-    | where name != "runex_self_insert"
-    | where name != "runex_paste"{NU_BINDINGS}{NU_PASTE_BINDING}{NU_SELF_INSERT_BINDINGS}
-)
+# No-op when sourced by a non-interactive nu (`nu -c "..."`, script
+# files, plugin sandboxes). Mutating `$env.config.keybindings` in
+# those contexts has no effect on a REPL session anyway, but keeps
+# the side effect off the script's environment.
+if $nu.is-interactive {
+    $env.config.keybindings = (
+        $env.config.keybindings
+        | where name != "runex_expand"
+        | where name != "runex_self_insert"
+        | where name != "runex_paste"{NU_BINDINGS}{NU_PASTE_BINDING}{NU_SELF_INSERT_BINDINGS}
+    )
+}

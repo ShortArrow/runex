@@ -1,4 +1,12 @@
 # runex shell integration for PowerShell
+#
+# No-op when sourced by a non-interactive host (`pwsh -Command ...`,
+# scripts invoked from CI, etc.). PSReadLine bindings are meaningless
+# without an interactive REPL, and the side effects of registering
+# them (state in the running PSReadLine singleton) are best avoided.
+if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
+    return
+}
 
 # Paste detection via PSReadLine internal key queue.
 # When a clipboard paste is processed, PSReadLine enqueues all pasted
