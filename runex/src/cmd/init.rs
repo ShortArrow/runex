@@ -78,19 +78,26 @@ pub(crate) fn handle(
     Ok(CmdOutcome::Ok)
 }
 
-/// Append the integration block to the rcfile for `shell`. Returns the
-/// rcfile path so the caller can show it in the Next-steps blurb.
+/// Phase G shell integration installer for bash/zsh/pwsh/nu.
 ///
-/// Safety properties (documented in `docs/setup.md` for users):
+/// Two-phase install:
 ///
-/// - `OpenOptions::append` so existing rcfile content is **never**
-///   overwritten — every byte we write goes after the file's current
-///   end.
-/// - `O_NOFOLLOW` on Unix so a symlink at `rc_path` doesn't redirect
-///   the write to a different file.
-/// - Idempotent: if `RUNEX_INIT_MARKER` is already present in the
-///   file, we skip the append entirely (no duplicate blocks).
-/// - User confirmation per write unless `--yes`.
+/// 1. **Write the static cache file** at
+///    `<XDG_CACHE_HOME>/runex/integration.<ext>`. The cache file
+///    contains the absolute `current_exe()` path baked into the hook
+///    function so per-keystroke invocations (`bind -x` etc.) skip
+///    PATH lookup entirely. Atomic write via sibling-temp + rename
+///    in `infra::integration_cache::write_cache_file`.
+///
+/// 2. **Append a source line** to the user's rcfile pointing at the
+///    cache. Idempotent via `RUNEX_INIT_MARKER`; the rcfile-write
+///    safety properties (append-only, `O_NOFOLLOW`, user
+///    confirmation) are unchanged from 0.1.14.
+///
+/// Returns the rcfile path for the Next-steps blurb. Cache write
+/// happens unconditionally on `--yes` or after user confirmation
+/// (the rcfile prompt covers both writes since they're
+/// inseparable in the install flow).
 fn install_rcfile_integration(
     shell: Shell,
     yes: bool,
@@ -104,37 +111,83 @@ fn install_rcfile_integration(
         );
         return Ok(None);
     };
+
+    // Resolve the cache file location for this shell. clink lands
+    // here too via the outer `match`, but `cache_path` returns
+    // `Ok(None)` for clink — we only reach this function for
+    // bash/zsh/pwsh/nu, so unwrap is safe.
+    let cache_path = crate::infra::integration_cache::cache_path(shell, env)?
+        .expect("cache_path must return Some for non-clink shells");
+    let cache_str = cache_path
+        .to_str()
+        .ok_or_else(|| {
+            Box::<dyn std::error::Error>::from(format!(
+                "cache path is not valid UTF-8: {}",
+                sanitize_for_display(&cache_path.display().to_string())
+            ))
+        })?
+        .to_string();
+
     let existing = read_rc_content(&rc_path);
-    if existing.contains(crate::infra::integration_check::RUNEX_INIT_MARKER) {
-        println!(
-            "Shell integration already present in {}",
+    let marker_present = existing.contains(crate::infra::integration_check::RUNEX_INIT_MARKER);
+
+    let msg = if marker_present {
+        format!(
+            "Refresh shell integration cache at {}?",
+            sanitize_for_display(&cache_path.display().to_string())
+        )
+    } else {
+        format!(
+            "Install shell integration (cache at {}, source line in {})?",
+            sanitize_for_display(&cache_path.display().to_string()),
             sanitize_for_display(&rc_path.display().to_string())
-        );
-        return Ok(Some(rc_path));
-    }
-    let msg = format!(
-        "Append shell integration to {}?",
-        sanitize_for_display(&rc_path.display().to_string())
-    );
+        )
+    };
     if !(yes || prompt_confirm(&msg)) {
         println!("Skipped shell integration.");
         return Ok(Some(rc_path));
     }
-    let line = runex_init::integration_line(shell, "runex");
-    let block = format!("\n{}\n{}\n", crate::infra::integration_check::RUNEX_INIT_MARKER, line);
-    if let Some(parent) = rc_path.parent() {
-        std::fs::create_dir_all(parent)?;
+
+    // Write the cache file (idempotent: atomic replace, regenerates
+    // even if marker is present so re-running picks up new templates
+    // / config / runex binary location).
+    let bin = crate::util::path::current_exe_or_default("runex");
+    let (_path, config, _err) = resolve_config_opt(None);
+    let comment_prefix = crate::infra::integration_cache::comment_prefix_for(shell);
+    let header = crate::infra::integration_cache::cache_header(comment_prefix, &bin);
+    let body = crate::app::shell_export::export_script(shell, &bin, config.as_ref());
+    let cache_contents = format!("{header}{body}");
+    crate::infra::integration_cache::write_cache_file(&cache_path, &cache_contents)?;
+    println!(
+        "Wrote integration cache to {}",
+        sanitize_for_display(&cache_path.display().to_string())
+    );
+
+    // Append the source line to the rcfile (skipped if marker
+    // already present — the cache refresh above is enough).
+    if !marker_present {
+        let line = runex_init::integration_line(shell, &cache_str);
+        let block = format!("\n{}\n{}\n", crate::infra::integration_check::RUNEX_INIT_MARKER, line);
+        if let Some(parent) = rc_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut open_opts = std::fs::OpenOptions::new();
+        open_opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            open_opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = open_opts.open(&rc_path)?;
+        file.write_all(block.as_bytes())?;
+        println!("Appended source line to {}", sanitize_for_display(&rc_path.display().to_string()));
+    } else {
+        println!(
+            "Source line already present in {}",
+            sanitize_for_display(&rc_path.display().to_string())
+        );
     }
-    let mut open_opts = std::fs::OpenOptions::new();
-    open_opts.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        open_opts.custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut file = open_opts.open(&rc_path)?;
-    file.write_all(block.as_bytes())?;
-    println!("Appended integration to {}", sanitize_for_display(&rc_path.display().to_string()));
+
     Ok(Some(rc_path))
 }
 

@@ -667,18 +667,27 @@ fn json_doctor_contract_pins_name_and_status_enum() {
 
 // ─── init --config ────────────────────────────────────────────────────────────
 
-/// Build a Command for `runex init` with HOME/USERPROFILE/PSModulePath/SHELL all
-/// redirected into `home_dir` so that shell detection and rc-file resolution
-/// stay entirely inside the temp directory on every platform.
+/// Build a Command for `runex init` with HOME/USERPROFILE/XDG_CONFIG_HOME/
+/// XDG_CACHE_HOME/LOCALAPPDATA/PSModulePath/SHELL all redirected into
+/// `home_dir` so that shell detection, rc-file resolution, and Phase G
+/// integration-cache writes stay entirely inside the temp directory on
+/// every platform.
 ///
-/// `PSModulePath` is removed to suppress pwsh detection on Windows; `SHELL` is
-/// forced to `/bin/bash` so that `rc_file_for()` resolves to `$HOME/.bashrc`
-/// inside the temp directory.
+/// `PSModulePath` is removed to suppress pwsh detection on Windows; `SHELL`
+/// is forced to `/bin/bash` so that `rc_file_for()` resolves to
+/// `$HOME/.bashrc` inside the temp directory.
+///
+/// XDG_CACHE_HOME / LOCALAPPDATA are pinned so that
+/// `infra::integration_cache::cache_path` resolves into the temp dir.
+/// Without this, parallel tests would share the real `~/.cache` and
+/// race on writes.
 fn init_cmd_in_dir(home_dir: &std::path::Path) -> Command {
     let mut cmd = Command::new(bin());
     cmd.env("HOME", home_dir)
         .env("USERPROFILE", home_dir)
         .env("XDG_CONFIG_HOME", home_dir.join(".config"))
+        .env("XDG_CACHE_HOME", home_dir.join(".cache"))
+        .env("LOCALAPPDATA", home_dir.join("AppData").join("Local"))
         .env_remove("PSModulePath")
         .env("SHELL", "/bin/bash");
     cmd
