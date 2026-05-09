@@ -17,4 +17,5 @@
 pub mod clipboard;
 pub mod config_store;
 pub mod env;
+pub mod integration_cache;
 pub mod integration_check;
