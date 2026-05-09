@@ -187,3 +187,46 @@ pub(crate) fn make_command_exists_owned(
         exists
     }
 }
+
+/// Return the absolute path of the running runex binary as a String,
+/// or fall back to `default` (typically `"runex"`) when
+/// `current_exe()` fails or contains non-UTF-8 bytes.
+///
+/// Used by Phase G's `export` and `init` paths to bake the real
+/// binary location into generated shell-integration scripts so
+/// per-keystroke hooks don't pay PATH lookup overhead. When invoked
+/// through a `mise` shim, `current_exe()` reads `/proc/self/exe`
+/// (Linux/WSL) or `GetModuleFileNameW` (Windows), both of which
+/// return the post-`exec` real binary, not the shim — confirmed
+/// during Phase F's clink lua install path testing.
+pub(crate) fn current_exe_or_default(default: &str) -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| default.to_string())
+}
+
+#[cfg(test)]
+mod current_exe_tests {
+    use super::*;
+
+    #[test]
+    fn current_exe_or_default_returns_absolute_path_in_tests() {
+        let resolved = current_exe_or_default("runex");
+        // The cargo test harness runs as a real binary on disk, so
+        // current_exe() must succeed and produce an absolute path
+        // (UTF-8 lossily-decoded, matching the production fallback).
+        assert!(
+            !resolved.is_empty(),
+            "current_exe_or_default must not return empty"
+        );
+        assert!(
+            resolved != "runex",
+            "current_exe_or_default must not fall back to default in a normal cargo test invocation: got {resolved:?}"
+        );
+        assert!(
+            std::path::Path::new(&resolved).is_absolute(),
+            "current_exe_or_default must return an absolute path: got {resolved:?}"
+        );
+    }
+}

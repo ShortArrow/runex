@@ -1231,6 +1231,88 @@ fn init_clink_writes_lua_to_resolved_path() {
     );
 }
 
+// ─── export --bin Phase G default-to-current_exe ───────────────────────────────
+
+/// Phase G (0.1.15): when --bin is omitted, the generated script bakes
+/// the absolute path of the running runex binary into the hook
+/// invocation. This eliminates the per-keystroke PATH lookup that
+/// would otherwise hit a `mise` shim on WSL (~470 ms) or a slow
+/// `/mnt/c/...` 9p stat chain. The test runs the bin we built, so
+/// `current_exe()` resolves to the cargo target binary path.
+#[test]
+fn export_omitted_bin_bakes_current_exe_absolute_path() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _stderr, ok) = run(&["export", "bash"], Some(cfg.path()), None);
+    assert!(ok, "export bash with default --bin must succeed");
+
+    // Header records the bin used. Read the header line and confirm
+    // it's an absolute path to the current_exe binary, not bare "runex".
+    let bin_line = stdout
+        .lines()
+        .find(|l| l.starts_with("# runex-bin: "))
+        .expect("export output must contain `# runex-bin:` header");
+    let bin = bin_line.trim_start_matches("# runex-bin: ").trim();
+    assert!(
+        bin != "runex",
+        "default --bin must be the absolute path, not bare 'runex': got {bin:?}"
+    );
+    assert!(
+        std::path::Path::new(bin).is_absolute(),
+        "default --bin must be an absolute path: got {bin:?}"
+    );
+    // The hook function inside the script must invoke the same path.
+    assert!(
+        stdout.contains(&format!("{bin} hook --shell bash")) || stdout.contains(&format!("'{bin}' hook --shell bash")),
+        "hook function must invoke the baked absolute path: {stdout}"
+    );
+}
+
+/// Phase G: when --bin is explicitly passed (= power user wants a
+/// portable hand-managed dotfile), the bare string is preserved as-is
+/// and the hook function calls it via PATH lookup. This is the legacy
+/// behaviour, retained intentionally so users running multi-machine
+/// dotfile sync against differently-installed runex copies aren't
+/// forced into per-machine cache regen.
+#[test]
+fn export_explicit_bin_runex_preserves_bare_name() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _stderr, ok) = run(&["export", "bash", "--bin=runex"], Some(cfg.path()), None);
+    assert!(ok, "export bash --bin=runex must succeed");
+
+    let bin_line = stdout
+        .lines()
+        .find(|l| l.starts_with("# runex-bin: "))
+        .expect("export output must contain `# runex-bin:` header");
+    assert_eq!(
+        bin_line.trim(),
+        "# runex-bin: runex",
+        "explicit --bin=runex must keep the bare name verbatim"
+    );
+    // The hook function must invoke the bare PATH-resolved name.
+    assert!(
+        stdout.contains("'runex' hook --shell bash"),
+        "explicit --bin=runex must produce a PATH-resolved invocation: {stdout}"
+    );
+}
+
+/// Phase G: explicit --bin with a non-default value also passes through
+/// verbatim (e.g. an absolute path the user picked manually).
+#[test]
+fn export_explicit_bin_absolute_path_passes_through() {
+    let cfg = write_config("version = 1\n");
+    let custom = "/opt/custom/runex";
+    let (stdout, _stderr, ok) = run(
+        &["export", "bash", &format!("--bin={custom}")],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "export bash --bin=/opt/custom/runex must succeed");
+    assert!(
+        stdout.contains(&format!("# runex-bin: {custom}")),
+        "explicit --bin must appear verbatim in the header: {stdout}"
+    );
+}
+
 // ─── export --bin validation ──────────────────────────────────────────────────
 
 /// export with an empty --bin must exit non-zero; an empty bin name would

@@ -44,8 +44,25 @@ pub(crate) fn validate_bin(bin: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn handle(shell: String, bin: String, config_flag: Option<&Path>) -> CmdResult {
-    if let Err(msg) = validate_bin(&bin) {
+pub(crate) fn handle(shell: String, bin: Option<String>, config_flag: Option<&Path>) -> CmdResult {
+    // Phase G: --bin is Option<String> as of 0.1.15. None means
+    // "use current_exe()", which bakes an absolute path into the
+    // generated script and lets per-keystroke `runex hook`
+    // invocations skip the PATH lookup. On WSL with a `mise` shim
+    // ahead of ~/.cargo/bin/runex, that lookup costs ~470 ms per
+    // invocation (mise startup overhead through the shim wrapper).
+    //
+    // Some(s) preserves the previous bare-name behaviour for power
+    // users hand-managing dotfiles that need to source the same
+    // exported script across multiple machines with different
+    // installations. Most callers should leave --bin off.
+    //
+    // current_exe() returns the post-exec real binary even when the
+    // process was launched via a `mise` shim (Linux: /proc/self/exe;
+    // Windows: GetModuleFileNameW), so the baked path bypasses the
+    // shim by construction.
+    let effective_bin = bin.unwrap_or_else(|| crate::util::path::current_exe_or_default("runex"));
+    if let Err(msg) = validate_bin(&effective_bin) {
         eprintln!("error: {msg}");
         return Ok(CmdOutcome::ExitCode(1));
     }
@@ -59,30 +76,24 @@ pub(crate) fn handle(shell: String, bin: String, config_flag: Option<&Path>) -> 
         let (_path, cfg, _err) = resolve_config_opt(None);
         cfg
     };
-    // For clink, default-bin must resolve to an absolute path.
+
+    // Phase G: prepend the integration-cache header so the same byte
+    // stream serves both `runex export <shell>` (stdout) and `runex
+    // init <shell>` (cache file). Doctor (G6) parses the header to
+    // detect drift / version mismatch / missing baked-bin path; having
+    // the same format on both write paths keeps the parser simple.
     //
-    // Why: clink invokes runex via Lua's `io.popen` which spawns a fresh
-    // cmd.exe child. That child inherits whatever PATH the clink-injected
-    // host process happens to have, and on real machines that PATH is
-    // sometimes degraded (e.g. system-only, with the User scope from
-    // HKCU not yet merged in). A bare `runex` command in the lua script
-    // would then fail to resolve. Embedding the absolute path of the
-    // currently-running executable (which is by definition reachable —
-    // we ourselves were just launched from it) sidesteps the entire
-    // PATH-inheritance question for clink.
-    //
-    // Other shells (bash/zsh/pwsh/nu) rely on PATH-resolved bare names
-    // because they're invoked from rcfiles where PATH is already correct,
-    // and because users can plausibly want to override which `runex`
-    // gets used. Only clink gets the absolute-path treatment.
-    let effective_bin = if matches!(s, Shell::Clink) && bin == "runex" {
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.to_str().map(|s| s.to_string()))
-            .unwrap_or(bin)
+    // Header is omitted for clink because clink's lua install path
+    // and freshness probe already use a different format (the lua
+    // file is byte-compared against export output in
+    // `infra::integration_check::check_clink_lua_freshness`).
+    let header = if matches!(s, Shell::Clink) {
+        String::new()
     } else {
-        bin
+        let cp = crate::infra::integration_cache::comment_prefix_for(s);
+        crate::infra::integration_cache::cache_header(cp, &effective_bin)
     };
-    print!("{}", crate::app::shell_export::export_script(s, &effective_bin, config.as_ref()));
+    let body = crate::app::shell_export::export_script(s, &effective_bin, config.as_ref());
+    print!("{header}{body}");
     Ok(CmdOutcome::Ok)
 }

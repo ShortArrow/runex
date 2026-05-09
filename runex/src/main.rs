@@ -168,9 +168,14 @@ enum Commands {
     Export {
         /// Target shell: bash, zsh, pwsh, clink, nu
         shell: String,
-        /// Binary name used in the generated script
-        #[arg(long, default_value = "runex")]
-        bin: String,
+        /// Binary name (or absolute path) baked into the generated script.
+        /// When omitted, defaults to the absolute path of the running
+        /// runex binary (`current_exe()`). Pass `--bin runex` explicitly
+        /// to keep the legacy bare-name behaviour for hand-managed
+        /// dotfiles that source `runex export bash` from a different
+        /// runex installation than the one that wrote them.
+        #[arg(long)]
+        bin: Option<String>,
     },
     /// Show what a token expands to (and why it may be skipped)
     Which {
@@ -547,6 +552,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?
         }
         Commands::Export { shell, bin } => cmd::export::handle(shell, bin, cli.config.as_deref())?,
+        // bin is Option<String>: None => current_exe() default, Some(s) => verbatim
         Commands::Doctor { no_shell_aliases, verbose, strict } => cmd::doctor::handle(
             cli.config.as_deref(),
             cli.path_prepend.as_deref(),
