@@ -257,6 +257,164 @@ fn shell_short_name(shell: Shell) -> &'static str {
     }
 }
 
+/// Phase G cache file freshness check. Reads
+/// `<XDG_CACHE_HOME>/runex/integration.<ext>` for `shell` and
+/// classifies the result:
+///
+/// * **Skipped** when the cache path can't be resolved (no
+///   `XDG_CACHE_HOME` or `HOME` signal), the file does not exist
+///   (= user has not run `runex init <shell>`), or `shell` is
+///   `Clink` (clink uses its own freshness probe via
+///   `check_clink_lua_freshness`).
+/// * **Outdated** when the cache file is present but its
+///   `runex-integration-version:` header doesn't match
+///   [`crate::infra::integration_cache::INTEGRATION_CACHE_VERSION`],
+///   the `runex-bin:` header points at a path that no longer
+///   exists, or the header is absent entirely (= legacy `eval
+///   "$(runex export bash)"`-style content from before Phase G).
+/// * **Ok** when the version matches and the baked-bin path
+///   exists on disk.
+///
+/// Returns `Missing` only on read failure for an existing file
+/// (e.g. permission denied) — that's a real problem the user
+/// needs to know about.
+pub(crate) fn check_cache_freshness(
+    shell: Shell,
+    env: &dyn crate::infra::env::HomeDirResolver,
+) -> IntegrationCheck {
+    use crate::infra::integration_cache::{
+        cache_path, INTEGRATION_CACHE_MARKER, INTEGRATION_CACHE_VERSION,
+    };
+
+    let name = format!("integration:{}:cache", shell_short_name(shell));
+
+    let target = match cache_path(shell, env) {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return IntegrationCheck::Skipped {
+                name,
+                detail: "cache layout does not apply to clink (uses lua autoloader instead)"
+                    .into(),
+            };
+        }
+        Err(e) => {
+            return IntegrationCheck::Skipped {
+                name,
+                detail: format!("cache path could not be resolved: {e}"),
+            };
+        }
+    };
+
+    if !target.exists() {
+        return IntegrationCheck::Skipped {
+            name,
+            detail: format!(
+                "no cache at {} — run `runex init {}` to install",
+                sanitize_for_display(&target.display().to_string()),
+                shell_short_name(shell)
+            ),
+        };
+    }
+
+    let content = match read_capped_regular_file(&target) {
+        Some(s) => s,
+        None => {
+            return IntegrationCheck::Missing {
+                name,
+                detail: format!(
+                    "cache file at {} exists but could not be read (not a regular file, or exceeds the 10 MB safety cap)",
+                    sanitize_for_display(&target.display().to_string())
+                ),
+            };
+        }
+    };
+
+    // Parse version + bin headers from the first ~5 lines. The
+    // header format is documented in
+    // `infra::integration_cache::cache_header`.
+    let mut version_line: Option<&str> = None;
+    let mut bin_line: Option<&str> = None;
+    for line in content.lines().take(5) {
+        if let Some(v) = line.split_once(INTEGRATION_CACHE_MARKER) {
+            version_line = Some(v.1.trim());
+        } else if let Some(b) = line.find("runex-bin: ") {
+            bin_line = Some(&line[b + "runex-bin: ".len()..]);
+        }
+    }
+
+    let Some(version_str) = version_line else {
+        return IntegrationCheck::Outdated {
+            name,
+            detail: format!(
+                "cache at {} has no `runex-integration-version:` header — likely legacy \
+                 `eval \"$(runex export {})\"` content. Re-run `runex init {}` to upgrade",
+                sanitize_for_display(&target.display().to_string()),
+                shell_short_name(shell),
+                shell_short_name(shell)
+            ),
+            path: target,
+        };
+    };
+
+    let parsed: u32 = match version_str.parse() {
+        Ok(v) => v,
+        Err(_) => {
+            return IntegrationCheck::Outdated {
+                name,
+                detail: format!(
+                    "cache at {} has malformed version header `{}` — re-run `runex init {}` to refresh",
+                    sanitize_for_display(&target.display().to_string()),
+                    sanitize_for_display(version_str),
+                    shell_short_name(shell)
+                ),
+                path: target,
+            };
+        }
+    };
+
+    if parsed != INTEGRATION_CACHE_VERSION {
+        return IntegrationCheck::Outdated {
+            name,
+            detail: format!(
+                "cache at {} is version {} but this runex expects version {} — re-run `runex init {}` to refresh",
+                sanitize_for_display(&target.display().to_string()),
+                parsed,
+                INTEGRATION_CACHE_VERSION,
+                shell_short_name(shell)
+            ),
+            path: target,
+        };
+    }
+
+    if let Some(bin) = bin_line {
+        let bin = bin.trim();
+        // Bare `runex` is a deliberate power-user override (Phase
+        // G3) — accept it without checking existence on disk
+        // since it's PATH-resolved at run time.
+        if bin != "runex" && !std::path::Path::new(bin).exists() {
+            return IntegrationCheck::Outdated {
+                name,
+                detail: format!(
+                    "cache at {} bakes a `runex-bin:` of {} which no longer exists. \
+                     Re-run `runex init {}` to point the cache at the current binary",
+                    sanitize_for_display(&target.display().to_string()),
+                    sanitize_for_display(bin),
+                    shell_short_name(shell)
+                ),
+                path: target,
+            };
+        }
+    }
+
+    IntegrationCheck::Ok {
+        name,
+        detail: format!(
+            "cache up-to-date at {}",
+            sanitize_for_display(&target.display().to_string())
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,5 +727,145 @@ mod tests {
             paths.is_empty(),
             "no env vars set + no home → no paths probed; got {paths:?}"
         );
+    }
+
+    /// Phase G: pin every branch of `check_cache_freshness`.
+    mod cache_freshness {
+        use super::*;
+        use crate::infra::env::EnvHomeDir;
+        use crate::infra::integration_cache::{
+            cache_header, cache_path, INTEGRATION_CACHE_VERSION,
+        };
+        use std::collections::HashMap;
+
+        fn env_with(home: &std::path::Path) -> EnvHomeDir<impl Fn(&str) -> Option<String> + Send + Sync> {
+            let owned: HashMap<String, String> = HashMap::from([
+                ("HOME".to_string(), home.to_string_lossy().into_owned()),
+                (
+                    "XDG_CACHE_HOME".to_string(),
+                    home.join(".cache").to_string_lossy().into_owned(),
+                ),
+            ]);
+            EnvHomeDir::new(move |n| owned.get(n).cloned())
+        }
+
+        #[test]
+        fn skipped_when_clink() {
+            let dir = TempDir::new().unwrap();
+            let env = env_with(dir.path());
+            let r = check_cache_freshness(Shell::Clink, &env);
+            assert!(matches!(r, IntegrationCheck::Skipped { .. }), "got {r:?}");
+        }
+
+        #[test]
+        fn skipped_when_cache_does_not_exist() {
+            let dir = TempDir::new().unwrap();
+            let env = env_with(dir.path());
+            let r = check_cache_freshness(Shell::Bash, &env);
+            assert!(
+                matches!(&r, IntegrationCheck::Skipped { detail, .. } if detail.contains("runex init")),
+                "got {r:?}"
+            );
+        }
+
+        #[test]
+        fn ok_when_version_matches_and_bin_exists() {
+            let dir = TempDir::new().unwrap();
+            let env = env_with(dir.path());
+            let cache = cache_path(Shell::Bash, &env).unwrap().unwrap();
+            std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+
+            // Use the test binary (the cargo test runner) as a
+            // known-existing executable for the runex-bin: header.
+            let bin = std::env::current_exe().unwrap();
+            let bin_str = bin.to_string_lossy().into_owned();
+            let header = cache_header("#", &bin_str);
+            std::fs::write(&cache, format!("{header}# body placeholder\n")).unwrap();
+
+            let r = check_cache_freshness(Shell::Bash, &env);
+            assert!(matches!(r, IntegrationCheck::Ok { .. }), "got {r:?}");
+        }
+
+        #[test]
+        fn outdated_when_version_mismatch() {
+            let dir = TempDir::new().unwrap();
+            let env = env_with(dir.path());
+            let cache = cache_path(Shell::Bash, &env).unwrap().unwrap();
+            std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+            // Hand-write a header with a future version that this
+            // runex doesn't recognise.
+            let bin = std::env::current_exe().unwrap();
+            let header = format!(
+                "# runex-integration-version: {}\n# runex-bin: {}\n# Generated.\n",
+                INTEGRATION_CACHE_VERSION + 99,
+                bin.display()
+            );
+            std::fs::write(&cache, format!("{header}# body\n")).unwrap();
+
+            let r = check_cache_freshness(Shell::Bash, &env);
+            match r {
+                IntegrationCheck::Outdated { detail, .. } => {
+                    assert!(detail.contains("version"), "expected version mismatch detail, got {detail}");
+                }
+                _ => panic!("expected Outdated, got {r:?}"),
+            }
+        }
+
+        #[test]
+        fn outdated_when_legacy_no_header() {
+            let dir = TempDir::new().unwrap();
+            let env = env_with(dir.path());
+            let cache = cache_path(Shell::Bash, &env).unwrap().unwrap();
+            std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+            // Simulate legacy `eval "$(runex export bash)"` content
+            // — no version header at all.
+            std::fs::write(&cache, "# runex shell integration for bash\n__runex_expand() {}\n").unwrap();
+
+            let r = check_cache_freshness(Shell::Bash, &env);
+            match r {
+                IntegrationCheck::Outdated { detail, .. } => {
+                    assert!(detail.contains("legacy") || detail.contains("no `runex-integration-version:` header"),
+                        "expected legacy-cache hint, got {detail}");
+                }
+                _ => panic!("expected Outdated, got {r:?}"),
+            }
+        }
+
+        #[test]
+        fn outdated_when_baked_bin_does_not_exist() {
+            let dir = TempDir::new().unwrap();
+            let env = env_with(dir.path());
+            let cache = cache_path(Shell::Bash, &env).unwrap().unwrap();
+            std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+
+            let header = cache_header("#", "/nonexistent/path/runex");
+            std::fs::write(&cache, format!("{header}# body\n")).unwrap();
+
+            let r = check_cache_freshness(Shell::Bash, &env);
+            match r {
+                IntegrationCheck::Outdated { detail, .. } => {
+                    assert!(detail.contains("no longer exists"),
+                        "expected missing-bin hint, got {detail}");
+                }
+                _ => panic!("expected Outdated, got {r:?}"),
+            }
+        }
+
+        #[test]
+        fn ok_when_baked_bin_is_bare_runex() {
+            // Bare "runex" is a deliberate power-user override (G3
+            // explicit --bin runex). Don't flag it as missing — it's
+            // resolved through PATH at run time.
+            let dir = TempDir::new().unwrap();
+            let env = env_with(dir.path());
+            let cache = cache_path(Shell::Bash, &env).unwrap().unwrap();
+            std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+
+            let header = cache_header("#", "runex");
+            std::fs::write(&cache, format!("{header}# body\n")).unwrap();
+
+            let r = check_cache_freshness(Shell::Bash, &env);
+            assert!(matches!(r, IntegrationCheck::Ok { .. }), "got {r:?}");
+        }
     }
 }

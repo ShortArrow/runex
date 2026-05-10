@@ -532,6 +532,7 @@ where
         checks.push(check_effective_search_path(summary));
     }
     checks.extend(integration_marker_checks(&env_info.check_rcfile_markers));
+    checks.extend(integration_cache_checks(&env_info.check_rcfile_markers));
     if let Some(export) = env_info.clink_export_for_drift_check.as_deref() {
         let r = crate::infra::integration_check::check_clink_lua_freshness(
             export,
@@ -578,6 +579,30 @@ fn integration_marker_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
     }
     if sel.nu {
         out.push(integration_check_to_check(check_rcfile_marker(Shell::Nu, None)));
+    }
+    out
+}
+
+/// Phase G: run the static integration-cache freshness check for
+/// each shell. Outputs `integration:<shell>:cache` rows in doctor.
+/// `Skipped` is the common case (no cache installed yet) and is
+/// rendered as Ok so users without Phase G install don't see noise.
+fn integration_cache_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
+    use crate::infra::env::SystemHomeDir;
+    use crate::infra::integration_check::check_cache_freshness;
+    use crate::domain::shell::Shell;
+    let mut out = Vec::new();
+    if sel.bash {
+        out.push(integration_check_to_check(check_cache_freshness(Shell::Bash, &SystemHomeDir)));
+    }
+    if sel.zsh {
+        out.push(integration_check_to_check(check_cache_freshness(Shell::Zsh, &SystemHomeDir)));
+    }
+    if sel.pwsh {
+        out.push(integration_check_to_check(check_cache_freshness(Shell::Pwsh, &SystemHomeDir)));
+    }
+    if sel.nu {
+        out.push(integration_check_to_check(check_cache_freshness(Shell::Nu, &SystemHomeDir)));
     }
     out
 }
