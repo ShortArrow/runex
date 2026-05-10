@@ -603,7 +603,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 default_config_path()?
             };
-            cmd::add_remove::handle_add(&config_path, &key, &expand, when.as_deref())?
+            cmd::add_remove::handle_add(
+                &config_path,
+                &key,
+                &expand,
+                when.as_deref(),
+                &infra::env::SystemHomeDir,
+            )?
         }
         Commands::Remove { key } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
@@ -611,7 +617,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 default_config_path()?
             };
-            cmd::add_remove::handle_remove(&config_path, &key)?
+            cmd::add_remove::handle_remove(&config_path, &key, &infra::env::SystemHomeDir)?
         }
     };
 

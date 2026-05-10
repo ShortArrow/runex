@@ -327,6 +327,79 @@ fn write_clink_lua_safely(install_path: &Path, contents: &str) -> CmdResult {
     Ok(CmdOutcome::Ok)
 }
 
+/// Refresh every existing Phase G integration cache file silently.
+/// Called from `cmd::add_remove::handle_add` /
+/// `handle_remove` after the user's `config.toml` has been edited
+/// so the cached scripts pick up the new abbreviation table on the
+/// next shell startup without needing an explicit `runex init`.
+///
+/// Strategy:
+///
+/// 1. For each shell whose cache layout we own (bash/zsh/pwsh/nu),
+///    resolve the cache path. Skip the shell if the path can't be
+///    resolved (no XDG_CACHE_HOME / HOME signal).
+/// 2. Skip the shell if the cache file does not exist — the user
+///    has not run `runex init <shell>`, so there's nothing to
+///    refresh.
+/// 3. Otherwise, regenerate the cache content and atomically
+///    rewrite via `infra::integration_cache::write_cache_file`.
+///
+/// Failures on individual shells are surfaced via stderr but do
+/// not abort the caller. The intent is "best-effort refresh"; a
+/// transient I/O error on one shell's cache must not stop a
+/// successful `runex add` from reporting success.
+///
+/// `config_path` is consulted to load the freshly-edited config so
+/// any abbreviation rule changes are reflected in the regenerated
+/// per-shell hook table. Falls back to `None` if config can't be
+/// loaded; the cache still regenerates with whatever resolver
+/// state is available.
+pub(crate) fn refresh_existing_caches(
+    config_path: &Path,
+    env: &dyn HomeDirResolver,
+) {
+    use crate::infra::integration_cache::{
+        cache_header, cache_path, comment_prefix_for, write_cache_file,
+    };
+
+    let bin = crate::util::path::current_exe_or_default("runex");
+    // Reload the config under the new state so rule changes
+    // (`runex add` / `runex remove` mutations) reach the cache
+    // body. resolve_config_opt is graceful: a parse failure or
+    // missing file means we still rewrite caches (with empty
+    // abbr table) rather than silently ignoring the refresh.
+    let (_path, config, _err) = resolve_config_opt(Some(config_path));
+
+    for &shell in &[Shell::Bash, Shell::Zsh, Shell::Pwsh, Shell::Nu] {
+        let target = match cache_path(shell, env) {
+            Ok(Some(p)) => p,
+            Ok(None) => continue, // clink (excluded by cache_path)
+            Err(e) => {
+                eprintln!(
+                    "warning: cache refresh skipped for {:?} (cannot resolve path: {})",
+                    shell, e
+                );
+                continue;
+            }
+        };
+        if !target.is_file() {
+            continue;
+        }
+        let comment_prefix = comment_prefix_for(shell);
+        let header = cache_header(comment_prefix, &bin);
+        let body = crate::app::shell_export::export_script(shell, &bin, config.as_ref());
+        let contents = format!("{header}{body}");
+        if let Err(e) = write_cache_file(&target, &contents) {
+            eprintln!(
+                "warning: failed to refresh {:?} cache at {}: {}",
+                shell,
+                sanitize_for_display(&target.display().to_string()),
+                e
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Inline integration of `cmd::init::handle` with an
