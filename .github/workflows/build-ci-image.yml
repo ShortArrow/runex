@@ -1,0 +1,82 @@
+name: Build CI image
+
+# Builds the runex CI / dev container image and pushes to GHCR.
+#
+# Triggered manually (workflow_dispatch) and automatically when the
+# Dockerfile, sanity script, or this workflow itself changes. The
+# image is consumed by `.github/workflows/ci.yml`'s `test-linux` job
+# (Phase H3) so this workflow has to succeed before a downstream CI
+# run on a new image can pick it up.
+#
+# The job prints the resulting image digest to the run's Step
+# Summary so a human (or H3b's manual update) can copy a
+# `@sha256:...` pin into ci.yml.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, develop]
+    paths:
+      - "containers/ci/**"
+      - ".github/workflows/build-ci-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build & push (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: containers/ci/ubuntu.Dockerfile
+          push: true
+          # Two tags: `latest` for unversioned consumers (e.g. dev
+          # `docker run`) and `sha-<full git sha>` for traceability
+          # back to the source commit. ci.yml in H3b pins by digest,
+          # not by tag, so neither tag is used by the CI gate
+          # itself.
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/runex-ci:latest
+            ghcr.io/${{ github.repository_owner }}/runex-ci:sha-${{ github.sha }}
+          # GitHub Actions cache as the buildx cache backend. Free
+          # for public repos and lives alongside the workflow run
+          # so a re-run after a dependency bump is fast.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Linux/amd64 only for now. arm64 is a follow-up (Phase H5
+          # along with arch / fedora / opensuse Dockerfiles).
+          platforms: linux/amd64
+
+      - name: Image digest summary
+        run: |
+          {
+            echo "## Built image"
+            echo ""
+            echo "- **Tag (mutable)**: \`ghcr.io/${{ github.repository_owner }}/runex-ci:latest\`"
+            echo "- **Tag (immutable)**: \`ghcr.io/${{ github.repository_owner }}/runex-ci:sha-${{ github.sha }}\`"
+            echo "- **Digest**: \`${{ steps.push.outputs.digest }}\`"
+            echo ""
+            echo "Pin in \`.github/workflows/ci.yml\`:"
+            echo ""
+            echo '```yaml'
+            echo "container:"
+            echo "  image: ghcr.io/${{ github.repository_owner }}/runex-ci@${{ steps.push.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
