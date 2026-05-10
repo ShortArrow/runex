@@ -115,6 +115,14 @@ WORKDIR /home/runex
 # Installed under the `runex` user so cargo registry / target dirs land in
 # its $HOME without sudo. Components: clippy + rustfmt for parity with
 # `dtolnay/rust-toolchain@stable` defaults.
+#
+# RUSTUP_HOME / CARGO_HOME are pinned to absolute paths so the toolchain
+# stays discoverable even when the consumer overrides $HOME — GitHub
+# Actions' `jobs.<id>.container` does exactly that (HOME=/github/home),
+# which would otherwise leave rustup looking at an empty settings.toml
+# and erroring with "could not choose a version of cargo to run."
+ENV RUSTUP_HOME=/home/runex/.rustup
+ENV CARGO_HOME=/home/runex/.cargo
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --default-toolchain "${RUST_TOOLCHAIN}" --profile minimal \
             --component clippy --component rustfmt
