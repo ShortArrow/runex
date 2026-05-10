@@ -38,6 +38,33 @@ wsl -e bash -c 'cd /mnt/path/to/runex && cargo test --workspace'
 
 Replace `/mnt/path/to/runex` with the WSL path to your checkout. The tests are gated with `#[cfg(unix)]` and are automatically skipped on Windows.
 
+#### Linux-specific tests (Container, recommended)
+
+Phase H (0.1.15+) ships a Linux CI container image with bash 4+, zsh, pwsh, nu, xclip, wl-paste, xsel, and the rust toolchain pinned at known versions. CI's `test-linux` job runs inside this image; you can run exactly the same environment locally:
+
+```bash
+# Pull the latest CI image and run the full Linux test suite
+# against your working tree. The bind-mount on /workspace makes
+# target/ and Cargo.lock changes show up in your checkout.
+docker run --rm -it \
+  -v "$(pwd)":/workspace -w /workspace \
+  --user 1001 \
+  ghcr.io/shortarrow/runex-ci:latest \
+  cargo test --workspace
+```
+
+Or build the image locally if you've changed the Dockerfile:
+
+```bash
+docker build -t runex-ci -f containers/ci/ubuntu.Dockerfile .
+docker run --rm -it -v "$(pwd)":/workspace -w /workspace --user 1001 \
+  runex-ci cargo test --workspace
+```
+
+The container is the same one CI uses, so a green `cargo test --workspace` here is the strongest pre-push signal short of pushing to a feature branch. PTY-based E2E tests (`bash_pty_integration.rs`, `zsh_pty_integration.rs`, `pwsh_pty_integration.rs`, `nu_pty_integration.rs`) and the Phase G shell-integration cache tests (`shell_integration.rs`) all exercise the same toolchain inside the container as in CI.
+
+The image is amd64-only as of Phase H. macOS / Windows hosts can still use it via Docker Desktop's built-in emulation but PTY tests may be slow under emulation; running on a native Linux host (or WSL2) is preferred for development.
+
 ## Coding guidelines
 
 ### Language and style
