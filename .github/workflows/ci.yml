@@ -18,7 +18,7 @@ jobs:
     # Bumping the digest is a deliberate one-line commit so a
     # rebuilt image cannot silently change the CI gate.
     container:
-      image: ghcr.io/shortarrow/runex-ci@sha256:9a2cf2fc7675dd4e2b5a3c7940da2b4e549ad7a81d1ca8d9405cd311ad60a5a5
+      image: ghcr.io/shortarrow/runex-ci@sha256:0690174dd710f346726779da0c87a5c39eb9bd4d8111b71d87266b0c10b4c6e1
       options: --user 1001
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
