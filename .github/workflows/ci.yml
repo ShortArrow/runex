@@ -13,11 +13,12 @@ jobs:
     # Phase H: run inside the runex-ci image so the shell tools the
     # test suite reaches for (bash 4+, zsh, pwsh, nu, xclip,
     # wl-paste, xsel) are pinned and reproducible. The image is
-    # built / pushed by .github/workflows/build-ci-image.yml.
-    # Pinning is by :latest for now; H3b switches to a digest
-    # (@sha256:...) once the first build has run.
+    # built / pushed by .github/workflows/build-ci-image.yml; the
+    # digest below is copied from that workflow's Step Summary.
+    # Bumping the digest is a deliberate one-line commit so a
+    # rebuilt image cannot silently change the CI gate.
     container:
-      image: ghcr.io/shortarrow/runex-ci:latest
+      image: ghcr.io/shortarrow/runex-ci@sha256:9a2cf2fc7675dd4e2b5a3c7940da2b4e549ad7a81d1ca8d9405cd311ad60a5a5
       options: --user 1001
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
