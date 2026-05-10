@@ -45,9 +45,20 @@ RUN apt-get update && \
         ca-certificates \
         git \
         gnupg \
-        nodejs \
         locales \
     && locale-gen C.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Node.js 20 (for actions/checkout@v6 inside jobs.<id>.container) -------
+# Ubuntu 24.04's apt nodejs is 18.x; actions/checkout@v6 and other recent
+# GitHub Actions node-based actions require >=20. Use NodeSource's official
+# apt repo (gpg-verified) to pull a 20.x line install.
+RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- PowerShell (via Microsoft apt repo) ------------------------------------
