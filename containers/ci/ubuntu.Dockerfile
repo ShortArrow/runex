@@ -13,13 +13,26 @@
 # The image build runs `containers/ci/sanity.sh` at the very end so a
 # missing or broken tool is caught here, not at CI runtime.
 
-FROM ubuntu:24.04
+# Pin the base image by manifest-list digest. The `:24.04` tag floats
+# whenever Canonical respins the LTS rootfs, which would silently change
+# the bash / glibc / openssl versions baked into the image. Bumping the
+# digest is then a deliberate commit, visible in `git log -p`. Resolve
+# a fresh digest with `docker buildx imagetools inspect ubuntu:24.04`.
+FROM ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
 
 # ---- Build-time arguments ---------------------------------------------------
 # Tool versions are explicit so a bump shows up in `git log -p`. Bumping
-# `NU_VERSION` triggers an image rebuild via the path filter on
+# any of these triggers an image rebuild via the path filter on
 # `.github/workflows/build-ci-image.yml`.
 ARG NU_VERSION=0.112.2
+# `RUST_TOOLCHAIN=stable` keeps parity with `dtolnay/rust-toolchain@stable`
+# on the macOS / Windows native runners. Pin to a specific version
+# (e.g. `1.83.0`) when image and native runners need to agree exactly.
+ARG RUST_TOOLCHAIN=stable
+# Node major line for actions/checkout@v6+ compatibility. Bumping this
+# is the signal to verify NodeSource still publishes packages for the
+# current Ubuntu codename.
+ARG NODE_MAJOR=20
 ARG TARGETARCH=amd64
 
 # Don't prompt during apt installs.
@@ -55,7 +68,7 @@ RUN apt-get update && \
 # apt repo (gpg-verified) to pull a 20.x line install.
 RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
         | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    && echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
         > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
@@ -103,7 +116,7 @@ WORKDIR /home/runex
 # its $HOME without sudo. Components: clippy + rustfmt for parity with
 # `dtolnay/rust-toolchain@stable` defaults.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --default-toolchain stable --profile minimal \
+        | sh -s -- -y --default-toolchain "${RUST_TOOLCHAIN}" --profile minimal \
             --component clippy --component rustfmt
 ENV PATH=/home/runex/.cargo/bin:$PATH
 
