@@ -7,6 +7,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Static shell integration cache (Phase G).** `runex init <shell>`
+  for bash/zsh/pwsh/nu now writes a static script to
+  `<XDG_CACHE_HOME>/runex/integration.<ext>` (matching clink's
+  long-standing pattern) and appends a one-line `source` to the
+  user's rcfile/profile. The cache file has the absolute
+  `current_exe()` path baked in, so per-keystroke hook
+  invocations no longer re-resolve `runex` through `$PATH`.
+  This removes the ~470 ms-per-keystroke latency users on WSL
+  with a `mise` shim ahead of `~/.cargo/bin/runex` were seeing
+  (mise startup overhead × every Space press in `bind -x`-style
+  callbacks).
+  - **Versioned cache header.** Each cache file starts with
+    `# runex-integration-version: 1` plus a `# runex-bin: <abs>`
+    line and a "do not edit" notice. Bumping the format in a
+    future release will be a one-line change here that doctor
+    surfaces as "outdated cache, re-run `runex init <shell>`".
+  - **Interactive guard inside the cache.** Templates now
+    early-return when sourced by a non-interactive shell
+    (`bash -c '...'`, CI scripts, plugin sandboxes), so
+    integration installs leave no side effects on those paths.
+  - **Auto-refresh on `runex add` / `runex remove`.** Existing
+    caches for shells the user has already installed get
+    silently regenerated when config changes, so new
+    abbreviations are picked up by the next shell start without
+    needing an explicit re-init. Shells without a cache are
+    skipped (no opt-in side effect).
+  - **`runex doctor` cache freshness check.** New
+    `integration:<shell>:cache` row per shell flags missing
+    binaries, version mismatches, and legacy
+    `eval "$(runex export bash)"`-style content. Clink keeps
+    its existing byte-compare freshness probe.
+- **`runex export <shell>` defaults `--bin` to `current_exe()`.**
+  Omitting `--bin` (the recommended path) bakes the absolute
+  binary path into the generated script. Passing `--bin runex`
+  explicitly keeps the legacy bare-name behaviour for power
+  users hand-managing dotfiles that source the same exported
+  script across multiple machines with different installations.
+  Also: `runex export <shell>` (non-clink) now prepends the
+  same versioned header as the cache file, so the byte stream
+  is interchangeable.
+
+### Changed
+
+- **`lua_quote_string` drops Unicode visual-deception
+  characters (RLO, BOM, ZWSP, etc.).** Previously these were
+  passed through unchanged because clink's only consumer
+  (`--bin`) restricted input to printable ASCII via
+  `validate_bin`. With the Phase G cache layout, the clink
+  install path also flows through `lua_quote_string`, so the
+  quoter is now hardened in isolation rather than relying on
+  upstream validation.
+
+### Internal
+
+- **New module `infra::integration_cache`.** Owns the cache
+  path resolution, atomic write (sibling-temp + fsync +
+  rename), and header generation. Generalises the pattern that
+  was inline in `cmd::init::install_clink_lua` since 0.1.13.
+- **New `infra::env::xdg_cache_home_with`.** Mirrors the
+  existing `xdg_config_home_with`: `$XDG_CACHE_HOME` →
+  `$LOCALAPPDATA` (Windows) → `~/.cache` (non-Windows) →
+  `~/AppData/Local` (Windows fallback). Resolver-injectable for
+  hermetic tests.
+- **Cleaned up `app::init`.** Removed the inline `nu_quote_path`
+  helper (replaced by `domain::shell::nu_quote_string` now that
+  cache paths flow through there). The `nu_quote_path_escaping`
+  / `nu_quote_path_deceptive` test mods were re-pinned against
+  the new public API surface (`integration_line(Shell::Nu, …)`)
+  so the security regression coverage stays intact through the
+  refactor.
+
+### Tests
+
+- New `tests/shell_integration.rs` with five subprocess pins
+  against bash 4+ (Linux only): non-interactive guard works,
+  interactive subshell defines `__runex_expand`, header
+  contains version + bin lines, rcfile gains a `source` line
+  pointing at the cache, init cleans up a stale `.tmp` from a
+  simulated previous crash.
+- `infra::integration_cache::tests` (7 tests on Windows + 9 on
+  Linux): cache_path resolution per shell, XDG fallback, atomic
+  write, parent-dir auto-creation, symlink reject (Unix), header
+  format pinning.
+- `infra::integration_check::tests::cache_freshness` (7 tests):
+  every doctor branch (Skipped × 2, Ok × 2, Outdated × 4)
+  including the bare-`runex` opt-out path.
+- `cmd::add_remove::tests` (3 tests): silent refresh on add,
+  no-op preservation on zero-match remove, no auto-creation
+  for shells without a pre-existing cache.
+- `cli_integration` gains 3 new tests for `runex export bash`
+  default vs explicit `--bin`, and an env-isolation fix for
+  `init_cmd_in_dir` so parallel tests no longer race on the
+  real `~/.cache`.
+
+### Docs
+
+- New ADR
+  [`docs/decisions/0001-static-integration-cache.md`](docs/decisions/0001-static-integration-cache.md)
+  records the design rationale, considered alternatives
+  (doctor-WARN-only, rcfile-baked absolute path,
+  current_exe-default-only, lazy bind via PROMPT_COMMAND), and
+  the long-term implementation contract.
+
+### Migration
+
+Users on 0.1.14 with `eval "$(runex export bash)"` in their
+rcfile see no immediate change — that form keeps working. But
+they don't get the Phase G speedup until they re-run
+`runex init <shell>`. Doctor flags this as
+`integration:<shell>:cache` Outdated and tells them what to do.
+
 ## [0.1.14] - 2026-05-06
 
 ### Added

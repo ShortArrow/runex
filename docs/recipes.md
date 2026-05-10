@@ -222,6 +222,68 @@ bash/zsh have no trigger-on-paste race in the first place).
 
 ---
 
+## 6c. WSL + mise: keystroke latency from `runex` PATH lookup
+
+**Use case:** if you noticed `Space` causing the prompt to blank
+for ~1 second on WSL Linux before the expansion landed, you were
+hitting per-keystroke `mise` startup overhead. Phase G (0.1.15)
+fixes this at the source.
+
+**Symptom (0.1.14 and earlier):**
+
+- Your bashrc has `eval "$(runex export bash)"` from `runex init`.
+- Your `$PATH` has `~/.local/share/mise/shims` ahead of
+  `~/.cargo/bin` (the standard `mise activate` setup).
+- `mise install` placed a `runex` shim under
+  `~/.local/share/mise/shims/runex`.
+- Every Space press invokes `__runex_expand`, which calls
+  `'runex' hook ...`. PATH resolves `runex` to the mise shim,
+  which spawns the real `mise` binary, which then `exec`s the
+  actual runex. Result: ~470 ms per keystroke before the hook
+  even runs (measured: 0m0.474s through the shim, 0m0.002s direct).
+
+**Fix (0.1.15+):** re-run `runex init <shell>` once.
+
+```bash
+runex init bash --yes
+exec bash    # or open a new terminal
+```
+
+That writes `~/.cache/runex/integration.bash` with the absolute
+`runex` path baked in, replaces the rcfile's `eval $(...)` line
+with a static `source` of that cache file, and per-keystroke
+hook calls go directly to the real binary — no shim, no PATH
+walk, no measurable latency.
+
+**Verify:**
+
+```sh
+runex doctor
+# integration:bash:cache: cache up-to-date at ~/.cache/runex/integration.bash
+```
+
+If you saw `Outdated WARN` instead, that's the legacy cache; the
+re-init above clears it.
+
+**Related minor speedup:** `runex hook` also runs
+`when_command_exists` checks via `which::which`, which walks
+`$PATH`. On WSL the inherited Windows PATH adds 90+ entries under
+`/mnt/c/...` that get stat()ed over 9p. If you don't need any
+Windows tools from inside WSL, drop those entries from `$PATH`
+in your bashrc:
+
+```bash
+PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '^/mnt/c/' | paste -sd ':' -)
+export PATH
+```
+
+This is purely a `which::which` cache-miss optimisation; it's
+optional and unrelated to the runex install. Phase G's cache
+file pattern means runex itself no longer cares about your PATH
+shape after init.
+
+---
+
 ## 7. Different commands on Windows and Unix
 
 **Use case:** `rm -i` on Unix, `Remove-Item` in PowerShell.
