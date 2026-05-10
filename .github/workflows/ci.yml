@@ -10,12 +10,23 @@ jobs:
   test-linux:
     name: Test (Linux)
     runs-on: ubuntu-latest
+    # Phase H: run inside the runex-ci image so the shell tools the
+    # test suite reaches for (bash 4+, zsh, pwsh, nu, xclip,
+    # wl-paste, xsel) are pinned and reproducible. The image is
+    # built / pushed by .github/workflows/build-ci-image.yml.
+    # Pinning is by :latest for now; H3b switches to a digest
+    # (@sha256:...) once the first build has run.
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/runex-ci:latest
+      options: --user 1001
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: dtolnay/rust-toolchain@stable
+      # No dtolnay/rust-toolchain — the image already ships rustup
+      # default stable + clippy + rustfmt. No `apt-get install zsh`
+      # — that's now baked in.
+      - name: Verify image tooling
+        run: which bash zsh pwsh nu xclip wl-paste xsel cargo rustc
       - uses: Swatinem/rust-cache@v2
-      - name: Install zsh
-        run: sudo apt-get install -y --no-install-recommends zsh
       - name: Test
         run: cargo test
 
