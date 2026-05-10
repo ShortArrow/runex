@@ -50,20 +50,56 @@ docker run --rm -it \
   -v "$(pwd)":/workspace -w /workspace \
   --user 1001 \
   ghcr.io/shortarrow/runex-ci:latest \
-  cargo test --workspace
+  cargo test --locked --workspace
 ```
 
-Or build the image locally if you've changed the Dockerfile:
+Or build the image locally if you've changed the Dockerfile. Note
+the build context is `containers/ci`, not the repo root — the
+`.dockerignore` next to the Dockerfile only applies when the
+context is scoped that way:
 
 ```bash
-docker build -t runex-ci -f containers/ci/ubuntu.Dockerfile .
+docker build -t runex-ci -f containers/ci/ubuntu.Dockerfile containers/ci
 docker run --rm -it -v "$(pwd)":/workspace -w /workspace --user 1001 \
-  runex-ci cargo test --workspace
+  runex-ci cargo test --locked --workspace
 ```
 
 The container is the same one CI uses, so a green `cargo test --workspace` here is the strongest pre-push signal short of pushing to a feature branch. PTY-based E2E tests (`bash_pty_integration.rs`, `zsh_pty_integration.rs`, `pwsh_pty_integration.rs`, `nu_pty_integration.rs`) and the Phase G shell-integration cache tests (`shell_integration.rs`) all exercise the same toolchain inside the container as in CI.
 
 The image is amd64-only as of Phase H. macOS / Windows hosts can still use it via Docker Desktop's built-in emulation but PTY tests may be slow under emulation; running on a native Linux host (or WSL2) is preferred for development.
+
+#### Bumping the pinned image digest in `ci.yml`
+
+CI consumes the image by `@sha256:...` digest, not by the `:latest`
+tag. After changing anything under `containers/ci/`, the new digest
+must land in `.github/workflows/ci.yml` for CI to pick the change up.
+
+1. **Trigger a build.** Push your `containers/ci/**` change to a
+   branch. The `Build CI image` workflow runs on push to
+   `main` / `develop`; for feature branches, open a PR (the
+   `pull_request` trigger runs the build with `push: false` so you
+   can verify the Dockerfile compiles without yet uploading to
+   GHCR). Once the PR merges to `develop`, the push trigger
+   uploads the image.
+2. **Copy the digest.** Open the green `Build CI image` run on
+   `develop` (or trigger one manually with
+   `gh workflow run build-ci-image.yml`). The run's **Step
+   Summary** prints a "Pin in `.github/workflows/ci.yml`:" block
+   containing the line you need.
+3. **Update `ci.yml`.** Replace the `image:` value under
+   `test-linux.container` with the new
+   `ghcr.io/shortarrow/runex-ci@sha256:<new>`. Commit on
+   `develop` with a message like
+   `ci(linux): bump pinned runex-ci digest to <reason>`.
+4. **Push and verify.** The next CI run should consume the new
+   image. Mismatch between Dockerfile changes and the pinned
+   digest will manifest as missing-tool failures in `Verify image
+   tooling` or behavioural drift in `cargo test --locked`.
+
+The two-step (build → pin) is deliberate. A single-step approach
+where CI tracks `:latest` would let a re-built image silently
+change every running PR's gate. The digest pin makes a re-build
+visible as a one-line commit reviewable like any other change.
 
 ## Coding guidelines
 

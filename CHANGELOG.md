@@ -111,6 +111,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (doctor-WARN-only, rcfile-baked absolute path,
   current_exe-default-only, lazy bind via PROMPT_COMMAND), and
   the long-term implementation contract.
+- New ADR
+  [`docs/decisions/0002-containerized-linux-ci.md`](docs/decisions/0002-containerized-linux-ci.md)
+  captures Phase H: why Linux CI runs inside a pinned GHCR
+  image, why macOS / Windows stay native, and the digest-pin
+  bump procedure.
+- `CONTRIBUTING.md` documents the dev-container hand-check
+  command and how to roll a new `runex-ci` image digest into
+  `.github/workflows/ci.yml`.
+
+### CI
+
+- **Phase H: containerized Linux CI.** `test-linux` in
+  `.github/workflows/ci.yml` now runs inside the pinned
+  `ghcr.io/shortarrow/runex-ci@sha256:...` image instead of
+  installing zsh / pwsh / nu / xclip / wl-clipboard / xsel
+  ad-hoc on each run. The image is built and pushed by
+  `.github/workflows/build-ci-image.yml`
+  (Dockerfile: `containers/ci/ubuntu.Dockerfile`,
+  sanity check: `containers/ci/sanity.sh`). Bumping the digest
+  is a one-line commit so a re-built image cannot silently
+  change what the gate runs against. macOS and Windows jobs
+  stay on native runners.
+- **Build-time reproducibility hardening.** `ubuntu:24.04` is
+  pinned by manifest-list digest; `NU_VERSION`,
+  `RUST_TOOLCHAIN`, and `NODE_MAJOR` are explicit `ARG`s so
+  bumps show up in `git log -p`; `cargo test --locked` on every
+  job (linux/macos/windows) makes Cargo.lock drift fail loudly.
+- **Workflow security tightening.** All `actions/checkout`
+  steps in `ci.yml` and `build-ci-image.yml` now set
+  `persist-credentials: false`, matching `release.yml`.
+  `build-ci-image.yml` also runs as a build-only check on
+  `pull_request` (no GHCR push, no `packages: write` use), so a
+  broken Dockerfile fails CI before it can land on `develop`.
 
 ### Migration
 
