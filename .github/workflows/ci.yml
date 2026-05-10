@@ -17,10 +17,12 @@ jobs:
     # Pinning is by :latest for now; H3b switches to a digest
     # (@sha256:...) once the first build has run.
     container:
-      image: ghcr.io/${{ github.repository_owner }}/runex-ci:latest
+      image: ghcr.io/shortarrow/runex-ci:latest
       options: --user 1001
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       # No dtolnay/rust-toolchain — the image already ships rustup
       # default stable + clippy + rustfmt. No `apt-get install zsh`
       # — that's now baked in.
@@ -35,6 +37,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test
@@ -45,6 +49,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test

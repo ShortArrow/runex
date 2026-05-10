@@ -111,8 +111,10 @@ ENV PATH=/home/runex/.cargo/bin:$PATH
 # The script lives in the repo so contributors can also run it locally
 # (`bash containers/ci/sanity.sh` inside an interactive shell of this
 # image). COPY happens after USER so the file is owned by `runex`.
-COPY --chown=runex:runex containers/ci/sanity.sh /usr/local/bin/runex-ci-sanity
-RUN chmod +x /usr/local/bin/runex-ci-sanity && /usr/local/bin/runex-ci-sanity
+# Build context is `containers/ci/` (set by build-ci-image.yml), so the
+# COPY source is relative to that directory — not the repo root.
+COPY --chown=runex:runex --chmod=0755 sanity.sh /usr/local/bin/runex-ci-sanity
+RUN /usr/local/bin/runex-ci-sanity
 
 # ---- Default command --------------------------------------------------------
 # CI overrides this with explicit `cargo test ...` steps; the bash shell

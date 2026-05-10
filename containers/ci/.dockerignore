@@ -1,11 +1,9 @@
-# Build context for `containers/ci/ubuntu.Dockerfile`.
+# Build context is `containers/ci/` (see build-ci-image.yml `context:`).
 #
-# Only `containers/ci/sanity.sh` is COPY'd into the image; everything
-# else in the repo is irrelevant for image build and would only inflate
-# the build context (= slow `docker build`, large `docker save`).
-#
-# `*` first then `!`-allow the files we actually need.
-*
+# Only `sanity.sh` is COPY'd into the image; the Dockerfile itself is
+# read by buildx via `file:` and doesn't need to ship in the context.
+# Excluding everything else keeps the context tiny so cache hits are
+# stable across unrelated edits in the repo.
 
-# Keep the sanity check that the Dockerfile COPY'es in.
-!containers/ci/sanity.sh
+*
+!sanity.sh

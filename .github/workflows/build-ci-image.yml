@@ -19,7 +19,15 @@ on:
     paths:
       - "containers/ci/**"
       - ".github/workflows/build-ci-image.yml"
+  pull_request:
+    paths:
+      - "containers/ci/**"
+      - ".github/workflows/build-ci-image.yml"
 
+# `pull_request` triggers don't need write access; only the push branch
+# of this workflow uploads to GHCR. `packages: write` is gated to that
+# code path via the `if` on the GHCR login + the `push:` input on the
+# build step.
 permissions:
   contents: read
   packages: write
@@ -30,10 +38,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
@@ -44,17 +55,25 @@ jobs:
         id: push
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
-          context: .
+          # Scope the build context to containers/ci so the
+          # `.dockerignore` in that directory actually applies. With
+          # `context: .` Docker would look at the repo-root .dockerignore
+          # (absent) and ship the entire workspace to buildx — slow
+          # transfers and frequent cache misses on unrelated edits.
+          context: containers/ci
           file: containers/ci/ubuntu.Dockerfile
-          push: true
+          # PR builds verify the Dockerfile compiles but do not push to
+          # GHCR — fork PRs lack `packages: write` and we don't want
+          # untrusted code mutating the registry image.
+          push: ${{ github.event_name != 'pull_request' }}
           # Two tags: `latest` for unversioned consumers (e.g. dev
           # `docker run`) and `sha-<full git sha>` for traceability
           # back to the source commit. ci.yml in H3b pins by digest,
           # not by tag, so neither tag is used by the CI gate
           # itself.
           tags: |
-            ghcr.io/${{ github.repository_owner }}/runex-ci:latest
-            ghcr.io/${{ github.repository_owner }}/runex-ci:sha-${{ github.sha }}
+            ghcr.io/shortarrow/runex-ci:latest
+            ghcr.io/shortarrow/runex-ci:sha-${{ github.sha }}
           # GitHub Actions cache as the buildx cache backend. Free
           # for public repos and lives alongside the workflow run
           # so a re-run after a dependency bump is fast.
@@ -65,18 +84,19 @@ jobs:
           platforms: linux/amd64
 
       - name: Image digest summary
+        if: github.event_name != 'pull_request'
         run: |
           {
             echo "## Built image"
             echo ""
-            echo "- **Tag (mutable)**: \`ghcr.io/${{ github.repository_owner }}/runex-ci:latest\`"
-            echo "- **Tag (immutable)**: \`ghcr.io/${{ github.repository_owner }}/runex-ci:sha-${{ github.sha }}\`"
+            echo "- **Tag (mutable)**: \`ghcr.io/shortarrow/runex-ci:latest\`"
+            echo "- **Tag (immutable)**: \`ghcr.io/shortarrow/runex-ci:sha-${{ github.sha }}\`"
             echo "- **Digest**: \`${{ steps.push.outputs.digest }}\`"
             echo ""
             echo "Pin in \`.github/workflows/ci.yml\`:"
             echo ""
             echo '```yaml'
             echo "container:"
-            echo "  image: ghcr.io/${{ github.repository_owner }}/runex-ci@${{ steps.push.outputs.digest }}"
+            echo "  image: ghcr.io/shortarrow/runex-ci@${{ steps.push.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
