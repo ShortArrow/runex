@@ -44,6 +44,21 @@ pub(crate) fn validate_bin(bin: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `runex export <shell>` handler.
+///
+/// As of Phase G (0.1.15), `--bin` is an `Option<String>`:
+///
+/// * `None` (= flag omitted) → bake `current_exe()` into the
+///   generated hook so per-keystroke invocations don't pay PATH
+///   resolution. This is the recommended default.
+/// * `Some(s)` → use `s` verbatim. `--bin runex` keeps the legacy
+///   bare-name behaviour for power users hand-managing dotfiles
+///   that source the same exported script across multiple
+///   machines with different installations.
+///
+/// See [`docs/decisions/0001-static-integration-cache.md`] for the
+/// design rationale (why `current_exe()` over rcfile-baked
+/// absolute paths or doctor-WARN-only).
 pub(crate) fn handle(shell: String, bin: Option<String>, config_flag: Option<&Path>) -> CmdResult {
     // Phase G: --bin is Option<String> as of 0.1.15. None means
     // "use current_exe()", which bakes an absolute path into the
