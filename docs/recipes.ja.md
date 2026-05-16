@@ -210,23 +210,62 @@ precondition を short-circuit する = 常に展開。空の
 ## 9. `sudo` 後でも展開される
 
 **ユースケース:** `sudo` の後でも略語を効かせたい。runex のコマンド位
-置判定は `sudo <token>` を行頭の `<token>` と同等に扱う。
+置判定は `sudo <token>` を行頭の `<token>` と同等に扱う。同様に `|`,
+`||`, `&&`, `;` の直後もコマンド位置として認識する。
 
 ```toml
 [[abbr]]
-key    = "apt-up"
-expand = "apt update && apt upgrade"
+key    = "apt-update"
+expand = "apt update"
 ```
 
 **動作:**
 
 ```
-sudo apt-up<Space>
+sudo apt-update<Space>
 ```
 
-→ `sudo apt update && apt upgrade `。同様に `|`, `||`, `&&`, `;` の直
-後もコマンド位置と認識される。`runex which <token> --why` でマッチを
+→ `sudo apt update `。`runex which apt-update --why` でマッチ理由を
 確認できる。
+
+### 落とし穴: `sudo <abbr>` は `&&` の右側に `sudo` を伝播しない
+
+`sudo` は直後の 1 コマンドにしか効かない。展開結果に `&&` や `;` が
+含まれる場合、それらの右側のコマンドは **通常ユーザーで** 実行される。
+よくある罠:
+
+```toml
+[[abbr]]
+key    = "apt-up"
+expand = "apt update && apt upgrade"   # NG: apt upgrade は root にならない
+```
+
+```
+sudo apt-up<Space>
+# 展開後: sudo apt update && apt upgrade
+# `apt update` は root、`apt upgrade` は通常ユーザーで失敗する。
+```
+
+パイプライン全体を root で動かしたいなら、各コマンドに個別に `sudo`
+を埋め込み、abbr 自体は `sudo` なしで呼ぶのが安全 (issue #4):
+
+```toml
+[[abbr]]
+key    = "aptup"
+expand = "sudo apt update && sudo apt upgrade"   # OK: 両方 root
+```
+
+```
+aptup<Space>
+# 展開後: sudo apt update && sudo apt upgrade
+```
+
+使い分けの目安:
+
+- **1 コマンド** → コマンド行側に `sudo` を書き (`sudo abbr`)、`expand`
+  には含めない。
+- **複数コマンド (`&&`, `;`, `|`)** → 各コマンドに個別に `sudo` を
+  埋め込み、abbr は素で呼ぶ。
 
 ---
 

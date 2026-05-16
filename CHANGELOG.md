@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Misleading `sudo` recipe in docs (#4).** `docs/recipes.md` and its
+  Japanese translation showed `apt-up = "apt update && apt upgrade"`
+  paired with `sudo apt-up<Space>` — but `sudo` only applies to the
+  command immediately after it, so the `apt upgrade` half ran as the
+  unprivileged user and silently failed. The section now spells out
+  the pitfall, shows the correct multi-command form
+  (`aptup = "sudo apt update && sudo apt upgrade"`, called without a
+  leading `sudo`), and gives a clear rule of thumb for when to bake
+  `sudo` into the expansion vs. typing it on the command line.
+
 - **Trigger space leaks into cursor placeholders (#3).** When an
   abbreviation's `expand` contained `{}` (the cursor placeholder),
   the trigger space that fired the expansion was also inserted at

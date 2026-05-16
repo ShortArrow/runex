@@ -334,24 +334,62 @@ short-circuits the precondition — always expand. An empty
 
 **Use case:** you want abbreviations to keep working after `sudo`.
 runex's command-position detection treats `sudo <token>` the same as
-`<token>` at the start of the line.
+`<token>` at the start of the line — so does `|`, `||`, `&&`, `;`.
 
 ```toml
 [[abbr]]
-key    = "apt-up"
-expand = "apt update && apt upgrade"
+key    = "apt-update"
+expand = "apt update"
 ```
 
 **Try it:**
 
 ```
-sudo apt-up<Space>
+sudo apt-update<Space>
 ```
 
-expands to `sudo apt update && apt upgrade `. Same with `|` and `&&`:
-runex recognises `<token>` after `|`, `||`, `&&`, `;`, and `sudo` as
-command position. `runex which <token> --why` will show the rule
-matched.
+expands to `sudo apt update `. `runex which apt-update --why` will
+confirm the rule matched. Same trick works after `|`, `||`, `&&`,
+`;`, and `sudo` itself.
+
+### Pitfall: `sudo <abbr>` does **not** propagate `sudo` across `&&`
+
+`sudo` only applies to the single command it prefixes. If the
+expansion contains `&&` or `;`, every command on the right of those
+separators runs as your normal user. So this trips people up:
+
+```toml
+[[abbr]]
+key    = "apt-up"
+expand = "apt update && apt upgrade"   # WRONG: apt upgrade won't be root
+```
+
+```
+sudo apt-up<Space>
+# expands to: sudo apt update && apt upgrade
+# `apt update` runs as root, `apt upgrade` runs as you and fails.
+```
+
+If the whole pipeline needs root, bake `sudo` into each command and
+type the abbr without `sudo` in front of it (issue #4):
+
+```toml
+[[abbr]]
+key    = "aptup"
+expand = "sudo apt update && sudo apt upgrade"   # OK: both as root
+```
+
+```
+aptup<Space>
+# expands to: sudo apt update && sudo apt upgrade
+```
+
+Rule of thumb:
+
+- **Single command** → put `sudo` on the command line (`sudo abbr`)
+  and leave it out of the `expand` value.
+- **Multi-command (`&&`, `;`, `|`)** → bake `sudo` into every command
+  in `expand` and call the abbr bare.
 
 ---
 
