@@ -7,7 +7,7 @@ Once runex is installed, wire it up to your shell. `runex init` covers the commo
 ## Quickest path: `runex init`
 
 `runex init` creates the config file, writes a static shell-integration
-cache file under `~/.cache/runex/` (Phase G, since 0.1.15), and appends
+cache file under `~/.cache/runex/` (introduced in 0.1.15), and appends
 a one-line `source` to your rc file. There's a confirmation prompt at
 each step:
 
@@ -31,7 +31,7 @@ Pass `-y` to skip all prompts. Target a specific shell with
 skip auto-detection and bypass the rcfile entirely on clink (where
 the integration is a separate lua file).
 
-## What `runex init` writes (Phase G layout, 0.1.15+)
+## What `runex init` writes (static-cache layout, 0.1.15+)
 
 Two files per shell, both regenerated whenever you re-run
 `runex init <shell>` (and silently refreshed on `runex add` /

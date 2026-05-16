@@ -226,8 +226,8 @@ bash/zsh have no trigger-on-paste race in the first place).
 
 **Use case:** if you noticed `Space` causing the prompt to blank
 for ~1 second on WSL Linux before the expansion landed, you were
-hitting per-keystroke `mise` startup overhead. Phase G (0.1.15)
-fixes this at the source.
+hitting per-keystroke `mise` startup overhead. Since 0.1.15 the
+static integration cache fixes this at the source.
 
 **Symptom (0.1.14 and earlier):**
 
@@ -278,9 +278,9 @@ export PATH
 ```
 
 This is purely a `which::which` cache-miss optimisation; it's
-optional and unrelated to the runex install. Phase G's cache
-file pattern means runex itself no longer cares about your PATH
-shape after init.
+optional and unrelated to the runex install. The static cache
+file (since 0.1.15) means runex itself no longer cares about
+your PATH shape after init.
 
 ---
 

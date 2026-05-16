@@ -40,7 +40,7 @@ Replace `/mnt/path/to/runex` with the WSL path to your checkout. The tests are g
 
 #### Linux-specific tests (Container, recommended)
 
-Phase H (0.1.15+) ships a Linux CI container image with bash 4+, zsh, pwsh, nu, xclip, wl-paste, xsel, and the rust toolchain pinned at known versions. CI's `test-linux` job runs inside this image; you can run exactly the same environment locally:
+Starting with 0.1.15, runex ships a Linux CI container image with bash 4+, zsh, pwsh, nu, xclip, wl-paste, xsel, and the rust toolchain pinned at known versions. CI's `test-linux` job runs inside this image; you can run exactly the same environment locally:
 
 ```bash
 # Pull the latest CI image and run the full Linux test suite
@@ -64,9 +64,9 @@ docker run --rm -it -v "$(pwd)":/workspace -w /workspace --user 1001 \
   runex-ci cargo test --locked --workspace
 ```
 
-The container is the same one CI uses, so a green `cargo test --workspace` here is the strongest pre-push signal short of pushing to a feature branch. PTY-based E2E tests (`bash_pty_integration.rs`, `zsh_pty_integration.rs`, `pwsh_pty_integration.rs`, `nu_pty_integration.rs`) and the Phase G shell-integration cache tests (`shell_integration.rs`) all exercise the same toolchain inside the container as in CI.
+The container is the same one CI uses, so a green `cargo test --workspace` here is the strongest pre-push signal short of pushing to a feature branch. PTY-based E2E tests (`bash_pty_integration.rs`, `zsh_pty_integration.rs`, `pwsh_pty_integration.rs`, `nu_pty_integration.rs`) and the shell-integration cache tests (`shell_integration.rs`) all exercise the same toolchain inside the container as in CI.
 
-The image is amd64-only as of Phase H. macOS / Windows hosts can still use it via Docker Desktop's built-in emulation but PTY tests may be slow under emulation; running on a native Linux host (or WSL2) is preferred for development.
+The image is amd64-only at present. macOS / Windows hosts can still use it via Docker Desktop's built-in emulation but PTY tests may be slow under emulation; running on a native Linux host (or WSL2) is preferred for development.
 
 #### Bumping the pinned image digest in `ci.yml`
 

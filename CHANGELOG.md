@@ -59,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   substring / glob expansion; reach for `runex which <token>` when
   you want the full per-shell + when_command_exists picture.
 
-- **Static shell integration cache (Phase G).** `runex init <shell>`
+- **Static shell integration cache (per-keystroke latency fix).** `runex init <shell>`
   for bash/zsh/pwsh/nu now writes a static script to
   `<XDG_CACHE_HOME>/runex/integration.<ext>` (matching clink's
   long-standing pattern) and appends a one-line `source` to the
@@ -106,7 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   characters (RLO, BOM, ZWSP, etc.).** Previously these were
   passed through unchanged because clink's only consumer
   (`--bin`) restricted input to printable ASCII via
-  `validate_bin`. With the Phase G cache layout, the clink
+  `validate_bin`. With the new static-cache layout, the clink
   install path also flows through `lua_quote_string`, so the
   quoter is now hardened in isolation rather than relying on
   upstream validation.
@@ -163,16 +163,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the long-term implementation contract.
 - New ADR
   [`docs/decisions/0002-containerized-linux-ci.md`](docs/decisions/0002-containerized-linux-ci.md)
-  captures Phase H: why Linux CI runs inside a pinned GHCR
-  image, why macOS / Windows stay native, and the digest-pin
-  bump procedure.
+  captures the containerised Linux CI design: why Linux CI runs
+  inside a pinned GHCR image, why macOS / Windows stay native, and
+  the digest-pin bump procedure.
 - `CONTRIBUTING.md` documents the dev-container hand-check
   command and how to roll a new `runex-ci` image digest into
   `.github/workflows/ci.yml`.
 
 ### CI
 
-- **Phase H: containerized Linux CI.** `test-linux` in
+- **Containerised Linux CI.** `test-linux` in
   `.github/workflows/ci.yml` now runs inside the pinned
   `ghcr.io/shortarrow/runex-ci@sha256:...` image instead of
   installing zsh / pwsh / nu / xclip / wl-clipboard / xsel
@@ -199,7 +199,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Users on 0.1.14 with `eval "$(runex export bash)"` in their
 rcfile see no immediate change — that form keeps working. But
-they don't get the Phase G speedup until they re-run
+they don't get the static-cache speedup until they re-run
 `runex init <shell>`. Doctor flags this as
 `integration:<shell>:cache` Outdated and tells them what to do.
 
