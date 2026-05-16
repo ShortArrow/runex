@@ -461,6 +461,38 @@ Cross-check:
 
 ---
 
+## 13. Looking up one abbreviation in a long list
+
+**Use case:** your config has grown past a screenful of rules and
+`runex list` scrolls off the top before you can find the one you
+care about.
+
+```bash
+runex list ll
+# ll<TAB>ls -la
+```
+
+Pass the key as a positional argument to `runex list` and only the
+matching entry is printed. The match is exact and case-sensitive —
+`runex list ll` does not also print `ll.` — so a hit is unambiguous
+and a non-match is silent (`runex list nope` exits 0 with no output,
+which is the same shape a `[[ -z "$(runex list X)" ]]` script needs).
+
+The filter applies to `--json` the same way:
+
+```bash
+runex list ll --json
+# [
+#   { "key": "ll", "expand": "ls -la", "when_command_exists": null }
+# ]
+```
+
+For prefix / substring / fuzzy lookup, use `runex which <token>`
+instead — it reports the same key plus the per-shell expansion and any
+`when_command_exists` gates that were applied.
+
+---
+
 ## Next steps
 
 - Full field reference: [config-reference.md](config-reference.md)

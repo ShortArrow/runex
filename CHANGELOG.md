@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`runex list <FILTER>` exact-key filter (#2).** `runex list` now
+  accepts an optional positional argument that narrows the output to
+  the single rule whose key matches exactly. Works for both the TSV
+  default output and `--json`. A no-match filter is a normal exit-0
+  with empty output (or an empty JSON array), so the command stays
+  scriptable. Match is case-sensitive and literal — no prefix /
+  substring / glob expansion; reach for `runex which <token>` when
+  you want the full per-shell + when_command_exists picture.
+
 - **Static shell integration cache (Phase G).** `runex init <shell>`
   for bash/zsh/pwsh/nu now writes a static script to
   `<XDG_CACHE_HOME>/runex/integration.<ext>` (matching clink's

@@ -335,6 +335,38 @@ doctor 出力を読む:
 
 ---
 
+## 13. 大量の登録の中から 1 件だけ表示する
+
+**ユースケース:** 登録が増えて `runex list` の出力が画面に収まらず、
+目視で目的の key を探すのが大変。
+
+```bash
+runex list ll
+# ll<TAB>ls -la
+```
+
+positional 引数として key を渡すと、その key と **完全一致** する
+1 件だけを表示する。大文字小文字を区別し、prefix 一致では拾わない
+(`runex list ll` は `ll.` を含まない)。
+
+ヒットしないときは exit 0 で空出力なので、`[[ -z "$(runex list X)" ]]`
+のようなシェル判定にも素直に使える。
+
+`--json` を付けても同じく filter 後の配列を返す:
+
+```bash
+runex list ll --json
+# [
+#   { "key": "ll", "expand": "ls -la", "when_command_exists": null }
+# ]
+```
+
+prefix / 部分一致 / fuzzy 検索が欲しい場合は `runex which <token>`
+の方が用途に近い (per-shell 解決結果や `when_command_exists` の
+判定理由まで一緒に出る)。
+
+---
+
 ## 次に読む
 
 - 全フィールドリファレンス: [config-reference.md](config-reference.md) (英語のみ — `[keybind]` / `[[abbr]]` の各フィールド、バリデーション、`runex doctor` 各行の意味)
