@@ -8,6 +8,12 @@ const MAX_KEY_BYTES: usize = 1_024;
 const MAX_EXPAND_BYTES: usize = 4_096;
 const MAX_CMD_BYTES: usize = 255;
 const MAX_CMD_LIST_LEN: usize = 64;
+/// Upper bound on the `number = "<unit>"` field. With
+/// `MAX_NUMERIC_REPEAT = 128` in `domain::expand`, a 32-byte unit
+/// reaches `MAX_EXPAND_BYTES = 4096` exactly. Above this a single
+/// `{number}` token could produce an oversized expansion.
+const MAX_NUMBER_UNIT_BYTES: usize = 32;
+const NUMBER_PLACEHOLDER: &str = "{number}";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigError {
@@ -73,6 +79,26 @@ pub(crate) enum ConfigError {
     PasteInterceptUnsupportedShell(&'static str),
     #[error("[keybind.paste_intercept.{0}] = \"{1}\" is not a valid paste-intercept binding; only ctrl-v is supported")]
     PasteInterceptInvalidKey(&'static str, &'static str),
+
+    // {number} placeholder (issue #1)
+    #[error("abbr rule #{0}: key contains '{{' but no recognised placeholder (only '{{number}}' is supported)")]
+    KeyHasUnknownPlaceholder(usize),
+    #[error("abbr rule #{0}: key contains more than one '{{number}}' placeholder (only one is allowed)")]
+    KeyHasMultipleNumberPlaceholders(usize),
+    #[error("abbr rule #{0}: key contains '{{number}}' but no `number = \"<unit>\"` field is defined")]
+    KeyHasNumberWithoutUnit(usize),
+    #[error("abbr rule #{0}: `number` field is set but the key has no '{{number}}' placeholder")]
+    NumberFieldWithoutKeyPlaceholder(usize),
+    #[error("abbr rule #{0}: `number` unit is empty")]
+    NumberEmpty(usize),
+    #[error("abbr rule #{0}: `number` unit contains a NUL byte")]
+    NumberContainsNul(usize),
+    #[error("abbr rule #{0}: `number` unit contains an ASCII control character")]
+    NumberContainsControlChar(usize),
+    #[error("abbr rule #{0}: `number` unit contains a Unicode visual-deception character")]
+    NumberContainsDeceptiveUnicode(usize),
+    #[error("abbr rule #{0}: `number` unit exceeds maximum length of {MAX_NUMBER_UNIT_BYTES} bytes")]
+    NumberUnitTooLong(usize),
 }
 
 /// Reason a validation check failed. Shared across the walker (for doctor
@@ -110,6 +136,17 @@ pub(crate) enum ValidationReason {
     CmdContainsDeceptiveUnicode,
     CmdContainsPathSeparator,
     CmdContainsMetacharacter,
+
+    // {number} placeholder (issue #1, rule-scope)
+    KeyHasUnknownPlaceholder,
+    KeyHasMultipleNumberPlaceholders,
+    KeyHasNumberWithoutUnit,
+    NumberFieldWithoutKeyPlaceholder,
+    NumberEmpty,
+    NumberContainsNul,
+    NumberContainsControlChar,
+    NumberContainsDeceptiveUnicode,
+    NumberUnitTooLong,
 }
 
 /// A single validation failure.
@@ -164,6 +201,15 @@ impl ValidationIssue {
             ValidationReason::CmdContainsDeceptiveUnicode => "when_command_exists entry contains a Unicode visual-deception character",
             ValidationReason::CmdContainsPathSeparator => "when_command_exists entry contains a path separator",
             ValidationReason::CmdContainsMetacharacter => "when_command_exists entry contains a shell metacharacter or glob pattern",
+            ValidationReason::KeyHasUnknownPlaceholder => "key contains an unrecognised placeholder (only '{number}' is supported)",
+            ValidationReason::KeyHasMultipleNumberPlaceholders => "key contains more than one '{number}' placeholder",
+            ValidationReason::KeyHasNumberWithoutUnit => "key contains '{number}' but no `number` field is defined",
+            ValidationReason::NumberFieldWithoutKeyPlaceholder => "`number` field is set but the key has no '{number}' placeholder",
+            ValidationReason::NumberEmpty => "`number` unit is empty",
+            ValidationReason::NumberContainsNul => "`number` unit contains a NUL byte",
+            ValidationReason::NumberContainsControlChar => "`number` unit contains an ASCII control character",
+            ValidationReason::NumberContainsDeceptiveUnicode => "`number` unit contains a Unicode visual-deception character",
+            ValidationReason::NumberUnitTooLong => "`number` unit exceeds the maximum length",
         }
     }
 
@@ -197,6 +243,15 @@ impl ValidationIssue {
             ValidationReason::CmdContainsDeceptiveUnicode => ConfigError::CmdContainsDeceptiveUnicode(n),
             ValidationReason::CmdContainsPathSeparator => ConfigError::CmdContainsPathSeparator(n),
             ValidationReason::CmdContainsMetacharacter => ConfigError::CmdContainsMetacharacter(n),
+            ValidationReason::KeyHasUnknownPlaceholder => ConfigError::KeyHasUnknownPlaceholder(n),
+            ValidationReason::KeyHasMultipleNumberPlaceholders => ConfigError::KeyHasMultipleNumberPlaceholders(n),
+            ValidationReason::KeyHasNumberWithoutUnit => ConfigError::KeyHasNumberWithoutUnit(n),
+            ValidationReason::NumberFieldWithoutKeyPlaceholder => ConfigError::NumberFieldWithoutKeyPlaceholder(n),
+            ValidationReason::NumberEmpty => ConfigError::NumberEmpty(n),
+            ValidationReason::NumberContainsNul => ConfigError::NumberContainsNul(n),
+            ValidationReason::NumberContainsControlChar => ConfigError::NumberContainsControlChar(n),
+            ValidationReason::NumberContainsDeceptiveUnicode => ConfigError::NumberContainsDeceptiveUnicode(n),
+            ValidationReason::NumberUnitTooLong => ConfigError::NumberUnitTooLong(n),
         }
     }
 }
@@ -446,7 +501,102 @@ fn visit_validation_issues(
                 return;
             }
         }
+        // (b-4) {number} placeholder consistency (issue #1)
+        if walk_number_placeholder_issues(abbr, rule_index, &mut f).is_break() {
+            return;
+        }
     }
+}
+
+/// Validate the cross-field invariants of the `{number}` placeholder
+/// feature (issue #1). Emits a sequence of issues in field-name order:
+///
+/// 1. key — unknown `{...}` shape, or more than one `{number}`
+/// 2. key/number — `{number}` in key without a `number` field
+/// 3. number/key — `number` field without a `{number}` in key
+/// 4. number — empty / NUL / control / deceptive / oversize unit
+fn walk_number_placeholder_issues(
+    abbr: &crate::domain::model::Abbr,
+    rule_index: usize,
+    mut f: impl FnMut(ValidationIssue) -> std::ops::ControlFlow<()>,
+) -> std::ops::ControlFlow<()> {
+    let key = &abbr.key;
+    let has_brace = key.contains('{');
+    let number_count = if has_brace { key.matches(NUMBER_PLACEHOLDER).count() } else { 0 };
+
+    // 1. Unknown placeholder syntax: braces appear but `{number}` is not the
+    //    only token present. The cheap check: strip every `{number}` and the
+    //    rest must contain no remaining braces.
+    if has_brace {
+        let stripped = key.replace(NUMBER_PLACEHOLDER, "");
+        if stripped.contains('{') {
+            f(ValidationIssue::Rule {
+                rule_index,
+                field_path: "key".into(),
+                reason: ValidationReason::KeyHasUnknownPlaceholder,
+            })?;
+        }
+        if number_count > 1 {
+            f(ValidationIssue::Rule {
+                rule_index,
+                field_path: "key".into(),
+                reason: ValidationReason::KeyHasMultipleNumberPlaceholders,
+            })?;
+        }
+    }
+
+    // 2. {number} in key but no `number` field defined.
+    if number_count >= 1 && abbr.number.is_none() {
+        f(ValidationIssue::Rule {
+            rule_index,
+            field_path: "key".into(),
+            reason: ValidationReason::KeyHasNumberWithoutUnit,
+        })?;
+    }
+
+    // 3. `number` field is set but key has no {number} placeholder.
+    if abbr.number.is_some() && number_count == 0 {
+        f(ValidationIssue::Rule {
+            rule_index,
+            field_path: "number".into(),
+            reason: ValidationReason::NumberFieldWithoutKeyPlaceholder,
+        })?;
+    }
+
+    // 4. Content checks on the unit itself (when present).
+    if let Some(unit) = abbr.number.as_deref() {
+        if let Some(reason) = check_number_unit(unit) {
+            f(ValidationIssue::Rule {
+                rule_index,
+                field_path: "number".into(),
+                reason,
+            })?;
+        }
+    }
+
+    std::ops::ControlFlow::Continue(())
+}
+
+/// Per-content validation of the `number` repetition unit. Mirrors the
+/// existing `check_expand_value` checks but with the dedicated length
+/// cap `MAX_NUMBER_UNIT_BYTES`.
+fn check_number_unit(unit: &str) -> Option<ValidationReason> {
+    if unit.is_empty() {
+        return Some(ValidationReason::NumberEmpty);
+    }
+    if unit.len() > MAX_NUMBER_UNIT_BYTES {
+        return Some(ValidationReason::NumberUnitTooLong);
+    }
+    if unit.contains('\0') {
+        return Some(ValidationReason::NumberContainsNul);
+    }
+    if unit.chars().any(|c| c.is_ascii_control()) {
+        return Some(ValidationReason::NumberContainsControlChar);
+    }
+    if unit.chars().any(is_deceptive_unicode) {
+        return Some(ValidationReason::NumberContainsDeceptiveUnicode);
+    }
+    None
 }
 
 /// Collect every validation issue in the config (used by `doctor`).
@@ -1651,4 +1801,94 @@ expand = "git commit -m"
             }
         }
     } // mod validation_walker
+
+    mod number_placeholder {
+        //! Validation tests for the `{number}` placeholder schema (issue #1).
+        use super::*;
+
+        #[test]
+        fn rejects_key_with_unknown_placeholder() {
+            let err = parse_config(
+                "version = 1\n[[abbr]]\nkey = \"up{foo}\"\nexpand = \"cd .\"\n",
+            )
+            .unwrap_err();
+            assert!(matches!(err, ConfigError::KeyHasUnknownPlaceholder(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_key_with_multiple_number_placeholders() {
+            let err = parse_config(
+                "version = 1\n[[abbr]]\nkey = \"x{number}y{number}\"\nexpand = \"{number}\"\nnumber = \"a\"\n",
+            )
+            .unwrap_err();
+            assert!(matches!(err, ConfigError::KeyHasMultipleNumberPlaceholders(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_key_with_number_but_no_unit_field() {
+            let err = parse_config(
+                "version = 1\n[[abbr]]\nkey = \"up{number}\"\nexpand = \"cd {number}\"\n",
+            )
+            .unwrap_err();
+            assert!(matches!(err, ConfigError::KeyHasNumberWithoutUnit(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_number_field_without_key_placeholder() {
+            let err = parse_config(
+                "version = 1\n[[abbr]]\nkey = \"up\"\nexpand = \"cd ..\"\nnumber = \"../\"\n",
+            )
+            .unwrap_err();
+            assert!(matches!(err, ConfigError::NumberFieldWithoutKeyPlaceholder(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_empty_number_unit() {
+            let err = parse_config(
+                "version = 1\n[[abbr]]\nkey = \"up{number}\"\nexpand = \"{number}\"\nnumber = \"\"\n",
+            )
+            .unwrap_err();
+            assert!(matches!(err, ConfigError::NumberEmpty(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_oversize_number_unit() {
+            // 33 bytes > MAX_NUMBER_UNIT_BYTES (32)
+            let oversize = "x".repeat(33);
+            let toml = format!(
+                "version = 1\n[[abbr]]\nkey = \"up{{number}}\"\nexpand = \"{{number}}\"\nnumber = \"{oversize}\"\n",
+            );
+            let err = parse_config(&toml).unwrap_err();
+            assert!(matches!(err, ConfigError::NumberUnitTooLong(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_control_char_in_number_unit() {
+            let err = parse_config(
+                "version = 1\n[[abbr]]\nkey = \"up{number}\"\nexpand = \"{number}\"\nnumber = \"a\\u0007b\"\n",
+            )
+            .unwrap_err();
+            assert!(matches!(err, ConfigError::NumberContainsControlChar(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn accepts_well_formed_number_rule() {
+            let cfg = parse_config(
+                "version = 1\n[[abbr]]\nkey = \"up{number}\"\nexpand = \"cd {number}\"\nnumber = \"../\"\n",
+            )
+            .expect("well-formed config must parse");
+            assert_eq!(cfg.abbr.len(), 1);
+            assert_eq!(cfg.abbr[0].number.as_deref(), Some("../"));
+        }
+
+        #[test]
+        fn accepts_exact_rule_without_number_field() {
+            // Existing configs (no `number` field anywhere) must still parse.
+            let cfg = parse_config(
+                "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+            )
+            .expect("config without number must parse");
+            assert!(cfg.abbr[0].number.is_none());
+        }
+    }
 }

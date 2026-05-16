@@ -270,7 +270,7 @@ fn suggest_similar(name: &str, candidates: &[&str]) -> Option<String> {
 const KNOWN_TOP_LEVEL_KEYS: &[&str] = &["version", "keybind", "precache", "abbr"];
 
 /// Known keys inside an `[[abbr]]` table.
-const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists"];
+const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists", "number"];
 
 /// Known keys inside `[keybind]`.
 const KNOWN_KEYBIND_KEYS: &[&str] = &["trigger", "self_insert"];
