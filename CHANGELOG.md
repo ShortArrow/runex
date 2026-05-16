@@ -32,6 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`{number}` placeholder for numeric repetition (#1).** New named
+  placeholder lets a single rule capture trailing digits in the
+  token and repeat a unit string that many times in the expansion:
+
+  ```toml
+  [[abbr]]
+  key    = "up{number}"
+  expand = "cd {number}"
+  number = "../"
+  ```
+
+  Typing `up3<Space>` then expands to `cd ../../../`. Exact rules
+  still win when both could match the same token (e.g. `up2` exact
+  beats `up{number}`), so adding a pattern rule never weakens the
+  existing exact ones. Bounded by `MAX_NUMERIC_REPEAT = 128` and a
+  32-byte unit cap, so a dynamic expansion can never exceed what a
+  hand-written 4096-byte `expand` could already produce.
+
 - **`runex list <FILTER>` exact-key filter (#2).** `runex list` now
   accepts an optional positional argument that narrows the output to
   the single rule whose key matches exactly. Works for both the TSV

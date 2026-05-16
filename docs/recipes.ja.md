@@ -406,6 +406,66 @@ prefix / 部分一致 / fuzzy 検索が欲しい場合は `runex which <token>`
 
 ---
 
+## 14. `{number}` で数値繰り返し展開
+
+**ユースケース:** `up`, `up2`, `up3`, …, `up10` を全部別ルールで書く
+のが面倒。実態は `../` を回数ぶん繰り返したいだけ。
+
+```toml
+[[abbr]]
+key    = "up{number}"
+expand = "cd {number}"
+number = "../"
+```
+
+```
+up3<Space>     # → cd ../../../
+up10<Space>    # → cd ../../../../../../../../../../
+```
+
+`{number}` placeholder は `key` 側 (末尾の数字を捕捉) と `expand`
+側 (`number * <捕捉回数>` に置換) の両方で意味を持つ。
+
+### exact ルールとの共存
+
+exact key ルールは pattern ルールより常に優先される。これで pattern
+の上に特例を重ねられる:
+
+```toml
+[[abbr]]
+key    = "up{number}"
+expand = "cd {number}"
+number = "../"
+
+[[abbr]]
+key    = "up"          # 素の `up` は pattern に hit しない (数字なし)
+expand = "cd .."
+
+[[abbr]]
+key    = "up3"         # `up3` だけ特別扱いしたい
+expand = "cd ~/notes"
+```
+
+```
+up<Space>      # → cd ..
+up2<Space>     # → cd ../../
+up3<Space>     # → cd ~/notes   (exact ルール優先)
+up4<Space>     # → cd ../../../../
+```
+
+### 制限と注意点
+
+- 認識される placeholder は `{number}` のみ。`{foo}` など他の
+  `{...}` は parse 時点で reject。
+- 捕捉できる数値は 1〜128。`up0` / `up129` は pass-through。
+- `number` unit は 32 bytes 以内。これで展開結果が既存の `expand`
+  上限 4096 bytes を超えないことが保証される。
+- ASCII 半角数字のみ。`up3<Space>` は OK、`up３` (全角) は NG。
+- cursor placeholder `{}` と同居できる。named 置換が先に走り、
+  その後 `{}` が除去されてカーソルがその位置に置かれる。
+
+---
+
 ## 次に読む
 
 - 全フィールドリファレンス: [config-reference.md](config-reference.md) (英語のみ — `[keybind]` / `[[abbr]]` の各フィールド、バリデーション、`runex doctor` 各行の意味)

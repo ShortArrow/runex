@@ -531,6 +531,70 @@ instead — it reports the same key plus the per-shell expansion and any
 
 ---
 
+## 14. Numeric repetition with `{number}`
+
+**Use case:** writing `up`, `up2`, `up3`, … `up10` as separate rules
+when they all just want to repeat the same unit (`../`) gets old fast.
+
+```toml
+[[abbr]]
+key    = "up{number}"
+expand = "cd {number}"
+number = "../"
+```
+
+```
+up3<Space>     # → cd ../../../
+up10<Space>    # → cd ../../../../../../../../../../
+```
+
+The `{number}` placeholder appears in both the `key` (where it
+captures the trailing digits) and the `expand` (where it gets
+replaced by `number * <captured count>`).
+
+### Coexisting with exact rules
+
+Exact-key rules always win when they could also match the token.
+That means you can layer special cases on top of a pattern:
+
+```toml
+[[abbr]]
+key    = "up{number}"
+expand = "cd {number}"
+number = "../"
+
+[[abbr]]
+key    = "up"          # bare `up` doesn't match the pattern (no digits)
+expand = "cd .."
+
+[[abbr]]
+key    = "up3"         # special case wins for `up3` even when the
+expand = "cd ~/notes"  # pattern would also handle it
+```
+
+```
+up<Space>      # → cd ..
+up2<Space>     # → cd ../../
+up3<Space>     # → cd ~/notes   (exact rule wins)
+up4<Space>     # → cd ../../../../
+```
+
+### Limits and gotchas
+
+- `{number}` is the only recognised placeholder today; `{foo}` or
+  any other `{...}` shape is rejected at config-parse time.
+- The captured number must be 1–128. `up0` and `up129` pass through
+  unchanged (no expansion).
+- The `number` unit is capped at 32 bytes so the rendered result
+  cannot exceed the existing 4096-byte limit on `expand`.
+- Only ASCII decimal digits count — `up3<Space>` works, `up３`
+  (full-width) does not.
+- The cursor placeholder `{}` works in the same template; named
+  substitution happens first, then `{}` is removed and the cursor
+  lands there.
+
+---
+
 ## Next steps
 
 - Full field reference: [config-reference.md](config-reference.md)
