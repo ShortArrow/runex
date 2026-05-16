@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Trigger space leaks into cursor placeholders (#3).** When an
+  abbreviation's `expand` contained `{}` (the cursor placeholder),
+  the trigger space that fired the expansion was also inserted at
+  the placeholder position. `gca<Space>` with
+  `expand = "git commit -am '{}'"` yielded
+  `git commit -am ' '` with the cursor after the stray space,
+  instead of `git commit -am ''` with the cursor between the
+  quotes. The trigger space is now suppressed whenever the
+  expansion declares a placeholder, so the rule author's chosen
+  cursor position is preserved.
+
 ### Added
 
 - **Static shell integration cache (Phase G).** `runex init <shell>`
