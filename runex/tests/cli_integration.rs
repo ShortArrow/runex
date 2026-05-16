@@ -191,6 +191,51 @@ fn list_json_is_valid_json_array() {
     assert_eq!(arr[0]["expand"], "git commit -m");
 }
 
+#[test]
+fn list_filter_shows_only_matching_key() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\nkey = \"ll\"\nexpand = \"ls -la\"\n\
+         [[abbr]]\nkey = \"ll.\"\nexpand = \"ls -laF\"\n\
+         [[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+    let (stdout, _, ok) = run(&["list", "ll"], Some(cfg.path()), None);
+    assert!(ok);
+    assert!(stdout.contains("ll\t"), "stdout: {stdout}");
+    // exact-match: `ll.` must not slip through even though it shares a prefix.
+    assert!(!stdout.contains("ll.\t"), "stdout: {stdout}");
+    assert!(!stdout.contains("gcm\t"), "stdout: {stdout}");
+}
+
+#[test]
+fn list_filter_no_match_is_empty_success() {
+    let cfg = write_config(
+        "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+    let (stdout, _, ok) = run(&["list", "nope"], Some(cfg.path()), None);
+    assert!(ok, "no-match must still exit 0 — list is an enumeration command");
+    assert!(
+        stdout.trim().is_empty(),
+        "no-match must produce empty stdout: {stdout:?}",
+    );
+}
+
+#[test]
+fn list_filter_with_json_emits_filtered_array() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\nkey = \"ll\"\nexpand = \"ls -la\"\n\
+         [[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+    let (stdout, _, ok) = run(&["list", "ll", "--json"], Some(cfg.path()), None);
+    assert!(ok);
+    let arr: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("list --json must be valid JSON: {e}\nstdout: {stdout}"));
+    let items = arr.as_array().expect("expected JSON array");
+    assert_eq!(items.len(), 1, "should keep only the ll entry: {stdout}");
+    assert_eq!(items[0]["key"], "ll");
+}
+
 // ─── which ───────────────────────────────────────────────────────────────────
 
 #[test]

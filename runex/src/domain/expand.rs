@@ -224,10 +224,18 @@ where
 /// When `shell` is `Some`, returns only rules that have an entry for that shell,
 /// using the resolved expansion string.
 /// When `shell` is `None`, uses the `All` value or the `default` field.
-pub(crate) fn list<'a>(config: &'a Config, shell: Option<Shell>) -> Vec<(&'a str, String)> {
+///
+/// When `filter` is `Some(key)`, only rules whose key exactly matches are
+/// returned — case-sensitive, no prefix / substring expansion (issue #2).
+pub(crate) fn list<'a>(
+    config: &'a Config,
+    shell: Option<Shell>,
+    filter: Option<&str>,
+) -> Vec<(&'a str, String)> {
     config
         .abbr
         .iter()
+        .filter(|a| filter.is_none_or(|f| a.key == f))
         .filter_map(|a| {
             let exp = match shell {
                 Some(sh) => a.expand.for_shell(sh)?.to_string(),
@@ -401,11 +409,29 @@ mod tests {
     #[test]
     fn list_returns_all_pairs() {
         let c = cfg(vec![abbr("gcm", "git commit -m"), abbr("gp", "git push")]);
-        let pairs = list(&c, None);
+        let pairs = list(&c, None, None);
         assert_eq!(
             pairs,
             vec![("gcm", "git commit -m".to_string()), ("gp", "git push".to_string())]
         );
+    }
+
+    #[test]
+    fn list_with_exact_filter_keeps_only_match() {
+        let c = cfg(vec![
+            abbr("ll", "ls -la"),
+            abbr("ll.", "ls -laF"),
+            abbr("gcm", "git commit -m"),
+        ]);
+        let pairs = list(&c, None, Some("ll"));
+        assert_eq!(pairs, vec![("ll", "ls -la".to_string())]);
+    }
+
+    #[test]
+    fn list_filter_no_match_returns_empty() {
+        let c = cfg(vec![abbr("gcm", "git commit -m")]);
+        let pairs = list(&c, None, Some("nope"));
+        assert!(pairs.is_empty());
     }
 
     // ── per-shell expand tests ──────────────────────────────────────────────
@@ -493,11 +519,11 @@ mod tests {
                 },
             ),
         ]);
-        let bash_list = list(&c, Some(Shell::Bash));
+        let bash_list = list(&c, Some(Shell::Bash), None);
         // "7z" has default so shows; "pwsh-only" has no bash/default → filtered out
         assert_eq!(bash_list, vec![("7z", "7zip".to_string())]);
 
-        let pwsh_list = list(&c, Some(Shell::Pwsh));
+        let pwsh_list = list(&c, Some(Shell::Pwsh), None);
         assert_eq!(
             pwsh_list,
             vec![

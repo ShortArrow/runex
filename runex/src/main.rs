@@ -144,8 +144,11 @@ enum Commands {
         #[arg(long, value_name = "SHELL")]
         shell: Option<String>,
     },
-    /// List all abbreviations
+    /// List all abbreviations (optionally filtered to one exact key)
     List {
+        /// If given, show only the rule whose key matches exactly
+        #[arg(value_name = "FILTER")]
+        filter: Option<String>,
         /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
         #[arg(long, value_name = "SHELL")]
         shell: Option<String>,
@@ -514,10 +517,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let outcome: CmdOutcome = match cli.command {
         Commands::Version => cmd::version::handle(cli.json)?,
-        Commands::List { shell: shell_str } => {
+        Commands::List { filter, shell: shell_str } => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let shell = resolve_shell(shell_str.as_deref())?;
-            cmd::list::handle(&config, shell, cli.json)?
+            cmd::list::handle(&config, shell, cli.json, filter.as_deref())?
         }
         Commands::Which { token, why, shell: shell_str } => {
             let ctx = AppContext::build(

@@ -68,6 +68,13 @@ where
 /// `(key, expansion-for-this-shell)` pairs from the loaded config.
 /// `runex list` prints the result; the use-case layer keeps the
 /// borrow signature so callers don't allocate strings unnecessarily.
-pub(crate) fn list_pairs<'a>(config: &'a Config, shell: Option<Shell>) -> Vec<(&'a str, String)> {
-    domain_expand::list(config, shell)
+///
+/// `filter` is an optional exact-key filter (issue #2): when `Some(key)`,
+/// only the rule with that exact key is returned.
+pub(crate) fn list_pairs<'a>(
+    config: &'a Config,
+    shell: Option<Shell>,
+    filter: Option<&str>,
+) -> Vec<(&'a str, String)> {
+    domain_expand::list(config, shell, filter)
 }
