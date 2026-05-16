@@ -105,6 +105,58 @@ fn expand_condition_passes_with_path_prepend() {
     assert_eq!(stdout, "__runex_fake_lsd__");
 }
 
+#[test]
+fn expand_number_placeholder_repeats_unit() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\n\
+         key = \"up{number}\"\n\
+         expand = \"cd {number}\"\n\
+         number = \"../\"\n",
+    );
+    let (stdout, _, ok) = run(&["expand", "--token", "up3"], Some(cfg.path()), None);
+    assert!(ok);
+    assert_eq!(stdout, "cd ../../../");
+}
+
+#[test]
+fn expand_exact_rule_wins_over_number_pattern() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\n\
+         key = \"up{number}\"\n\
+         expand = \"cd {number}\"\n\
+         number = \"../\"\n\
+         [[abbr]]\n\
+         key = \"up2\"\n\
+         expand = \"cd ../EXACT\"\n",
+    );
+    // Exact rule wins for `up2` even though it appears later in the config.
+    let (stdout, _, _) = run(&["expand", "--token", "up2"], Some(cfg.path()), None);
+    assert_eq!(stdout, "cd ../EXACT");
+    // Pattern handles `up3`.
+    let (stdout, _, _) = run(&["expand", "--token", "up3"], Some(cfg.path()), None);
+    assert_eq!(stdout, "cd ../../../");
+}
+
+#[test]
+fn expand_number_pattern_passes_through_zero_and_over_max() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\n\
+         key = \"up{number}\"\n\
+         expand = \"cd {number}\"\n\
+         number = \"../\"\n",
+    );
+    // Zero is rejected (no fallback to exact `up` either).
+    let (stdout, _, ok) = run(&["expand", "--token", "up0"], Some(cfg.path()), None);
+    assert!(ok);
+    assert_eq!(stdout, "up0");
+    // 129 > MAX_NUMERIC_REPEAT (128) → pass-through.
+    let (stdout, _, _) = run(&["expand", "--token", "up129"], Some(cfg.path()), None);
+    assert_eq!(stdout, "up129");
+}
+
 // ─── expand --dry-run ─────────────────────────────────────────────────────────
 
 #[test]

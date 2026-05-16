@@ -629,6 +629,7 @@ mod tests {
             when_command_exists: Some(crate::domain::model::PerShellCmds::All(
                 cmds.into_iter().map(String::from).collect(),
             )),
+            number: None,
         }
     }
 
@@ -637,6 +638,7 @@ mod tests {
             key: key.into(),
             expand: crate::domain::model::PerShellString::All(exp.into()),
             when_command_exists: None,
+            number: None,
         }
     }
 
@@ -880,6 +882,7 @@ mod tests {
             key: "ls".into(),
             expand: crate::domain::model::PerShellString::All("lsd".into()),
             when_command_exists: Some(crate::domain::model::PerShellCmds::All(vec!["cmd\x07inject".into()])),
+            number: None,
         }]);
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.contains("command:"));
@@ -914,6 +917,7 @@ mod tests {
             key: "ls".into(),
             expand: crate::domain::model::PerShellString::All("lsd".into()),
             when_command_exists: Some(crate::domain::model::PerShellCmds::All(vec!["cmd\x1b[2Jevil".into()])),
+            number: None,
         }]);
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.starts_with("command:"));

@@ -118,7 +118,10 @@ fn token_start_of(left: &str) -> Option<usize> {
 }
 
 fn is_known_token(config: &Config, token: &str) -> bool {
-    config.abbr.iter().any(|abbr| abbr.key == token)
+    config
+        .abbr
+        .iter()
+        .any(|abbr| crate::domain::expand::match_abbr_key(&abbr.key, token).is_some())
 }
 
 /// Render a `HookAction` into a shell-specific eval-able string. The shell

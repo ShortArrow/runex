@@ -173,6 +173,12 @@ pub(crate) struct Abbr {
     pub key: String,
     pub expand: PerShellString,
     pub when_command_exists: Option<PerShellCmds>,
+    /// Repetition unit for the `{number}` placeholder (issue #1). When
+    /// `key` contains `{number}`, the captured digits multiply this
+    /// unit into the rendered `expand`. Validation rejects `Some`
+    /// without a `{number}` in the key (and vice versa).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<String>,
 }
 
 /// Precache configuration.
@@ -295,6 +301,7 @@ mod tests {
             key: "gcm".into(),
             expand: PerShellString::All("git commit -m".into()),
             when_command_exists: None,
+            number: None,
         };
         assert_eq!(a.key, "gcm");
         assert_eq!(a.expand, PerShellString::All("git commit -m".into()));
@@ -307,6 +314,7 @@ mod tests {
             key: "ls".into(),
             expand: PerShellString::All("lsd".into()),
             when_command_exists: Some(PerShellCmds::All(vec!["lsd".into()])),
+            number: None,
         };
         match a.when_command_exists.unwrap() {
             PerShellCmds::All(v) => assert_eq!(v, vec!["lsd".to_string()]),

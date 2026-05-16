@@ -232,6 +232,7 @@ mod tests {
             when_command_exists: Some(PerShellCmds::All(
                 cmds.into_iter().map(String::from).collect(),
             )),
+            number: None,
         }
     }
 
