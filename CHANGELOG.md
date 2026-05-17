@@ -197,11 +197,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Migration
 
-Users on 0.1.14 with `eval "$(runex export bash)"` in their
-rcfile see no immediate change — that form keeps working. But
-they don't get the static-cache speedup until they re-run
-`runex init <shell>`. Doctor flags this as
-`integration:<shell>:cache` Outdated and tells them what to do.
+Users on 0.1.14 with `eval "$(runex export bash)"` (or the
+shell-equivalent `Invoke-Expression (& 'runex' export pwsh | ...)`)
+in their rcfile see no immediate functional change — that form
+keeps working. But they don't get the static-cache speedup until
+they (a) delete the legacy line and (b) re-run
+`runex init <shell>`.
+
+`runex doctor` now detects this case explicitly. After upgrading
+to 0.1.15 the `integration:<shell>` row reports `Outdated` with
+the rcfile path, the cache path, and a remediation hint, e.g.:
+
+```
+[WARN] integration:bash: marker found in ~/.bashrc but rcfile uses
+       pre-0.1.15 form; static cache at ~/.cache/runex/integration.bash
+       is unused — delete the old line and re-run `runex init bash`
+```
+
+If both the new cache-source line and the legacy `export <shell>`
+line are present (rare — usually because `init` was re-run before
+the legacy line was removed), the same row reports `Outdated` with
+a slightly different message asking to delete the duplicate.
+
+Doctor leaves the rcfile untouched. The fix is one line in the
+user's rcfile; runex deliberately does not auto-edit shell startup
+files.
 
 ## [0.1.14] - 2026-05-06
 

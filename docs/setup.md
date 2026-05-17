@@ -206,10 +206,17 @@ Two of these rows are worth highlighting:
   registry contributed beyond the process PATH.
 - **`integration:<shell>`**: tells you whether each shell has been
   hooked up. bash/zsh/pwsh/nu look for the `# runex-init` marker in
-  the rcfile. clink is special — the lua file is a static copy that
-  doesn't auto-refresh, so the check compares the on-disk
-  `runex.lua` against what `runex export clink` would emit today and
-  warns on drift.
+  the rcfile *and* classify the marker block — if it still uses the
+  pre-0.1.15 `eval "$(runex export <shell>)"` form (or the pwsh
+  `Invoke-Expression (& 'runex' export pwsh | ...)` shape) the
+  row goes `WARN` with a remediation hint, because the static
+  integration cache is then orphaned and the per-keystroke latency
+  improvement is lost. The fix is one line: delete the old line
+  from the rcfile and re-run `runex init <shell>`. doctor never
+  edits the rcfile itself. clink is special — the lua file is a
+  static copy that doesn't auto-refresh, so the check compares the
+  on-disk `runex.lua` against what `runex export clink` would emit
+  today and warns on drift.
 
 ## Troubleshooting
 
