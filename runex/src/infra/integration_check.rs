@@ -2,21 +2,31 @@
 //!
 //! ## Why this module exists
 //!
-//! Most shells (bash/zsh/pwsh/nu) source `runex export <shell>` at every
-//! shell start, so they always see the latest integration template — by
-//! construction, they cannot drift.
+//! Three failure modes can hide between the user's rcfile, the cache
+//! file written by `runex init <shell>`, and the clink lua install.
+//! `runex doctor` calls this module once per shell to surface them:
 //!
-//! **clink** is the exception: `runex init clink` *copies* the export
-//! output into a standalone lua file under clink's scripts directory.
-//! The user has to re-run `runex init clink` to refresh it. When the
-//! integration template changes (and it has — the hook migration
-//! rewrote it from the ground up), users with a stale `runex.lua`
-//! silently miss out on the new behavior.
+//! 1. **clink full-content drift.** `runex init clink` *copies* the
+//!    export output into a standalone lua file. When the template
+//!    changes, users with a stale `runex.lua` silently miss out on the
+//!    new behaviour. [`check_clink_lua_freshness`] reads the file and
+//!    compares byte-for-byte against `runex export clink`.
+//! 2. **Pre-0.1.15 rcfile drift.** Before 0.1.15, `runex init bash`
+//!    appended `eval "$(runex export bash)"` to the rcfile, paying
+//!    a `runex` PATH lookup + spawn at every shell start. 0.1.15+
+//!    writes a static cache file and the rcfile only sources it. A
+//!    user who upgrades and re-runs `runex init <shell>` keeps the
+//!    legacy line — the cache file is written but never sourced.
+//!    [`check_rcfile_marker`] flags this as [`IntegrationCheck::Outdated`].
+//! 3. **Cache file freshness.** [`check_cache_freshness`] verifies
+//!    that the cache file's header points at the current `runex`
+//!    binary and the current schema version (`runex-integration-version: 1`).
 //!
-//! For bash/zsh/pwsh/nu we instead check that the rcfile *contains* the
-//! init marker — i.e. that integration was ever set up at all. That
-//! catches "user never ran `runex init`" but not drift, because drift
-//! can't happen.
+//! Marker detection (`# runex-init`) on its own only tells us "integration
+//! was ever set up" — it does not tell us *what* was set up. The two-axis
+//! classifier `classify_rcfile_content` lifts that constraint by checking
+//! both for the current expected source line and for any pre-0.1.15
+//! `runex export <shell>` invocation that may still be present.
 
 use std::path::{Path, PathBuf};
 
@@ -196,22 +206,64 @@ pub(crate) fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) 
             };
         }
     };
-    if content.contains(RUNEX_INIT_MARKER) {
-        IntegrationCheck::Ok {
-            name,
-            detail: format!(
-                "marker found in {}",
-                sanitize_for_display(&path.display().to_string())
-            ),
-        }
-    } else {
-        IntegrationCheck::Missing {
+    if !content.contains(RUNEX_INIT_MARKER) {
+        return IntegrationCheck::Missing {
             name,
             detail: format!(
                 "marker missing in {} — run `runex init {}`",
                 sanitize_for_display(&path.display().to_string()),
                 shell_short_name(shell)
             ),
+        };
+    }
+
+    // Marker present. Classify the rcfile's runex block against the
+    // current cache-source line. clink has no cache file and never
+    // goes through this path in production, but we keep the fall-back
+    // safe just in case.
+    let cache_path = match crate::infra::integration_cache::cache_path(shell, &SystemHomeDir) {
+        Ok(Some(p)) => p,
+        _ => {
+            // No cache file for this shell, or XDG resolution failed.
+            // The marker is there, so the rcfile is wired up the way
+            // the user intended — don't shout.
+            return IntegrationCheck::Ok {
+                name,
+                detail: format!(
+                    "marker found in {}",
+                    sanitize_for_display(&path.display().to_string())
+                ),
+            };
+        }
+    };
+    let cache_str = cache_path.to_string_lossy().to_string();
+    let expected_line = crate::app::init::integration_line(shell, &cache_str);
+    match classify_rcfile_content(shell, &content, &expected_line) {
+        RcfileIntegrationStatus::Ok => IntegrationCheck::Ok {
+            name,
+            detail: format!(
+                "marker found in {}",
+                sanitize_for_display(&path.display().to_string())
+            ),
+        },
+        RcfileIntegrationStatus::Outdated { has_expected, .. } => {
+            let rcfile_disp = sanitize_for_display(&path.display().to_string());
+            let cache_disp = sanitize_for_display(&cache_str);
+            let short = shell_short_name(shell);
+            let detail = if has_expected {
+                format!(
+                    "marker found in {rcfile_disp} but pre-0.1.15 `runex export {short}` line is still present alongside the cache source line — delete the old line and re-run `runex doctor`"
+                )
+            } else {
+                format!(
+                    "marker found in {rcfile_disp} but rcfile uses pre-0.1.15 form; static cache at {cache_disp} is unused — delete the old line and re-run `runex init {short}`"
+                )
+            };
+            IntegrationCheck::Outdated {
+                name,
+                detail,
+                path,
+            }
         }
     }
 }
@@ -254,6 +306,97 @@ fn shell_short_name(shell: Shell) -> &'static str {
         Shell::Pwsh => "pwsh",
         Shell::Clink => "clink",
         Shell::Nu => "nu",
+    }
+}
+
+/// Classification of an rcfile's runex integration content.
+///
+/// Distinguishes "current cache-source line is what's actually in
+/// the rcfile" from "the legacy 0.1.13/0.1.14 `runex export <shell>`
+/// invocation is still there". A user who upgraded but did not delete
+/// the legacy line ends up with the cache file written but never
+/// sourced — `latency improvement` claim from 0.1.15 silently dies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RcfileIntegrationStatus {
+    /// Either the current expected source line is present, or neither
+    /// expected nor legacy form is present (user customised — don't
+    /// false-positive). Caller has already verified that the marker
+    /// `# runex-init` is present.
+    Ok,
+    /// Legacy `runex export <shell>` line is still in the rcfile.
+    /// `has_expected` tells the caller whether the new cache-source
+    /// line is also present (informs the remediation wording).
+    Outdated { has_expected: bool, has_legacy: bool },
+}
+
+/// Pure classifier: no I/O. Tested directly on string inputs.
+///
+/// Called from [`check_rcfile_marker`] after the rcfile content has
+/// already been read and the marker presence confirmed. `expected_line`
+/// is the current cache-source line as produced by
+/// `crate::app::init::integration_line(shell, &cache_path_str)` —
+/// passed in rather than recomputed so this function stays a pure
+/// string operation.
+pub(crate) fn classify_rcfile_content(
+    shell: Shell,
+    content: &str,
+    expected_line: &str,
+) -> RcfileIntegrationStatus {
+    let has_expected = contains_expected_line(content, expected_line);
+    let has_legacy = contains_legacy_export_token(shell, content);
+    if has_legacy {
+        return RcfileIntegrationStatus::Outdated { has_expected, has_legacy: true };
+    }
+    // Either the expected line is present (Ok), or the user has
+    // customised the integration block (we don't recognise the line
+    // shape, but the marker is there — best to stay silent rather than
+    // false-positive).
+    RcfileIntegrationStatus::Ok
+}
+
+/// `true` iff `content` contains a line whose trimmed form equals
+/// `expected_line.trim()`. Line separators are normalised first so
+/// Windows-checked-out files are not penalised.
+fn contains_expected_line(content: &str, expected_line: &str) -> bool {
+    let expected = expected_line.trim();
+    if expected.is_empty() {
+        return false;
+    }
+    normalize_newlines(content)
+        .lines()
+        .any(|l| l.trim() == expected)
+}
+
+/// `true` iff `content` contains a non-comment line that mentions the
+/// legacy `export <shell>` invocation for `shell`. The substring is
+/// `export <shell>` rather than `runex export <shell>` so the pwsh
+/// `Invoke-Expression (& 'runex' export pwsh | ...)` shape — where
+/// the literal `runex export pwsh` substring is broken up by the
+/// closing quote — is still flagged. Per-shell scoping (`bash` vs
+/// `pwsh` vs ...) prevents cross-shell false positives. Lines whose
+/// trimmed form starts with `#` are skipped so a comment cannot
+/// trigger a drift warning.
+fn contains_legacy_export_token(shell: Shell, content: &str) -> bool {
+    let token = legacy_export_token(shell);
+    normalize_newlines(content)
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .any(|l| l.contains(token))
+}
+
+/// The fixed substring used to detect a pre-0.1.15 `runex export <shell>`
+/// invocation in the user's rcfile. Substring-based on purpose so any
+/// `--bin <path>` / quoting / `eval` vs `Invoke-Expression` variant
+/// the user might have is covered without regex.
+fn legacy_export_token(shell: Shell) -> &'static str {
+    match shell {
+        Shell::Bash => "export bash",
+        Shell::Zsh => "export zsh",
+        Shell::Pwsh => "export pwsh",
+        Shell::Nu => "export nu",
+        // clink uses a different install path entirely; drift for it
+        // is caught by `check_clink_lua_freshness`, not by this token.
+        Shell::Clink => "export clink",
     }
 }
 
@@ -484,11 +627,17 @@ mod tests {
 
     #[test]
     fn rcfile_marker_present_returns_ok() {
+        // 0.1.15+ rcfile shape: marker followed by a cache-source line.
+        // The exact cache path varies by runner, but the classifier
+        // only flags Outdated when a legacy `export bash` token is
+        // present — without one, it returns Ok regardless of whether
+        // the cache-source line literally matches the runtime cache
+        // path (covers the "user customised" branch).
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join(".bashrc");
         write(
             &p,
-            "alias ll=ls\n\n# runex-init\neval \"$(runex export bash)\"\n",
+            "alias ll=ls\n\n# runex-init\n[ -r '/some/cache/integration.bash' ] && . '/some/cache/integration.bash'\n",
         );
         let r = check_rcfile_marker(Shell::Bash, Some(&p));
         assert!(matches!(r, IntegrationCheck::Ok { .. }), "got {r:?}");
@@ -866,6 +1015,196 @@ mod tests {
 
             let r = check_cache_freshness(Shell::Bash, &env);
             assert!(matches!(r, IntegrationCheck::Ok { .. }), "got {r:?}");
+        }
+    }
+
+    /// rcfile content classifier (0.1.15 drift detection).
+    ///
+    /// All cases pin the truth table from `classify_rcfile_content`:
+    ///   has_expected × has_legacy → Ok | Outdated{ has_expected, has_legacy }
+    mod classify_rcfile_content_tests {
+        use super::*;
+
+        fn bash_expected() -> &'static str {
+            "[ -r '/cache/integration.bash' ] && . '/cache/integration.bash'"
+        }
+
+        #[test]
+        fn ok_when_only_expected_line_present() {
+            let exp = bash_expected();
+            let content = format!("# runex-init\n{exp}\n");
+            assert_eq!(
+                classify_rcfile_content(Shell::Bash, &content, exp),
+                RcfileIntegrationStatus::Ok
+            );
+        }
+
+        #[test]
+        fn outdated_when_only_legacy_eval_present() {
+            let exp = bash_expected();
+            let content = "# runex-init\neval \"$(runex export bash)\"\n";
+            assert_eq!(
+                classify_rcfile_content(Shell::Bash, content, exp),
+                RcfileIntegrationStatus::Outdated { has_expected: false, has_legacy: true },
+            );
+        }
+
+        #[test]
+        fn outdated_when_both_legacy_and_expected_present() {
+            let exp = bash_expected();
+            let content = format!("# runex-init\n{exp}\neval \"$(runex export bash)\"\n");
+            assert_eq!(
+                classify_rcfile_content(Shell::Bash, &content, exp),
+                RcfileIntegrationStatus::Outdated { has_expected: true, has_legacy: true },
+            );
+        }
+
+        #[test]
+        fn ok_when_neither_present_user_customised() {
+            let exp = bash_expected();
+            // Marker present (caller checked); inner content is the user's
+            // own thing. Don't false-positive.
+            let content = "# runex-init\n# user wrote their own thing here\n";
+            assert_eq!(
+                classify_rcfile_content(Shell::Bash, content, exp),
+                RcfileIntegrationStatus::Ok,
+            );
+        }
+
+        #[test]
+        fn outdated_pwsh_legacy_invoke_expression() {
+            let exp = "if (Test-Path '/cache/integration.ps1') { . '/cache/integration.ps1' }";
+            let content = "# runex-init\nInvoke-Expression (& 'runex' export pwsh | Out-String)\n";
+            assert_eq!(
+                classify_rcfile_content(Shell::Pwsh, content, exp),
+                RcfileIntegrationStatus::Outdated { has_expected: false, has_legacy: true },
+            );
+        }
+
+        #[test]
+        fn outdated_zsh_legacy_with_bin_arg() {
+            let exp = "[ -r '/cache/integration.zsh' ] && . '/cache/integration.zsh'";
+            let content = "# runex-init\neval \"$(runex export zsh --bin '/home/u/.cargo/bin/runex')\"\n";
+            assert_eq!(
+                classify_rcfile_content(Shell::Zsh, content, exp),
+                RcfileIntegrationStatus::Outdated { has_expected: false, has_legacy: true },
+            );
+        }
+
+        #[test]
+        fn outdated_nu_legacy() {
+            let exp = "if ('/cache/integration.nu' | path exists) { source '/cache/integration.nu' }";
+            let content = "# runex-init\nsource ($'(runex export nu)' | save -f /tmp/x.nu)\n";
+            assert_eq!(
+                classify_rcfile_content(Shell::Nu, content, exp),
+                RcfileIntegrationStatus::Outdated { has_expected: false, has_legacy: true },
+            );
+        }
+
+        #[test]
+        fn legacy_token_is_scoped_per_shell() {
+            // A bash rcfile that mentions `runex export pwsh` in a comment
+            // must NOT flag bash as drifted.
+            let exp = bash_expected();
+            let content = "# runex-init\n# note: pwsh users still run `runex export pwsh` themselves\n";
+            assert_eq!(
+                classify_rcfile_content(Shell::Bash, content, exp),
+                RcfileIntegrationStatus::Ok,
+            );
+        }
+
+        #[test]
+        fn expected_line_match_ignores_surrounding_whitespace() {
+            // The init writer indents to taste; the classifier matches
+            // on trimmed line content so a leading tab does not cause
+            // a false drift.
+            let exp = bash_expected();
+            let content = format!("# runex-init\n\t{exp}  \n");
+            assert_eq!(
+                classify_rcfile_content(Shell::Bash, &content, exp),
+                RcfileIntegrationStatus::Ok,
+            );
+        }
+
+        #[test]
+        fn expected_line_match_normalises_crlf() {
+            let exp = bash_expected();
+            let content = format!("# runex-init\r\n{exp}\r\n");
+            assert_eq!(
+                classify_rcfile_content(Shell::Bash, &content, exp),
+                RcfileIntegrationStatus::Ok,
+            );
+        }
+    }
+
+    /// `check_rcfile_marker` Outdated I/O path.
+    ///
+    /// These need the rcfile to be readable but also need
+    /// `cache_path(shell, &SystemHomeDir)` to resolve. The production
+    /// resolver reads real `$XDG_CACHE_HOME` / `dirs::cache_dir()`,
+    /// which exists on every supported runner — so the cache_path
+    /// branch reliably succeeds and the classifier path is exercised.
+    /// We assert only the parts of the detail message that we own
+    /// (the wording about `pre-0.1.15` and the remediation), since
+    /// the real cache path string varies by runner.
+    mod rcfile_marker_outdated {
+        use super::*;
+
+        #[test]
+        fn bash_legacy_line_is_outdated() {
+            let tmp = TempDir::new().unwrap();
+            let p = tmp.path().join(".bashrc");
+            write(&p, "# runex-init\neval \"$(runex export bash)\"\n");
+            let r = check_rcfile_marker(Shell::Bash, Some(&p));
+            match r {
+                IntegrationCheck::Outdated { name, detail, .. } => {
+                    assert_eq!(name, "integration:bash");
+                    assert!(detail.contains("pre-0.1.15"), "detail: {detail}");
+                    assert!(detail.contains("runex init bash"), "detail: {detail}");
+                }
+                other => panic!("expected Outdated, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn pwsh_legacy_invoke_expression_is_outdated() {
+            let tmp = TempDir::new().unwrap();
+            let p = tmp.path().join("Microsoft.PowerShell_profile.ps1");
+            write(
+                &p,
+                "# runex-init\nInvoke-Expression (& 'runex' export pwsh | Out-String)\n",
+            );
+            let r = check_rcfile_marker(Shell::Pwsh, Some(&p));
+            match r {
+                IntegrationCheck::Outdated { name, detail, .. } => {
+                    assert_eq!(name, "integration:pwsh");
+                    assert!(detail.contains("pre-0.1.15"), "detail: {detail}");
+                    assert!(detail.contains("runex init pwsh"), "detail: {detail}");
+                }
+                other => panic!("expected Outdated, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn coexistence_legacy_plus_expected_is_outdated() {
+            // The rcfile has both: the new cache-source line AND the
+            // legacy export line. We still report Outdated because the
+            // legacy line is the failure case — the cache file is being
+            // sourced twice (or the legacy line shadowed it), and the
+            // user clearly didn't notice the duplicate.
+            let tmp = TempDir::new().unwrap();
+            let p = tmp.path().join(".bashrc");
+            // The expected line for `Some(&p)` here would need the real
+            // cache_path; we just include both a plausible cache-source
+            // line and the legacy line. classify_rcfile_content treats
+            // any legacy presence as Outdated regardless of has_expected,
+            // so the test is robust to the real cache path.
+            write(
+                &p,
+                "# runex-init\n[ -r '/some/cache/integration.bash' ] && . '/some/cache/integration.bash'\neval \"$(runex export bash)\"\n",
+            );
+            let r = check_rcfile_marker(Shell::Bash, Some(&p));
+            assert!(matches!(r, IntegrationCheck::Outdated { .. }), "got {r:?}");
         }
     }
 }
