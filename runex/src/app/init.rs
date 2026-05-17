@@ -1,4 +1,4 @@
-use crate::domain::shell::{bash_quote_string, lua_quote_string, nu_quote_string, pwsh_quote_string, Shell};
+use crate::domain::shell::{bash_quote_string, lua_quote_string, pwsh_quote_string, Shell};
 
 // `RUNEX_INIT_MARKER` moved to `crate::infra::integration_check` in
 // Phase D D1b — both the writer (`cmd::init`) and the reader
@@ -57,6 +57,38 @@ expand = "git status"
 /// `integration:clink` check (see
 /// [`crate::infra::integration_check::check_clink_lua_freshness`]).
 ///
+/// Strip any character that would break out of a nu single-quoted
+/// literal or smuggle in additional nu syntax via the rcfile. Nu has
+/// no escape mechanism inside single quotes, so injecting a closing
+/// `'` would terminate the string mid-path and let the rest of the
+/// path tail be parsed as fresh nu code. Newlines and other control
+/// characters are dropped for the same reason: a literal `\n` inside
+/// the single quotes would split the line and the next physical line
+/// would become an unrelated nu statement.
+///
+/// We drop rather than escape because the cache path is machine-
+/// derived (`xdg_cache_home_with` → `XDG_CACHE_HOME` / `LOCALAPPDATA`
+/// / `~/.cache`). A user with a hostile `XDG_CACHE_HOME` ends up with
+/// a slightly wrong path that fails the `path exists` guard at
+/// runtime, which is a silent no-op — far less damaging than a parse
+/// error that breaks every line after it in env.nu.
+///
+/// Unicode visual-deception characters (RLO, BOM, ZWSP) are filtered
+/// via `is_deceptive_unicode`; bidi reversal / invisible insertion in
+/// a path the user pastes into `runex doctor` output is the same
+/// class of attack the `expand`/`key` validators already defend
+/// against.
+fn sanitize_nu_cache_path_literal(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            !matches!(c, '\'' | '\n' | '\r' | '\t')
+                && !(c as u32 <= 0x1F)
+                && c as u32 != 0x7F
+                && !crate::domain::sanitize::is_deceptive_unicode(c)
+        })
+        .collect()
+}
+
 /// `cache_path` is the absolute on-disk path to the integration
 /// cache file (resolved by `infra::integration_cache::cache_path`).
 /// For clink, callers pass the lua install path; the line is a
@@ -75,10 +107,29 @@ pub(crate) fn integration_line(shell: Shell, cache_path: &str) -> String {
             "if (Test-Path {p}) {{ . {p} }}",
             p = pwsh_quote_string(cache_path)
         ),
-        Shell::Nu => format!(
-            "if ({p} | path exists) {{ source {p} }}",
-            p = nu_quote_string(cache_path)
-        ),
+        Shell::Nu => {
+            // nu's `source` and `path exists` want a literal string,
+            // not an external-command invocation. `nu_quote_string`
+            // wraps in `^"..."` which is nu's *external-command*
+            // prefix — `source ^"path"` parses as "run an executable
+            // called <path>, then source its output" and fails with
+            // "File not found: ^<path>" (issue surfaced during 0.1.15
+            // hand-check on nu 0.112.2).
+            //
+            // Use a single-quoted literal instead. Nu's single-quoted
+            // strings are byte-literal: no escape sequences, no
+            // interpolation, no command interpretation. The validator
+            // for the `number` / cache paths already rejects control
+            // characters and deceptive Unicode, and the cache path is
+            // derived from `xdg_cache_home_with` so it cannot contain
+            // a literal `'` in any supported configuration. If a user
+            // ever lands a single quote in the cache path through a
+            // hostile `XDG_CACHE_HOME`, the worst case is the nu
+            // parser rejecting the line at load time (visible as a
+            // doctor WARN, not silent breakage).
+            let safe = sanitize_nu_cache_path_literal(cache_path);
+            format!("if ('{safe}' | path exists) {{ source '{safe}' }}")
+        }
         Shell::Clink => format!(
             "-- runex clink integration is auto-loaded from {}",
             lua_quote_string(cache_path)
@@ -334,6 +385,42 @@ mod tests {
         );
     }
 
+    /// nu's `source` and `path exists` want a literal string, not an
+    /// external-command invocation. `^"path"` (which `nu_quote_string`
+    /// returns) is the *external-command* prefix in nu — `source ^"..."`
+    /// parses as "run an executable called <path>, then source its
+    /// output" and fails with "File not found: ^<path>". Issue #N.
+    #[test]
+    fn integration_line_nu_does_not_use_external_command_prefix() {
+        let line = integration_line(
+            Shell::Nu,
+            "/home/u/.cache/runex/integration.nu",
+        );
+        assert!(
+            !line.contains("^\""),
+            "nu line must NOT prefix the path with ^ (external command marker): {line}",
+        );
+    }
+
+    /// The path inside the nu line should be a single-quoted literal so
+    /// nu's parser treats it as a bare string, never as a command name.
+    /// Single quotes are the only literal that doesn't allow nested
+    /// escapes (the config validator already rejects `'` in cache paths
+    /// by way of the deceptive-Unicode / control-char checks plus the
+    /// generated cache paths being machine-derived from XDG_CACHE_HOME).
+    #[test]
+    fn integration_line_nu_uses_single_quoted_literal() {
+        let line = integration_line(
+            Shell::Nu,
+            "/home/u/.cache/runex/integration.nu",
+        );
+        let expected_quoted = "'/home/u/.cache/runex/integration.nu'";
+        assert!(
+            line.contains(expected_quoted),
+            "nu line must contain single-quoted literal {expected_quoted}: {line}"
+        );
+    }
+
     /// Quoting safety: a cache path containing a single quote must
     /// not break out of the bash-quoted string. (Implausible for an
     /// XDG_CACHE_HOME the user controls, but `bash_quote_string`
@@ -374,31 +461,49 @@ mod tests {
         );
     }
 
-    /// Nu double-quote escaping: the cache path is wrapped via
-    /// `nu_quote_string`, which escapes `"`, `\\`, and drops control
-    /// characters.
+    /// Nu single-quoted literals don't interpret `"` so a path
+    /// containing a double quote needs no special escaping — the
+    /// `"` ends up verbatim inside the single-quoted string.
     #[test]
-    fn integration_line_nu_escapes_double_quote_in_path() {
+    fn integration_line_nu_passes_double_quote_through_literal() {
         let line = integration_line(Shell::Nu, "/odd/path\"with-quote/integration.nu");
         assert!(
-            !line.contains("path\"with-quote"),
-            "raw double quote leaked into nu line: {line}"
-        );
-        assert!(
-            line.contains("path\\\"with-quote"),
-            "expected nu-escaped form: {line}"
+            line.contains("'/odd/path\"with-quote/integration.nu'"),
+            "nu single-quoted literal must contain the path verbatim with the double quote intact: {line}"
         );
     }
 
-    /// Windows-style backslashes inside the nu cache path must be
-    /// escaped because nu double-quoted strings interpret backslashes
-    /// as escape sequences.
+    /// Nu single-quoted literals don't interpret `\\`, so a Windows
+    /// path with backslashes is passed through verbatim — unlike the
+    /// double-quoted form which would have required every `\\` to be
+    /// doubled. (Windows nu users do exist; runex generates the cache
+    /// path via XDG → LOCALAPPDATA → home, all of which can produce
+    /// backslashes.)
     #[test]
-    fn integration_line_nu_escapes_backslash_in_path() {
+    fn integration_line_nu_passes_backslashes_through_literal() {
         let line = integration_line(Shell::Nu, "C:\\Users\\u\\AppData\\Local\\runex\\integration.nu");
         assert!(
-            line.contains("C:\\\\Users\\\\u\\\\AppData\\\\Local"),
-            "nu line must escape every backslash: {line}"
+            line.contains("'C:\\Users\\u\\AppData\\Local\\runex\\integration.nu'"),
+            "nu single-quoted literal must contain backslashes verbatim: {line}"
+        );
+    }
+
+    /// Cache path containing a single quote: nu single-quoted literals
+    /// cannot contain `'` (no escape mechanism). The sanitizer drops
+    /// the offending character so the line still parses, falling back
+    /// to a "path not found" at runtime instead of a hard parse error
+    /// that would break every line after it in env.nu.
+    #[test]
+    fn integration_line_nu_drops_single_quote_in_path() {
+        let line = integration_line(Shell::Nu, "/odd/path'with-quote/integration.nu");
+        assert!(
+            !line.contains("path'with"),
+            "single quote inside the literal would break out and corrupt env.nu: {line}"
+        );
+        // The sanitised form is `/odd/pathwith-quote/integration.nu`.
+        assert!(
+            line.contains("'/odd/pathwith-quote/integration.nu'"),
+            "expected single-quoted literal with the ' stripped: {line}"
         );
     }
 
@@ -492,31 +597,17 @@ mod tests {
             );
         }
 
-        /// `$` in the cache path must be escaped to suppress nu
-        /// variable interpolation (`$env.FOO`-style expansion
-        /// inside double-quoted strings).
+        /// `$` in the cache path is harmless inside nu single-quoted
+        /// literals — nu single quotes do not interpolate. The path
+        /// passes through verbatim and `path exists` resolves it as a
+        /// filesystem path with a literal `$` in it.
         #[test]
-        fn escapes_dollar_sign_in_cache_path() {
+        fn dollar_sign_passes_through_literal() {
             let line = integration_line(Shell::Nu, "/home/$USER/.cache/runex/integration.nu");
-            // Every literal `$` byte must be preceded by an odd
-            // number of backslashes (= the dollar is escaped).
-            let bytes = line.as_bytes();
-            for i in 0..bytes.len() {
-                if bytes[i] == b'$' {
-                    let mut preceding = 0usize;
-                    let mut j = i;
-                    while j > 0 && bytes[j - 1] == b'\\' {
-                        preceding += 1;
-                        j -= 1;
-                    }
-                    assert!(
-                        preceding % 2 == 1,
-                        "integration_line nu: '$' at byte {i} has {preceding} preceding \
-                         backslashes (even = nu interpolation not suppressed). Line: {line:?}"
-                    );
-                }
-            }
-            assert!(line.contains("\\$"), "expected \\$ in: {line:?}");
+            assert!(
+                line.contains("'/home/$USER/.cache/runex/integration.nu'"),
+                "single-quoted literal must contain $ verbatim: {line:?}"
+            );
         }
 
         /// All C0 control characters except `\n`, `\r`, `\t` must
@@ -554,17 +645,25 @@ mod tests {
             );
         }
 
-        /// Newline injection: a path containing `\n` must not
-        /// produce a nu line that breaks across `source ...`
-        /// statements.
+        /// Newline injection: a path containing `\n` must not produce
+        /// a nu line that breaks across `source ...` statements. Nu
+        /// single-quoted literals don't have an escape mechanism, so
+        /// the sanitiser drops the `\n` rather than escapes it; the
+        /// resulting `path exists` lookup fails harmlessly.
         #[test]
         fn newline_in_cache_path_does_not_inject() {
             let line = integration_line(Shell::Nu, "/home/user/.cache\nsource /tmp/evil.nu");
             assert!(
                 !line.contains('\n'),
-                "newline in cache_path must be escaped: {line:?}"
+                "newline in cache_path must not appear raw in the rcfile line: {line:?}"
             );
-            assert!(line.contains("\\n"), "expected `\\n` escape: {line:?}");
+            // The "source /tmp/evil.nu" fragment must not survive as a
+            // standalone statement; it gets absorbed into the path
+            // literal (and then fails the path-exists guard at run time).
+            assert!(
+                !line.split('\n').any(|chunk| chunk.trim_start().starts_with("source ")),
+                "evil `source ...` line must not appear as a standalone statement: {line:?}"
+            );
         }
     }
 
