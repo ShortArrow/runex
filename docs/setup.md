@@ -142,13 +142,67 @@ eval "$(runex export zsh)"
 
 ### PowerShell
 
-Add to `$PROFILE`:
+Since 0.1.15 `runex init pwsh` writes a static cache file at
+`%LOCALAPPDATA%\runex\integration.ps1` and appends a one-line
+`. <cache>` to `$PROFILE`. Run it once; no manual edit is required:
 
 ```powershell
-Invoke-Expression (& runex export pwsh | Out-String)
+runex init pwsh
 ```
 
-Pasted text is inserted without mid-paste expansion (runex detects the paste via PSReadLine's key queue and skips the space handler).
+If you'd rather wire it up by hand, the equivalent is one line in
+`$PROFILE`:
+
+```powershell
+if (Test-Path "$env:LOCALAPPDATA\runex\integration.ps1") { . "$env:LOCALAPPDATA\runex\integration.ps1" }
+```
+
+Pasted text is inserted without mid-paste expansion (runex detects
+the paste via PSReadLine's key queue and skips the space handler).
+
+#### PSReadLine requirement
+
+The pwsh integration registers a `Set-PSReadLineKeyHandler` on the
+trigger chord, so **PSReadLine must be loadable in the host**. Both
+PowerShell 7 (`pwsh.exe`) and Windows PowerShell 5.1 (`powershell.exe`)
+ship PSReadLine; the integration template treats them the same.
+
+Two stumbling blocks for Windows PowerShell 5.1 users specifically:
+
+1. **`Restricted` execution policy.** PS5 ships with `Restricted` as
+   the default LocalMachine policy, which blocks dot-sourcing a `.ps1`
+   cache file. `runex init pwsh` will write the cache happily, but
+   the profile cannot source it. Fix with:
+   ```powershell
+   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+   ```
+   (`RemoteSigned` is what PS7 ships with by default and what almost
+   every user-installed module assumes.)
+2. **`AllSigned` policy + bundled-vs-newer PSReadLine.** If the
+   policy is `AllSigned` *and* PS5 picks up a newer PSReadLine from
+   `Documents\PowerShell\Modules` (shared with PS7), each load
+   prompts `Do you want to run software from this untrusted
+   publisher?`. Either:
+   - choose `[A] Always run` once (adds Microsoft's cert to your
+     `TrustedPublisher` store), or
+   - trim PS5's `$env:PSModulePath` to drop `Documents\PowerShell\Modules`
+     so the bundled PSReadLine 2.0.0 (already trusted) loads instead.
+
+If `runex doctor` reports `integration:pwsh: marker found` but the
+Space trigger does nothing, the diagnosis is almost always one of
+the above. `Get-Module PSReadLine | Format-List Name,Version,Path`
+tells you whether PSReadLine actually loaded and from where.
+
+#### `$PROFILE` differs between pwsh 7 and PowerShell 5
+
+pwsh 7 looks for `Documents\PowerShell\Microsoft.PowerShell_profile.ps1`;
+Windows PowerShell 5 looks for
+`Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1`.
+`runex init pwsh` resolves the path via `dirs::home_dir()` and the
+running host's `$PROFILE`, so it writes to whichever profile the
+host that ran the command actually uses. If you use both 7 and 5,
+run `runex init pwsh` from each so both profiles get the source
+line.
 
 ### Nushell
 
@@ -243,3 +297,19 @@ If a trigger key produces a literal space instead of expanding:
    HKCU and HKLM `Environment\Path`, you'll need to add the directory
    to one of them (or set `RUNEX_CLINK_LUA_PATH` if you've installed
    the lua file in a non-standard location).
+5. **pwsh: marker found but Space does nothing.** Almost always one of
+   three things in this order: (a) PSReadLine is not loaded —
+   `Get-Module PSReadLine` should print a row; if not, install or
+   re-import it. (b) Windows PowerShell 5 sees `Restricted` as the
+   execution policy and refuses to dot-source the cache file —
+   `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` fixes it.
+   (c) `AllSigned` policy is rejecting the newer PSReadLine in
+   `Documents\PowerShell\Modules` — pick `[A] Always run` once or
+   trim `$env:PSModulePath`. The [PowerShell setup section](#powershell)
+   covers all three with full commands.
+6. **pwsh: cache header looks doubled / `__runex_queued_key_count` is
+   not recognized.** The cache file got two `# runex-integration-version`
+   headers (e.g. because something concatenated `runex export pwsh`
+   output with its own header). The cache's interactive guard runs
+   before the function definitions, so a malformed cache silently
+   skips them. Re-run `runex init pwsh` to rewrite the cache cleanly.

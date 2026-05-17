@@ -195,6 +195,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pull_request` (no GHCR push, no `packages: write` use), so a
   broken Dockerfile fails CI before it can land on `develop`.
 
+### Docs
+
+- `docs/setup.md` (and the Japanese translation) rewrites the
+  PowerShell section for the static-cache install path, calls out
+  the PSReadLine dependency explicitly, and documents two PS5-
+  specific traps surfaced during 0.1.15 hand-checks: the default
+  `Restricted` execution policy refusing to dot-source the cache
+  file, and the `AllSigned` policy plus a newer PSReadLine in
+  `Documents\PowerShell\Modules` triggering an untrusted-publisher
+  prompt. The Troubleshooting list grows two pwsh-specific rows
+  pointing at the same conditions.
+
 ### Migration
 
 Users on 0.1.14 with `eval "$(runex export bash)"` (or the
