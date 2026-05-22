@@ -11,13 +11,14 @@
 //!    changes, users with a stale `runex.lua` silently miss out on the
 //!    new behaviour. [`check_clink_lua_freshness`] reads the file and
 //!    compares byte-for-byte against `runex export clink`.
-//! 2. **Pre-0.1.15 rcfile drift.** Before 0.1.15, `runex init bash`
-//!    appended `eval "$(runex export bash)"` to the rcfile, paying
-//!    a `runex` PATH lookup + spawn at every shell start. 0.1.15+
-//!    writes a static cache file and the rcfile only sources it. A
-//!    user who upgrades and re-runs `runex init <shell>` keeps the
-//!    legacy line — the cache file is written but never sourced.
-//!    [`check_rcfile_marker`] flags this as [`IntegrationCheck::Outdated`].
+//! 2. **Legacy rcfile drift.** Earlier runex versions appended
+//!    `eval "$(runex export bash)"` to the rcfile, paying a `runex`
+//!    PATH lookup + spawn at every shell start. The current
+//!    `runex init` writes a static cache file and the rcfile only
+//!    sources it. A user who upgrades and re-runs `runex init
+//!    <shell>` keeps the legacy line — the cache file is written
+//!    but never sourced. [`check_rcfile_marker`] flags this as
+//!    [`IntegrationCheck::Outdated`].
 //! 3. **Cache file freshness.** [`check_cache_freshness`] verifies
 //!    that the cache file's header points at the current `runex`
 //!    binary and the current schema version (`runex-integration-version: 1`).
@@ -25,7 +26,7 @@
 //! Marker detection (`# runex-init`) on its own only tells us "integration
 //! was ever set up" — it does not tell us *what* was set up. The two-axis
 //! classifier `classify_rcfile_content` lifts that constraint by checking
-//! both for the current expected source line and for any pre-0.1.15
+//! both for the current expected source line and for any legacy
 //! `runex export <shell>` invocation that may still be present.
 
 use std::path::{Path, PathBuf};
@@ -252,11 +253,11 @@ pub(crate) fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) 
             let short = shell_short_name(shell);
             let detail = if has_expected {
                 format!(
-                    "marker found in {rcfile_disp} but pre-0.1.15 `runex export {short}` line is still present alongside the cache source line — delete the old line and re-run `runex doctor`"
+                    "marker found in {rcfile_disp} but a legacy `runex export {short}` line is still present alongside the cache source line — delete the old line and re-run `runex doctor`"
                 )
             } else {
                 format!(
-                    "marker found in {rcfile_disp} but rcfile uses pre-0.1.15 form; static cache at {cache_disp} is unused — delete the old line and re-run `runex init {short}`"
+                    "marker found in {rcfile_disp} but the rcfile still calls `runex export {short}` directly instead of sourcing the integration cache at {cache_disp} — delete the old line and re-run `runex init {short}`"
                 )
             };
             IntegrationCheck::Outdated {
@@ -312,10 +313,11 @@ fn shell_short_name(shell: Shell) -> &'static str {
 /// Classification of an rcfile's runex integration content.
 ///
 /// Distinguishes "current cache-source line is what's actually in
-/// the rcfile" from "the legacy 0.1.13/0.1.14 `runex export <shell>`
-/// invocation is still there". A user who upgraded but did not delete
-/// the legacy line ends up with the cache file written but never
-/// sourced — `latency improvement` claim from 0.1.15 silently dies.
+/// the rcfile" from "an older `runex export <shell>` invocation is
+/// still there". A user who upgraded but did not delete the legacy
+/// line ends up with the cache file written but never sourced —
+/// the latency-improvement claim of the static integration cache
+/// silently dies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RcfileIntegrationStatus {
     /// Either the current expected source line is present, or neither
@@ -384,10 +386,12 @@ fn contains_legacy_export_token(shell: Shell, content: &str) -> bool {
         .any(|l| l.contains(token))
 }
 
-/// The fixed substring used to detect a pre-0.1.15 `runex export <shell>`
-/// invocation in the user's rcfile. Substring-based on purpose so any
-/// `--bin <path>` / quoting / `eval` vs `Invoke-Expression` variant
-/// the user might have is covered without regex.
+/// The fixed substring used to detect a legacy `runex export <shell>`
+/// invocation in the user's rcfile (the form earlier runex versions
+/// appended before the static integration cache). Substring-based on
+/// purpose so any `--bin <path>` / quoting / `eval` vs
+/// `Invoke-Expression` variant the user might have is covered without
+/// regex.
 fn legacy_export_token(shell: Shell) -> &'static str {
     match shell {
         Shell::Bash => "export bash",
@@ -627,7 +631,7 @@ mod tests {
 
     #[test]
     fn rcfile_marker_present_returns_ok() {
-        // 0.1.15+ rcfile shape: marker followed by a cache-source line.
+        // Current rcfile shape: marker followed by a cache-source line.
         // The exact cache path varies by runner, but the classifier
         // only flags Outdated when a legacy `export bash` token is
         // present — without one, it returns Ok regardless of whether
@@ -1018,7 +1022,7 @@ mod tests {
         }
     }
 
-    /// rcfile content classifier (0.1.15 drift detection).
+    /// rcfile content classifier (legacy-drift detection).
     ///
     /// All cases pin the truth table from `classify_rcfile_content`:
     ///   has_expected × has_legacy → Ok | Outdated{ has_expected, has_legacy }
@@ -1145,7 +1149,7 @@ mod tests {
     /// which exists on every supported runner — so the cache_path
     /// branch reliably succeeds and the classifier path is exercised.
     /// We assert only the parts of the detail message that we own
-    /// (the wording about `pre-0.1.15` and the remediation), since
+    /// (the wording about the legacy `runex export` invocation and the remediation), since
     /// the real cache path string varies by runner.
     mod rcfile_marker_outdated {
         use super::*;
@@ -1159,7 +1163,7 @@ mod tests {
             match r {
                 IntegrationCheck::Outdated { name, detail, .. } => {
                     assert_eq!(name, "integration:bash");
-                    assert!(detail.contains("pre-0.1.15"), "detail: {detail}");
+                    assert!(detail.contains("runex export bash"), "detail: {detail}");
                     assert!(detail.contains("runex init bash"), "detail: {detail}");
                 }
                 other => panic!("expected Outdated, got {other:?}"),
@@ -1178,7 +1182,7 @@ mod tests {
             match r {
                 IntegrationCheck::Outdated { name, detail, .. } => {
                     assert_eq!(name, "integration:pwsh");
-                    assert!(detail.contains("pre-0.1.15"), "detail: {detail}");
+                    assert!(detail.contains("runex export pwsh"), "detail: {detail}");
                     assert!(detail.contains("runex init pwsh"), "detail: {detail}");
                 }
                 other => panic!("expected Outdated, got {other:?}"),

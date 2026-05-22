@@ -40,7 +40,7 @@ Replace `/mnt/path/to/runex` with the WSL path to your checkout. The tests are g
 
 #### Linux-specific tests (Container, recommended)
 
-Starting with 0.1.15, runex ships a Linux CI container image with bash 4+, zsh, pwsh, nu, xclip, wl-paste, xsel, and the rust toolchain pinned at known versions. CI's `test-linux` job runs inside this image; you can run exactly the same environment locally:
+Starting with 0.1.16, runex ships a Linux CI container image with bash 4+, zsh, pwsh, nu, xclip, wl-paste, xsel, and the rust toolchain pinned at known versions. CI's `test-linux` job runs inside this image; you can run exactly the same environment locally:
 
 ```bash
 # Pull the latest CI image and run the full Linux test suite

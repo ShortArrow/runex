@@ -1339,7 +1339,7 @@ fn init_clink_writes_lua_to_resolved_path() {
 
 // ─── export --bin Phase G default-to-current_exe ───────────────────────────────
 
-/// Phase G (0.1.15): when --bin is omitted, the generated script bakes
+/// Static-cache layout: when --bin is omitted, the generated script bakes
 /// the absolute path of the running runex binary into the hook
 /// invocation. This eliminates the per-keystroke PATH lookup that
 /// would otherwise hit a `mise` shim on WSL (~470 ms) or a slow

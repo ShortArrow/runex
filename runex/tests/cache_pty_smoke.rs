@@ -1,16 +1,16 @@
-//! End-to-end smoke test for the 0.1.15 static-cache hook path.
+//! End-to-end smoke test for the static-cache hook path.
 //!
 //! The existing `bash_pty_integration.rs` bootstraps the hook with
 //! the **legacy** `eval "$(runex export bash --bin ...)"` form, so it
 //! proves the hook still works when invoked the old way. It does
 //! *not* prove the new static-cache path — the one a user actually
-//! gets after running `runex init bash` on 0.1.15 — wires up the
+//! gets after running `runex init bash` today — wires up the
 //! Space binding correctly.
 //!
 //! This file fills that gap. We:
 //!
 //! 1. run the real `runex init bash --yes` against an isolated HOME,
-//!    same as a user would on their first 0.1.15 invocation;
+//!    same as a user would on their first post-upgrade invocation;
 //! 2. spawn an interactive bash with `--rcfile <home>/.bashrc`, the
 //!    actual rcfile that `runex init` just wrote (which `source`s
 //!    the cache file under `<home>/.cache/runex/integration.bash`);

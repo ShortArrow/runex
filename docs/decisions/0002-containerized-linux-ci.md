@@ -1,7 +1,7 @@
 # ADR 0002: Containerized Linux CI (single GHCR image, digest pin)
 
 - **Status**: Accepted
-- **Phase**: H (0.1.15 candidate, develop branch)
+- **Phase**: H (0.1.16 candidate, develop branch)
 - **Supersedes**: the implicit `apt-get install zsh` + reliance on
   `ubuntu-latest` having pwsh / nu for the `test-linux` job in
   0.1.13–0.1.14.

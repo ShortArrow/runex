@@ -91,7 +91,7 @@ eval "$(runex export zsh)"
 
 ### PowerShell
 
-0.1.15 以降、`runex init pwsh` は `%LOCALAPPDATA%\runex\integration.ps1`
+`runex init pwsh` は `%LOCALAPPDATA%\runex\integration.ps1`
 に静的キャッシュファイルを書き、`$PROFILE` に 1 行 `. <cache>` を
 追記します。一度実行するだけで設定完了します:
 

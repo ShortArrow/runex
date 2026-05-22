@@ -200,7 +200,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/setup.md` (and the Japanese translation) rewrites the
   PowerShell section for the static-cache install path, calls out
   the PSReadLine dependency explicitly, and documents two PS5-
-  specific traps surfaced during 0.1.15 hand-checks: the default
+  specific traps surfaced during 0.1.16 hand-checks: the default
   `Restricted` execution policy refusing to dot-source the cache
   file, and the `AllSigned` policy plus a newer PSReadLine in
   `Documents\PowerShell\Modules` triggering an untrusted-publisher
@@ -217,12 +217,13 @@ they (a) delete the legacy line and (b) re-run
 `runex init <shell>`.
 
 `runex doctor` now detects this case explicitly. After upgrading
-to 0.1.15 the `integration:<shell>` row reports `Outdated` with
+to 0.1.16 the `integration:<shell>` row reports `Outdated` with
 the rcfile path, the cache path, and a remediation hint, e.g.:
 
 ```
 [WARN] integration:bash: marker found in ~/.bashrc but rcfile uses
-       pre-0.1.15 form; static cache at ~/.cache/runex/integration.bash
+       still calls `runex export bash` directly instead of sourcing the
+       cache at ~/.cache/runex/integration.bash
        is unused — delete the old line and re-run `runex init bash`
 ```
 

@@ -113,7 +113,7 @@ pub(crate) fn integration_line(shell: Shell, cache_path: &str) -> String {
             // wraps in `^"..."` which is nu's *external-command*
             // prefix — `source ^"path"` parses as "run an executable
             // called <path>, then source its output" and fails with
-            // "File not found: ^<path>" (issue surfaced during 0.1.15
+            // "File not found: ^<path>" (issue surfaced during pre-release
             // hand-check on nu 0.112.2).
             //
             // Use a single-quoted literal instead. Nu's single-quoted
