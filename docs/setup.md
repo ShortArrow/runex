@@ -313,3 +313,15 @@ If a trigger key produces a literal space instead of expanding:
    output with its own header). The cache's interactive guard runs
    before the function definitions, so a malformed cache silently
    skips them. Re-run `runex init pwsh` to rewrite the cache cleanly.
+7. **Git Bash: Ctrl+C does not clear the line after a `{}`-placeholder
+   expansion** (cygwin/msys readline limitation). On Git Bash specifically,
+   pressing `Ctrl+C` immediately after expanding an abbreviation whose
+   `expand` contained `{}` (so the cursor lands in the middle of the
+   line) does **not** clear the line buffer. A subsequent `Enter` then
+   runs the stale expanded command, e.g. an empty `git commit -am ''`.
+   The same flow works correctly on Linux bash, WSL bash, zsh, pwsh,
+   and nu — only Git Bash's cygwin readline is affected. Workaround:
+   press `Backspace` (or any character key) before `Ctrl+C`, or just
+   delete the line manually. Runex 0.1.16 will treat cygwin/msys bash
+   as a distinct shell variant so the bash template can apply a
+   workaround tailored to that backend.

@@ -235,6 +235,23 @@ Doctor leaves the rcfile untouched. The fix is one line in the
 user's rcfile; runex deliberately does not auto-edit shell startup
 files.
 
+### Known issues
+
+- **Git Bash + cursor placeholder + Ctrl+C** (cygwin/msys readline
+  limitation). On Windows Git Bash (the cygwin/msys port of bash
+  used by Git for Windows), expanding an abbreviation whose
+  `expand` contains `{}` leaves the cursor in the middle of the
+  line. Pressing `Ctrl+C` right after the expansion does **not**
+  clear the line buffer — the next `Enter` will then run the
+  stale expanded command (e.g. an unintended empty
+  `git commit -am ''`). The same flow works correctly on Linux
+  bash, WSL bash, zsh, pwsh, and nu — only Git Bash's cygwin
+  readline backend is affected. As a workaround, press
+  `Backspace` (or any character key) before `Ctrl+C`, or just
+  delete the line manually. Runex 0.1.16 will treat cygwin/msys
+  bash as a distinct `Shell::CygwinBash` variant so the bash
+  template can apply a workaround tailored to that backend.
+
 ## [0.1.14] - 2026-05-06
 
 ### Added
