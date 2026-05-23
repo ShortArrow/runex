@@ -91,13 +91,67 @@ eval "$(runex export zsh)"
 
 ### PowerShell
 
-`$PROFILE` に追加:
+`runex init pwsh` は `%LOCALAPPDATA%\runex\integration.ps1`
+に静的キャッシュファイルを書き、`$PROFILE` に 1 行 `. <cache>` を
+追記します。一度実行するだけで設定完了します:
 
 ```powershell
-Invoke-Expression (& runex export pwsh | Out-String)
+runex init pwsh
 ```
 
-貼り付けたテキストは途中で展開されません (PSReadLine のキーキュー経由で paste を検出し、スペースキーハンドラをスキップします)。
+手で書く場合の最小形:
+
+```powershell
+if (Test-Path "$env:LOCALAPPDATA\runex\integration.ps1") { . "$env:LOCALAPPDATA\runex\integration.ps1" }
+```
+
+貼り付けたテキストは途中で展開されません (PSReadLine のキーキュー
+経由で paste を検出し、スペースキーハンドラをスキップします)。
+
+#### PSReadLine 必須
+
+pwsh integration はトリガーキーに対して
+`Set-PSReadLineKeyHandler` を登録するため、**ホスト側で PSReadLine
+が load 可能** である必要があります。PowerShell 7 (`pwsh.exe`) と
+Windows PowerShell 5.1 (`powershell.exe`) はどちらも PSReadLine
+を同梱しており、integration template はどちらも同等に扱います。
+
+Windows PowerShell 5.1 特有のつまずきポイントが 2 つ:
+
+1. **実行ポリシー `Restricted`。** PS5 のデフォルトの
+   LocalMachine ポリシーは `Restricted` で、`.ps1` キャッシュ
+   ファイルの dot-source が拒否されます。`runex init pwsh` は
+   キャッシュを書きますが、プロファイル側で source できません。
+   解決:
+   ```powershell
+   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+   ```
+   (`RemoteSigned` は PS7 のデフォルトで、ほとんどのユーザー
+   インストール modules が前提とするポリシーです。)
+2. **`AllSigned` ポリシー + 古い vs 新しい PSReadLine 衝突。**
+   ポリシーが `AllSigned` で、PS5 が `Documents\PowerShell\Modules`
+   (PS7 と共有) から新しい PSReadLine を拾うと、load の都度
+   「信頼されていない発行者からのスクリプトを実行しますか?」
+   プロンプトが出ます。対処:
+   - 一度 `[A] Always run` を選ぶ (Microsoft の証明書を
+     `TrustedPublisher` ストアに追加)
+   - もしくは PS5 の `$env:PSModulePath` から
+     `Documents\PowerShell\Modules` を除外し、同梱の
+     PSReadLine 2.0.0 (既に信頼済み) を load させる
+
+`runex doctor` が `integration:pwsh: marker found` と表示するのに
+Space トリガーが効かない場合、まずこの 2 つを疑います。
+`Get-Module PSReadLine | Format-List Name,Version,Path` で
+PSReadLine が実際に load されたか、どこから来たかを確認できます。
+
+#### `$PROFILE` は pwsh 7 と PowerShell 5 で異なる
+
+pwsh 7 は `Documents\PowerShell\Microsoft.PowerShell_profile.ps1` を
+読み、Windows PowerShell 5 は
+`Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1` を
+読みます。`runex init pwsh` は実行中のホストが見ている `$PROFILE`
+にキャッシュ source 行を書くので、両方使い分けるなら **pwsh 7 と
+PowerShell 5 それぞれから `runex init pwsh` を実行** してください。
 
 ### Nushell
 
@@ -156,3 +210,6 @@ $ runex doctor
 2. **`runex hook` が `unrecognized subcommand` で失敗**: 別の `runex` バイナリ (古い AUR/Homebrew/winget パッケージなど、hook サブコマンド導入前のもの) が PATH 上にあって新しいバイナリを隠している可能性があります。シェルテンプレートはエラー時に「リテラル空白挿入」へ safe-fail するので、統合バグのように見えます。`which runex` と `runex version` で解決された実体を確認し、古い方を削除/更新してください。
 3. **clink: `ls<Space>` がアップグレード後に展開されない**: `runex.lua` は自動更新されません。`runex doctor` が `WARN integration:clink: outdated …` を出します。`runex export clink > %LOCALAPPDATA%\clink\runex.lua` を再実行して新しい cmd 窓を開いてください。
 4. **clink: `lsd` がインストール済なのに `command:lsd not found`**: clink-injection された cmd の PATH が User-scope のレジストリエントリを欠いている可能性があります。runex は Windows ではレジストリでコマンド解決を補強しますが、HKCU/HKLM の `Environment\Path` どちらにも入っていないディレクトリを使っている場合は、いずれかに追加する必要があります (`RUNEX_CLINK_LUA_PATH` で lua ファイル自体の場所を上書きすることも可能)。
+5. **pwsh: marker found なのに Space が反応しない**: ほぼ次の 3 つのどれかです。(a) PSReadLine が load されていない — `Get-Module PSReadLine` で行が出るか確認、出なければインストール or import。(b) Windows PowerShell 5 の実行ポリシーが `Restricted` でキャッシュファイルの dot-source が拒否されている — `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` で解消。(c) `AllSigned` ポリシーで `Documents\PowerShell\Modules` 配下の新しい PSReadLine が拒否されている — 一度 `[A] Always run` を選ぶか `$env:PSModulePath` から該当ディレクトリを除外。[PowerShell セットアップセクション](#powershell) に詳細コマンドあり。
+6. **pwsh: キャッシュヘッダが二重 / `__runex_queued_key_count` が認識されない**: キャッシュファイルに `# runex-integration-version` ヘッダが 2 段ある状態 (例: 何かが `runex export pwsh` の出力に独自ヘッダを連結した結果)。キャッシュの interactive guard が function 定義より前で評価されるため、不正なキャッシュは function 定義をスキップします。`runex init pwsh` を再実行してキャッシュを書き直してください。
+7. **Git Bash: `{}` プレースホルダ展開後に Ctrl+C で行が消えない** (cygwin/msys readline の制約)。Windows の Git Bash 特有の問題で、`expand` に `{}` を含む abbreviation を展開した直後 (カーソルが行の中間で止まる状態) に `Ctrl+C` を押しても line buffer がクリアされません。続けて `Enter` を押すと、展開済みのコマンド (例: 空の `git commit -am ''`) がそのまま実行されます。Linux bash / WSL bash / zsh / pwsh / nu では正しく動作し、Git Bash の cygwin readline backend だけがこの挙動を示します。回避策: `Ctrl+C` の前に `Backspace` (または何か 1 文字) を入力する、または行全体を手で消す。runex 0.1.16 で cygwin/msys bash を独立した shell variant として認識し、template 側で workaround を入れる予定です。

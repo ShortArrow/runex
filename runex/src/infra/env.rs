@@ -151,6 +151,30 @@ pub(crate) fn xdg_config_home_with(env: &dyn HomeDirResolver) -> Option<PathBuf>
     env.home_dir().map(|h| h.join(".config"))
 }
 
+/// `XDG_CACHE_HOME` if set, else `~/.cache` on Linux/macOS,
+/// `%LOCALAPPDATA%` on Windows. This is where Phase G's static
+/// shell-integration cache files live (`<cache>/runex/integration.<ext>`).
+/// XDG fallback semantics match the spec; Windows fallback follows
+/// the `dirs` crate's `cache_dir()` convention but is reimplemented
+/// here so the resolver is the only env touchpoint (= testable).
+pub(crate) fn xdg_cache_home_with(env: &dyn HomeDirResolver) -> Option<PathBuf> {
+    if let Some(p) = env.env_var("XDG_CACHE_HOME") {
+        return Some(PathBuf::from(p));
+    }
+    if cfg!(windows) {
+        if let Some(p) = env.env_var("LOCALAPPDATA") {
+            return Some(PathBuf::from(p));
+        }
+    }
+    env.home_dir().map(|h| {
+        if cfg!(windows) {
+            h.join("AppData").join("Local")
+        } else {
+            h.join(".cache")
+        }
+    })
+}
+
 /// The rc file path for a given shell (best-effort; may not exist
 /// yet). For PowerShell, `$PROFILE` is a runtime variable and cannot
 /// be resolved statically, so the conventional filesystem path is
@@ -266,6 +290,69 @@ mod tests {
         fn returns_none_when_neither_set() {
             let env = EnvHomeDir::new(|_| -> Option<String> { None });
             assert_eq!(xdg_config_home_with(&env), None);
+        }
+    }
+
+    /// `xdg_cache_home_with` was added in Phase G to support the
+    /// static integration cache file pattern. Resolution order on
+    /// non-Windows: `XDG_CACHE_HOME` → `~/.cache`. On Windows:
+    /// `XDG_CACHE_HOME` → `LOCALAPPDATA` → `~/AppData/Local`.
+    mod xdg_cache_home_with_tests {
+        use super::*;
+        use std::collections::HashMap;
+
+        #[test]
+        fn honours_xdg_cache_home_env() {
+            let owned: HashMap<String, String> =
+                HashMap::from([("XDG_CACHE_HOME".to_string(), "/test/xdgcache".to_string())]);
+            let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+            assert_eq!(xdg_cache_home_with(&env), Some(PathBuf::from("/test/xdgcache")));
+        }
+
+        #[test]
+        #[cfg(not(windows))]
+        fn falls_back_to_home_dotcache_on_unix() {
+            let owned: HashMap<String, String> =
+                HashMap::from([("HOME".to_string(), "/test/home".to_string())]);
+            let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+            assert_eq!(
+                xdg_cache_home_with(&env),
+                Some(PathBuf::from("/test/home/.cache"))
+            );
+        }
+
+        #[test]
+        #[cfg(windows)]
+        fn honours_localappdata_on_windows() {
+            let owned: HashMap<String, String> = HashMap::from([(
+                "LOCALAPPDATA".to_string(),
+                r"C:\Users\test\AppData\Local".to_string(),
+            )]);
+            let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+            assert_eq!(
+                xdg_cache_home_with(&env),
+                Some(PathBuf::from(r"C:\Users\test\AppData\Local"))
+            );
+        }
+
+        #[test]
+        #[cfg(windows)]
+        fn falls_back_to_home_appdata_local_on_windows() {
+            let owned: HashMap<String, String> = HashMap::from([(
+                "USERPROFILE".to_string(),
+                r"C:\Users\test".to_string(),
+            )]);
+            let env = EnvHomeDir::new(move |n| owned.get(n).cloned());
+            assert_eq!(
+                xdg_cache_home_with(&env),
+                Some(PathBuf::from(r"C:\Users\test\AppData\Local"))
+            );
+        }
+
+        #[test]
+        fn returns_none_when_no_signal() {
+            let env = EnvHomeDir::new(|_| -> Option<String> { None });
+            assert_eq!(xdg_cache_home_with(&env), None);
         }
     }
 

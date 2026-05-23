@@ -144,8 +144,11 @@ enum Commands {
         #[arg(long, value_name = "SHELL")]
         shell: Option<String>,
     },
-    /// List all abbreviations
+    /// List all abbreviations (optionally filtered to one exact key)
     List {
+        /// If given, show only the rule whose key matches exactly
+        #[arg(value_name = "FILTER")]
+        filter: Option<String>,
         /// Current shell (bash, zsh, pwsh, clink, nu); auto-detected if omitted
         #[arg(long, value_name = "SHELL")]
         shell: Option<String>,
@@ -168,9 +171,14 @@ enum Commands {
     Export {
         /// Target shell: bash, zsh, pwsh, clink, nu
         shell: String,
-        /// Binary name used in the generated script
-        #[arg(long, default_value = "runex")]
-        bin: String,
+        /// Binary name (or absolute path) baked into the generated script.
+        /// When omitted, defaults to the absolute path of the running
+        /// runex binary (`current_exe()`). Pass `--bin runex` explicitly
+        /// to keep the legacy bare-name behaviour for hand-managed
+        /// dotfiles that source `runex export bash` from a different
+        /// runex installation than the one that wrote them.
+        #[arg(long)]
+        bin: Option<String>,
     },
     /// Show what a token expands to (and why it may be skipped)
     Which {
@@ -509,10 +517,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let outcome: CmdOutcome = match cli.command {
         Commands::Version => cmd::version::handle(cli.json)?,
-        Commands::List { shell: shell_str } => {
+        Commands::List { filter, shell: shell_str } => {
             let (_config_path, config) = resolve_config(cli.config.as_deref())?;
             let shell = resolve_shell(shell_str.as_deref())?;
-            cmd::list::handle(&config, shell, cli.json)?
+            cmd::list::handle(&config, shell, cli.json, filter.as_deref())?
         }
         Commands::Which { token, why, shell: shell_str } => {
             let ctx = AppContext::build(
@@ -547,6 +555,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?
         }
         Commands::Export { shell, bin } => cmd::export::handle(shell, bin, cli.config.as_deref())?,
+        // bin is Option<String>: None => current_exe() default, Some(s) => verbatim
         Commands::Doctor { no_shell_aliases, verbose, strict } => cmd::doctor::handle(
             cli.config.as_deref(),
             cli.path_prepend.as_deref(),
@@ -597,7 +606,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 default_config_path()?
             };
-            cmd::add_remove::handle_add(&config_path, &key, &expand, when.as_deref())?
+            cmd::add_remove::handle_add(
+                &config_path,
+                &key,
+                &expand,
+                when.as_deref(),
+                &infra::env::SystemHomeDir,
+            )?
         }
         Commands::Remove { key } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
@@ -605,7 +620,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 default_config_path()?
             };
-            cmd::add_remove::handle_remove(&config_path, &key)?
+            cmd::add_remove::handle_remove(&config_path, &key, &infra::env::SystemHomeDir)?
         }
     };
 

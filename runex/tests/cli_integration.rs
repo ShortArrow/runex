@@ -105,6 +105,58 @@ fn expand_condition_passes_with_path_prepend() {
     assert_eq!(stdout, "__runex_fake_lsd__");
 }
 
+#[test]
+fn expand_number_placeholder_repeats_unit() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\n\
+         key = \"up{number}\"\n\
+         expand = \"cd {number}\"\n\
+         number = \"../\"\n",
+    );
+    let (stdout, _, ok) = run(&["expand", "--token", "up3"], Some(cfg.path()), None);
+    assert!(ok);
+    assert_eq!(stdout, "cd ../../../");
+}
+
+#[test]
+fn expand_exact_rule_wins_over_number_pattern() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\n\
+         key = \"up{number}\"\n\
+         expand = \"cd {number}\"\n\
+         number = \"../\"\n\
+         [[abbr]]\n\
+         key = \"up2\"\n\
+         expand = \"cd ../EXACT\"\n",
+    );
+    // Exact rule wins for `up2` even though it appears later in the config.
+    let (stdout, _, _) = run(&["expand", "--token", "up2"], Some(cfg.path()), None);
+    assert_eq!(stdout, "cd ../EXACT");
+    // Pattern handles `up3`.
+    let (stdout, _, _) = run(&["expand", "--token", "up3"], Some(cfg.path()), None);
+    assert_eq!(stdout, "cd ../../../");
+}
+
+#[test]
+fn expand_number_pattern_passes_through_zero_and_over_max() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\n\
+         key = \"up{number}\"\n\
+         expand = \"cd {number}\"\n\
+         number = \"../\"\n",
+    );
+    // Zero is rejected (no fallback to exact `up` either).
+    let (stdout, _, ok) = run(&["expand", "--token", "up0"], Some(cfg.path()), None);
+    assert!(ok);
+    assert_eq!(stdout, "up0");
+    // 129 > MAX_NUMERIC_REPEAT (128) → pass-through.
+    let (stdout, _, _) = run(&["expand", "--token", "up129"], Some(cfg.path()), None);
+    assert_eq!(stdout, "up129");
+}
+
 // ─── expand --dry-run ─────────────────────────────────────────────────────────
 
 #[test]
@@ -189,6 +241,51 @@ fn list_json_is_valid_json_array() {
     assert!(!arr.is_empty());
     assert_eq!(arr[0]["key"], "gcm");
     assert_eq!(arr[0]["expand"], "git commit -m");
+}
+
+#[test]
+fn list_filter_shows_only_matching_key() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\nkey = \"ll\"\nexpand = \"ls -la\"\n\
+         [[abbr]]\nkey = \"ll.\"\nexpand = \"ls -laF\"\n\
+         [[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+    let (stdout, _, ok) = run(&["list", "ll"], Some(cfg.path()), None);
+    assert!(ok);
+    assert!(stdout.contains("ll\t"), "stdout: {stdout}");
+    // exact-match: `ll.` must not slip through even though it shares a prefix.
+    assert!(!stdout.contains("ll.\t"), "stdout: {stdout}");
+    assert!(!stdout.contains("gcm\t"), "stdout: {stdout}");
+}
+
+#[test]
+fn list_filter_no_match_is_empty_success() {
+    let cfg = write_config(
+        "version = 1\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+    let (stdout, _, ok) = run(&["list", "nope"], Some(cfg.path()), None);
+    assert!(ok, "no-match must still exit 0 — list is an enumeration command");
+    assert!(
+        stdout.trim().is_empty(),
+        "no-match must produce empty stdout: {stdout:?}",
+    );
+}
+
+#[test]
+fn list_filter_with_json_emits_filtered_array() {
+    let cfg = write_config(
+        "version = 1\n\
+         [[abbr]]\nkey = \"ll\"\nexpand = \"ls -la\"\n\
+         [[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n",
+    );
+    let (stdout, _, ok) = run(&["list", "ll", "--json"], Some(cfg.path()), None);
+    assert!(ok);
+    let arr: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("list --json must be valid JSON: {e}\nstdout: {stdout}"));
+    let items = arr.as_array().expect("expected JSON array");
+    assert_eq!(items.len(), 1, "should keep only the ll entry: {stdout}");
+    assert_eq!(items[0]["key"], "ll");
 }
 
 // ─── which ───────────────────────────────────────────────────────────────────
@@ -667,18 +764,27 @@ fn json_doctor_contract_pins_name_and_status_enum() {
 
 // ─── init --config ────────────────────────────────────────────────────────────
 
-/// Build a Command for `runex init` with HOME/USERPROFILE/PSModulePath/SHELL all
-/// redirected into `home_dir` so that shell detection and rc-file resolution
-/// stay entirely inside the temp directory on every platform.
+/// Build a Command for `runex init` with HOME/USERPROFILE/XDG_CONFIG_HOME/
+/// XDG_CACHE_HOME/LOCALAPPDATA/PSModulePath/SHELL all redirected into
+/// `home_dir` so that shell detection, rc-file resolution, and Phase G
+/// integration-cache writes stay entirely inside the temp directory on
+/// every platform.
 ///
-/// `PSModulePath` is removed to suppress pwsh detection on Windows; `SHELL` is
-/// forced to `/bin/bash` so that `rc_file_for()` resolves to `$HOME/.bashrc`
-/// inside the temp directory.
+/// `PSModulePath` is removed to suppress pwsh detection on Windows; `SHELL`
+/// is forced to `/bin/bash` so that `rc_file_for()` resolves to
+/// `$HOME/.bashrc` inside the temp directory.
+///
+/// XDG_CACHE_HOME / LOCALAPPDATA are pinned so that
+/// `infra::integration_cache::cache_path` resolves into the temp dir.
+/// Without this, parallel tests would share the real `~/.cache` and
+/// race on writes.
 fn init_cmd_in_dir(home_dir: &std::path::Path) -> Command {
     let mut cmd = Command::new(bin());
     cmd.env("HOME", home_dir)
         .env("USERPROFILE", home_dir)
         .env("XDG_CONFIG_HOME", home_dir.join(".config"))
+        .env("XDG_CACHE_HOME", home_dir.join(".cache"))
+        .env("LOCALAPPDATA", home_dir.join("AppData").join("Local"))
         .env_remove("PSModulePath")
         .env("SHELL", "/bin/bash");
     cmd
@@ -1228,6 +1334,88 @@ fn init_clink_writes_lua_to_resolved_path() {
     assert!(
         written.contains("RUNEX_BIN"),
         "written lua must reference RUNEX_BIN: {written}"
+    );
+}
+
+// ─── export --bin Phase G default-to-current_exe ───────────────────────────────
+
+/// Static-cache layout: when --bin is omitted, the generated script bakes
+/// the absolute path of the running runex binary into the hook
+/// invocation. This eliminates the per-keystroke PATH lookup that
+/// would otherwise hit a `mise` shim on WSL (~470 ms) or a slow
+/// `/mnt/c/...` 9p stat chain. The test runs the bin we built, so
+/// `current_exe()` resolves to the cargo target binary path.
+#[test]
+fn export_omitted_bin_bakes_current_exe_absolute_path() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _stderr, ok) = run(&["export", "bash"], Some(cfg.path()), None);
+    assert!(ok, "export bash with default --bin must succeed");
+
+    // Header records the bin used. Read the header line and confirm
+    // it's an absolute path to the current_exe binary, not bare "runex".
+    let bin_line = stdout
+        .lines()
+        .find(|l| l.starts_with("# runex-bin: "))
+        .expect("export output must contain `# runex-bin:` header");
+    let bin = bin_line.trim_start_matches("# runex-bin: ").trim();
+    assert!(
+        bin != "runex",
+        "default --bin must be the absolute path, not bare 'runex': got {bin:?}"
+    );
+    assert!(
+        std::path::Path::new(bin).is_absolute(),
+        "default --bin must be an absolute path: got {bin:?}"
+    );
+    // The hook function inside the script must invoke the same path.
+    assert!(
+        stdout.contains(&format!("{bin} hook --shell bash")) || stdout.contains(&format!("'{bin}' hook --shell bash")),
+        "hook function must invoke the baked absolute path: {stdout}"
+    );
+}
+
+/// Phase G: when --bin is explicitly passed (= power user wants a
+/// portable hand-managed dotfile), the bare string is preserved as-is
+/// and the hook function calls it via PATH lookup. This is the legacy
+/// behaviour, retained intentionally so users running multi-machine
+/// dotfile sync against differently-installed runex copies aren't
+/// forced into per-machine cache regen.
+#[test]
+fn export_explicit_bin_runex_preserves_bare_name() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _stderr, ok) = run(&["export", "bash", "--bin=runex"], Some(cfg.path()), None);
+    assert!(ok, "export bash --bin=runex must succeed");
+
+    let bin_line = stdout
+        .lines()
+        .find(|l| l.starts_with("# runex-bin: "))
+        .expect("export output must contain `# runex-bin:` header");
+    assert_eq!(
+        bin_line.trim(),
+        "# runex-bin: runex",
+        "explicit --bin=runex must keep the bare name verbatim"
+    );
+    // The hook function must invoke the bare PATH-resolved name.
+    assert!(
+        stdout.contains("'runex' hook --shell bash"),
+        "explicit --bin=runex must produce a PATH-resolved invocation: {stdout}"
+    );
+}
+
+/// Phase G: explicit --bin with a non-default value also passes through
+/// verbatim (e.g. an absolute path the user picked manually).
+#[test]
+fn export_explicit_bin_absolute_path_passes_through() {
+    let cfg = write_config("version = 1\n");
+    let custom = "/opt/custom/runex";
+    let (stdout, _stderr, ok) = run(
+        &["export", "bash", &format!("--bin={custom}")],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "export bash --bin=/opt/custom/runex must succeed");
+    assert!(
+        stdout.contains(&format!("# runex-bin: {custom}")),
+        "explicit --bin must appear verbatim in the header: {stdout}"
     );
 }
 

@@ -375,6 +375,7 @@ mod tests {
             key: key.into(),
             expand: crate::domain::model::PerShellString::All(format!("expand-{key}")),
             when_command_exists: None,
+            number: None,
         }
     }
 

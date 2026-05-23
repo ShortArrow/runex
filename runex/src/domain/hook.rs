@@ -70,17 +70,26 @@ where
             let mut new_line = String::with_capacity(prefix.len() + text.len() + right.len() + 1);
             new_line.push_str(prefix);
             new_line.push_str(&text);
-            let cursor_after_expand = match cursor_offset {
-                Some(off) => token_start + off,
-                None => token_start + text.len(),
+            // When the expansion declares a cursor placeholder, suppress the
+            // trigger space and park the cursor exactly where the rule asked
+            // for. Without a placeholder, replay the trigger space so the
+            // typing flow matches what an ordinary key press would have done.
+            let (cursor_after_expand, suppress_trigger_space) = match cursor_offset {
+                Some(off) => (token_start + off, true),
+                None => (token_start + text.len(), false),
             };
-            // Append the trailing space that the trigger key would have
-            // produced, then everything that was to the right of the old cursor.
-            new_line.insert(cursor_after_expand, ' ');
+            if !suppress_trigger_space {
+                new_line.insert(cursor_after_expand, ' ');
+            }
             new_line.push_str(right);
+            let final_cursor = if suppress_trigger_space {
+                cursor_after_expand
+            } else {
+                cursor_after_expand + 1
+            };
             HookAction::Replace {
                 line: new_line,
-                cursor: cursor_after_expand + 1,
+                cursor: final_cursor,
             }
         }
         ExpandResult::PassThrough(_) => insert_space(line, cursor),
@@ -109,7 +118,10 @@ fn token_start_of(left: &str) -> Option<usize> {
 }
 
 fn is_known_token(config: &Config, token: &str) -> bool {
-    config.abbr.iter().any(|abbr| abbr.key == token)
+    config
+        .abbr
+        .iter()
+        .any(|abbr| crate::domain::expand::match_abbr_key(&abbr.key, token).is_some())
 }
 
 /// Render a `HookAction` into a shell-specific eval-able string. The shell
@@ -368,14 +380,14 @@ mod tests {
     fn hook_handles_cursor_placeholder() {
         let config = sample_config();
         // Rule: `expand = "git commit -am '{}'"`. After expansion the `{}` is
-        // removed, cursor lands at that position, and the trigger space is
-        // inserted **at the cursor** (so the user can keep typing inside the
-        // quotes). That yields `git commit -am ' '` with cursor just after the
-        // inserted space.
+        // removed and the cursor lands at that position. The trigger space is
+        // suppressed because the placeholder author already chose where the
+        // cursor should rest — inserting a space would push the cursor away
+        // from the intended spot (issue #3).
         let action = hook(&config, Shell::Bash, "gca", 3, always_exists);
         if let HookAction::Replace { line, cursor } = action {
-            assert_eq!(line, "git commit -am ' '");
-            assert_eq!(cursor, 17);
+            assert_eq!(line, "git commit -am ''");
+            assert_eq!(cursor, 16);
         } else {
             panic!("expected Replace, got {:?}", action);
         }

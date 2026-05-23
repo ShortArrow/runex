@@ -627,6 +627,7 @@ mod tests {
                 key: "gcm".into(),
                 expand: crate::domain::model::PerShellString::All("git commit -m".into()),
                 when_command_exists: None,
+                number: None,
             }],
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
@@ -688,6 +689,7 @@ mod tests {
                 key: "gcm".into(),
                 expand: crate::domain::model::PerShellString::All("git commit -m".into()),
                 when_command_exists: None,
+                number: None,
             }],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));

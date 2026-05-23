@@ -44,15 +44,23 @@ mod bash {
             .unwrap_or(false)
     }
 
-    /// Run a snippet inside a non-interactive bash that has sourced the runex
+    /// Run a snippet inside an interactive bash that has sourced the runex
     /// integration script. Returns stdout trimmed.
+    ///
+    /// `-i` is required so the integration script's interactive guard
+    /// (Phase G `case $- in *i*) ;; *) return 0 ;; esac`) does not
+    /// short-circuit and skip the function definitions we need to
+    /// exercise. The contract being tested is the per-keystroke logic
+    /// of `__runex_expand`, which is a pure function on
+    /// READLINE_LINE/READLINE_POINT once it's been defined; the
+    /// `bind -x` step itself is exercised by the PTY suite.
     fn run_bash(config: &NamedTempFile, snippet: &str) -> String {
         let bin = bin_path();
         let script = format!(
             "source <({bin} export bash --bin {bin})\n{snippet}"
         );
         let output = Command::new("bash")
-            .args(["--norc", "--noprofile", "-c", &script])
+            .args(["--norc", "--noprofile", "-i", "-c", &script])
             .env("RUNEX_CONFIG", config.path())
             .output()
             .unwrap();

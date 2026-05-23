@@ -178,9 +178,10 @@ Each `[[abbr]]` entry defines one abbreviation rule.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `key` | string | yes | The short token to match. |
+| `key` | string | yes | The short token to match. May contain `{number}` once (see [Numeric repetition](#numeric-repetition-number-placeholder)). |
 | `expand` | string or per-shell table | yes | The full text to expand into. See [per-shell form](#per-shell-form) below. |
 | `when_command_exists` | array of strings or per-shell table | no | Only expand if **all** listed commands resolve via `which` at hook time. |
+| `number` | string | no | Repetition unit for the `{number}` placeholder in `key`/`expand`. See [Numeric repetition](#numeric-repetition-number-placeholder). |
 
 #### Per-shell form
 
@@ -263,6 +264,39 @@ expand = "git commit -am '{}'"
 
 When `gcam` is expanded, the cursor will be placed between the quotes instead of at the end. If `{}` is absent, the cursor goes to the end of the expansion (default behaviour).
 
+### Numeric repetition `{number}` placeholder
+
+A `[[abbr]]` rule can use the `{number}` placeholder to capture trailing digits in the token and replicate a unit string in the expansion. Add a `number = "<unit>"` field on the rule to declare the unit:
+
+```toml
+[[abbr]]
+key    = "up{number}"
+expand = "cd {number}"
+number = "../"
+```
+
+`up3` then expands to `cd ../../../`; `up10` expands to `cd ../../../../../../../../../../`.
+
+**Matching:**
+
+- The token must equal `<prefix><digits><suffix>` where `<prefix>` and `<suffix>` are the literal text around `{number}` in `key`, and `<digits>` is a non-empty run of ASCII decimals.
+- Captured value must be in the range `1..=128` (`MAX_NUMERIC_REPEAT`). `up0` and `up129` pass through unchanged.
+- Match is two-phase: every exact-key rule is tried first, then pattern rules. An exact `up2` rule therefore beats a pattern `up{number}` even when the pattern appears earlier in the config.
+
+**Rendering:**
+
+- `{number}` inside `expand` is replaced by the unit string repeated `<captured-count>` times.
+- The cursor placeholder `{}` is still honoured — `{number}` substitution happens first, then `{}` is removed and the cursor lands at that position.
+
+**Limits and rejections (enforced at config-load time):**
+
+- `key` may contain `{number}` zero or one time. Two or more is rejected.
+- `key` may not contain any other `{...}` syntax. `{foo}`, `{string}`, etc. are rejected.
+- `key` containing `{number}` without a `number` field is rejected.
+- A `number` field on a rule whose `key` has no `{number}` is rejected.
+- `number` unit is capped at 32 bytes (`MAX_NUMBER_UNIT_BYTES`) — combined with `MAX_NUMERIC_REPEAT = 128` this keeps a rendered expansion inside the existing 4096-byte `expand` cap.
+- Empty / NUL / ASCII control / Unicode-deceptive content in the unit is rejected (same rules as `expand`).
+
 ### Field limits and rejected characters
 
 Runex validates each field at config load time and rejects invalid values with a clear error.
@@ -275,6 +309,8 @@ Runex validates each field at config load time and rejects invalid values with a
 | `expand` | 4 096 bytes |
 | `when_command_exists` — each entry | 255 bytes |
 | `when_command_exists` — number of entries | 64 |
+| `number` — repetition unit | 32 bytes |
+| `{number}` — captured value | `1..=128` |
 
 **Rejected characters** (in `key`, `expand`, and `when_command_exists` entries):
 

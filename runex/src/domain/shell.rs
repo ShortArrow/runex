@@ -153,15 +153,24 @@ pub(crate) fn nu_quote_string_embedded(value: &str) -> String {
 /// - `\n`, `\r`, `\t` → two-character escape sequences
 /// - NUL is dropped (Lua uses C strings; NUL truncates them)
 /// - Unicode line/paragraph separators are dropped
-/// - Remaining ASCII control characters use three-digit decimal `\DDD` escapes.
-///   Zero-padding is required: without it `\1` followed by `0` would be read as
-///   `\10` (LF) rather than SOH followed by `"0"`.
+/// - **Deceptive Unicode (RLO, BOM, ZWSP, etc.) is dropped** so a
+///   crafted clink lua install path or cache path cannot produce a
+///   visually-deceiving comment that misrepresents what's being
+///   sourced (Phase G alignment with `is_nu_drop_char` policy).
+/// - Remaining ASCII control characters use three-digit decimal
+///   `\DDD` escapes. Zero-padding is required: without it `\1`
+///   followed by `0` would be read as `\10` (LF) rather than SOH
+///   followed by `"0"`.
 pub(crate) fn lua_quote_string(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
         if let Some(esc) = double_quote_escape(ch) {
             out.push_str(esc);
-        } else if ch == '\0' || is_unicode_line_separator(ch) {
+        } else if ch == '\0' || is_unsafe_for_display(ch) && !ch.is_ascii_control() {
+            // Drop deceptive Unicode (RLO/BOM/ZWSP) and Unicode
+            // line separators silently. ASCII controls fall through
+            // to the `\DDD` branch below so non-printables stay
+            // representable rather than disappear.
         } else if ch.is_ascii_control() {
             out.push_str(&format!("\\{:03}", ch as u8));
         } else {

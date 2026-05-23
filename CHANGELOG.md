@@ -7,6 +7,252 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Misleading `sudo` recipe in docs (#4).** `docs/recipes.md` and its
+  Japanese translation showed `apt-up = "apt update && apt upgrade"`
+  paired with `sudo apt-up<Space>` — but `sudo` only applies to the
+  command immediately after it, so the `apt upgrade` half ran as the
+  unprivileged user and silently failed. The section now spells out
+  the pitfall, shows the correct multi-command form
+  (`aptup = "sudo apt update && sudo apt upgrade"`, called without a
+  leading `sudo`), and gives a clear rule of thumb for when to bake
+  `sudo` into the expansion vs. typing it on the command line.
+
+- **Trigger space leaks into cursor placeholders (#3).** When an
+  abbreviation's `expand` contained `{}` (the cursor placeholder),
+  the trigger space that fired the expansion was also inserted at
+  the placeholder position. `gca<Space>` with
+  `expand = "git commit -am '{}'"` yielded
+  `git commit -am ' '` with the cursor after the stray space,
+  instead of `git commit -am ''` with the cursor between the
+  quotes. The trigger space is now suppressed whenever the
+  expansion declares a placeholder, so the rule author's chosen
+  cursor position is preserved.
+
+### Added
+
+- **`{number}` placeholder for numeric repetition (#1).** New named
+  placeholder lets a single rule capture trailing digits in the
+  token and repeat a unit string that many times in the expansion:
+
+  ```toml
+  [[abbr]]
+  key    = "up{number}"
+  expand = "cd {number}"
+  number = "../"
+  ```
+
+  Typing `up3<Space>` then expands to `cd ../../../`. Exact rules
+  still win when both could match the same token (e.g. `up2` exact
+  beats `up{number}`), so adding a pattern rule never weakens the
+  existing exact ones. Bounded by `MAX_NUMERIC_REPEAT = 128` and a
+  32-byte unit cap, so a dynamic expansion can never exceed what a
+  hand-written 4096-byte `expand` could already produce.
+
+- **`runex list <FILTER>` exact-key filter (#2).** `runex list` now
+  accepts an optional positional argument that narrows the output to
+  the single rule whose key matches exactly. Works for both the TSV
+  default output and `--json`. A no-match filter is a normal exit-0
+  with empty output (or an empty JSON array), so the command stays
+  scriptable. Match is case-sensitive and literal — no prefix /
+  substring / glob expansion; reach for `runex which <token>` when
+  you want the full per-shell + when_command_exists picture.
+
+- **Static shell integration cache (per-keystroke latency fix).** `runex init <shell>`
+  for bash/zsh/pwsh/nu now writes a static script to
+  `<XDG_CACHE_HOME>/runex/integration.<ext>` (matching clink's
+  long-standing pattern) and appends a one-line `source` to the
+  user's rcfile/profile. The cache file has the absolute
+  `current_exe()` path baked in, so per-keystroke hook
+  invocations no longer re-resolve `runex` through `$PATH`.
+  This removes the ~470 ms-per-keystroke latency users on WSL
+  with a `mise` shim ahead of `~/.cargo/bin/runex` were seeing
+  (mise startup overhead × every Space press in `bind -x`-style
+  callbacks).
+  - **Versioned cache header.** Each cache file starts with
+    `# runex-integration-version: 1` plus a `# runex-bin: <abs>`
+    line and a "do not edit" notice. Bumping the format in a
+    future release will be a one-line change here that doctor
+    surfaces as "outdated cache, re-run `runex init <shell>`".
+  - **Interactive guard inside the cache.** Templates now
+    early-return when sourced by a non-interactive shell
+    (`bash -c '...'`, CI scripts, plugin sandboxes), so
+    integration installs leave no side effects on those paths.
+  - **Auto-refresh on `runex add` / `runex remove`.** Existing
+    caches for shells the user has already installed get
+    silently regenerated when config changes, so new
+    abbreviations are picked up by the next shell start without
+    needing an explicit re-init. Shells without a cache are
+    skipped (no opt-in side effect).
+  - **`runex doctor` cache freshness check.** New
+    `integration:<shell>:cache` row per shell flags missing
+    binaries, version mismatches, and legacy
+    `eval "$(runex export bash)"`-style content. Clink keeps
+    its existing byte-compare freshness probe.
+- **`runex export <shell>` defaults `--bin` to `current_exe()`.**
+  Omitting `--bin` (the recommended path) bakes the absolute
+  binary path into the generated script. Passing `--bin runex`
+  explicitly keeps the legacy bare-name behaviour for power
+  users hand-managing dotfiles that source the same exported
+  script across multiple machines with different installations.
+  Also: `runex export <shell>` (non-clink) now prepends the
+  same versioned header as the cache file, so the byte stream
+  is interchangeable.
+
+### Changed
+
+- **`lua_quote_string` drops Unicode visual-deception
+  characters (RLO, BOM, ZWSP, etc.).** Previously these were
+  passed through unchanged because clink's only consumer
+  (`--bin`) restricted input to printable ASCII via
+  `validate_bin`. With the new static-cache layout, the clink
+  install path also flows through `lua_quote_string`, so the
+  quoter is now hardened in isolation rather than relying on
+  upstream validation.
+
+### Internal
+
+- **New module `infra::integration_cache`.** Owns the cache
+  path resolution, atomic write (sibling-temp + fsync +
+  rename), and header generation. Generalises the pattern that
+  was inline in `cmd::init::install_clink_lua` since 0.1.13.
+- **New `infra::env::xdg_cache_home_with`.** Mirrors the
+  existing `xdg_config_home_with`: `$XDG_CACHE_HOME` →
+  `$LOCALAPPDATA` (Windows) → `~/.cache` (non-Windows) →
+  `~/AppData/Local` (Windows fallback). Resolver-injectable for
+  hermetic tests.
+- **Cleaned up `app::init`.** Removed the inline `nu_quote_path`
+  helper (replaced by `domain::shell::nu_quote_string` now that
+  cache paths flow through there). The `nu_quote_path_escaping`
+  / `nu_quote_path_deceptive` test mods were re-pinned against
+  the new public API surface (`integration_line(Shell::Nu, …)`)
+  so the security regression coverage stays intact through the
+  refactor.
+
+### Tests
+
+- New `tests/shell_integration.rs` with five subprocess pins
+  against bash 4+ (Linux only): non-interactive guard works,
+  interactive subshell defines `__runex_expand`, header
+  contains version + bin lines, rcfile gains a `source` line
+  pointing at the cache, init cleans up a stale `.tmp` from a
+  simulated previous crash.
+- `infra::integration_cache::tests` (7 tests on Windows + 9 on
+  Linux): cache_path resolution per shell, XDG fallback, atomic
+  write, parent-dir auto-creation, symlink reject (Unix), header
+  format pinning.
+- `infra::integration_check::tests::cache_freshness` (7 tests):
+  every doctor branch (Skipped × 2, Ok × 2, Outdated × 4)
+  including the bare-`runex` opt-out path.
+- `cmd::add_remove::tests` (3 tests): silent refresh on add,
+  no-op preservation on zero-match remove, no auto-creation
+  for shells without a pre-existing cache.
+- `cli_integration` gains 3 new tests for `runex export bash`
+  default vs explicit `--bin`, and an env-isolation fix for
+  `init_cmd_in_dir` so parallel tests no longer race on the
+  real `~/.cache`.
+
+### Docs
+
+- New ADR
+  [`docs/decisions/0001-static-integration-cache.md`](docs/decisions/0001-static-integration-cache.md)
+  records the design rationale, considered alternatives
+  (doctor-WARN-only, rcfile-baked absolute path,
+  current_exe-default-only, lazy bind via PROMPT_COMMAND), and
+  the long-term implementation contract.
+- New ADR
+  [`docs/decisions/0002-containerized-linux-ci.md`](docs/decisions/0002-containerized-linux-ci.md)
+  captures the containerised Linux CI design: why Linux CI runs
+  inside a pinned GHCR image, why macOS / Windows stay native, and
+  the digest-pin bump procedure.
+- `CONTRIBUTING.md` documents the dev-container hand-check
+  command and how to roll a new `runex-ci` image digest into
+  `.github/workflows/ci.yml`.
+
+### CI
+
+- **Containerised Linux CI.** `test-linux` in
+  `.github/workflows/ci.yml` now runs inside the pinned
+  `ghcr.io/shortarrow/runex-ci@sha256:...` image instead of
+  installing zsh / pwsh / nu / xclip / wl-clipboard / xsel
+  ad-hoc on each run. The image is built and pushed by
+  `.github/workflows/build-ci-image.yml`
+  (Dockerfile: `containers/ci/ubuntu.Dockerfile`,
+  sanity check: `containers/ci/sanity.sh`). Bumping the digest
+  is a one-line commit so a re-built image cannot silently
+  change what the gate runs against. macOS and Windows jobs
+  stay on native runners.
+- **Build-time reproducibility hardening.** `ubuntu:24.04` is
+  pinned by manifest-list digest; `NU_VERSION`,
+  `RUST_TOOLCHAIN`, and `NODE_MAJOR` are explicit `ARG`s so
+  bumps show up in `git log -p`; `cargo test --locked` on every
+  job (linux/macos/windows) makes Cargo.lock drift fail loudly.
+- **Workflow security tightening.** All `actions/checkout`
+  steps in `ci.yml` and `build-ci-image.yml` now set
+  `persist-credentials: false`, matching `release.yml`.
+  `build-ci-image.yml` also runs as a build-only check on
+  `pull_request` (no GHCR push, no `packages: write` use), so a
+  broken Dockerfile fails CI before it can land on `develop`.
+
+### Docs
+
+- `docs/setup.md` (and the Japanese translation) rewrites the
+  PowerShell section for the static-cache install path, calls out
+  the PSReadLine dependency explicitly, and documents two PS5-
+  specific traps surfaced during 0.1.16 hand-checks: the default
+  `Restricted` execution policy refusing to dot-source the cache
+  file, and the `AllSigned` policy plus a newer PSReadLine in
+  `Documents\PowerShell\Modules` triggering an untrusted-publisher
+  prompt. The Troubleshooting list grows two pwsh-specific rows
+  pointing at the same conditions.
+
+### Migration
+
+Users on 0.1.14 with `eval "$(runex export bash)"` (or the
+shell-equivalent `Invoke-Expression (& 'runex' export pwsh | ...)`)
+in their rcfile see no immediate functional change — that form
+keeps working. But they don't get the static-cache speedup until
+they (a) delete the legacy line and (b) re-run
+`runex init <shell>`.
+
+`runex doctor` now detects this case explicitly. After upgrading
+to 0.1.16 the `integration:<shell>` row reports `Outdated` with
+the rcfile path, the cache path, and a remediation hint, e.g.:
+
+```
+[WARN] integration:bash: marker found in ~/.bashrc but rcfile uses
+       still calls `runex export bash` directly instead of sourcing the
+       cache at ~/.cache/runex/integration.bash
+       is unused — delete the old line and re-run `runex init bash`
+```
+
+If both the new cache-source line and the legacy `export <shell>`
+line are present (rare — usually because `init` was re-run before
+the legacy line was removed), the same row reports `Outdated` with
+a slightly different message asking to delete the duplicate.
+
+Doctor leaves the rcfile untouched. The fix is one line in the
+user's rcfile; runex deliberately does not auto-edit shell startup
+files.
+
+### Known issues
+
+- **Git Bash + cursor placeholder + Ctrl+C** (cygwin/msys readline
+  limitation). On Windows Git Bash (the cygwin/msys port of bash
+  used by Git for Windows), expanding an abbreviation whose
+  `expand` contains `{}` leaves the cursor in the middle of the
+  line. Pressing `Ctrl+C` right after the expansion does **not**
+  clear the line buffer — the next `Enter` will then run the
+  stale expanded command (e.g. an unintended empty
+  `git commit -am ''`). The same flow works correctly on Linux
+  bash, WSL bash, zsh, pwsh, and nu — only Git Bash's cygwin
+  readline backend is affected. As a workaround, press
+  `Backspace` (or any character key) before `Ctrl+C`, or just
+  delete the line manually. Runex 0.1.16 will treat cygwin/msys
+  bash as a distinct `Shell::CygwinBash` variant so the bash
+  template can apply a workaround tailored to that backend.
+
 ## [0.1.14] - 2026-05-06
 
 ### Added

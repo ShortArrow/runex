@@ -210,23 +210,62 @@ precondition を short-circuit する = 常に展開。空の
 ## 9. `sudo` 後でも展開される
 
 **ユースケース:** `sudo` の後でも略語を効かせたい。runex のコマンド位
-置判定は `sudo <token>` を行頭の `<token>` と同等に扱う。
+置判定は `sudo <token>` を行頭の `<token>` と同等に扱う。同様に `|`,
+`||`, `&&`, `;` の直後もコマンド位置として認識する。
 
 ```toml
 [[abbr]]
-key    = "apt-up"
-expand = "apt update && apt upgrade"
+key    = "apt-update"
+expand = "apt update"
 ```
 
 **動作:**
 
 ```
-sudo apt-up<Space>
+sudo apt-update<Space>
 ```
 
-→ `sudo apt update && apt upgrade `。同様に `|`, `||`, `&&`, `;` の直
-後もコマンド位置と認識される。`runex which <token> --why` でマッチを
+→ `sudo apt update `。`runex which apt-update --why` でマッチ理由を
 確認できる。
+
+### 落とし穴: `sudo <abbr>` は `&&` の右側に `sudo` を伝播しない
+
+`sudo` は直後の 1 コマンドにしか効かない。展開結果に `&&` や `;` が
+含まれる場合、それらの右側のコマンドは **通常ユーザーで** 実行される。
+よくある罠:
+
+```toml
+[[abbr]]
+key    = "apt-up"
+expand = "apt update && apt upgrade"   # NG: apt upgrade は root にならない
+```
+
+```
+sudo apt-up<Space>
+# 展開後: sudo apt update && apt upgrade
+# `apt update` は root、`apt upgrade` は通常ユーザーで失敗する。
+```
+
+パイプライン全体を root で動かしたいなら、各コマンドに個別に `sudo`
+を埋め込み、abbr 自体は `sudo` なしで呼ぶのが安全 (issue #4):
+
+```toml
+[[abbr]]
+key    = "aptup"
+expand = "sudo apt update && sudo apt upgrade"   # OK: 両方 root
+```
+
+```
+aptup<Space>
+# 展開後: sudo apt update && sudo apt upgrade
+```
+
+使い分けの目安:
+
+- **1 コマンド** → コマンド行側に `sudo` を書き (`sudo abbr`)、`expand`
+  には含めない。
+- **複数コマンド (`&&`, `;`, `|`)** → 各コマンドに個別に `sudo` を
+  埋め込み、abbr は素で呼ぶ。
 
 ---
 
@@ -332,6 +371,98 @@ doctor 出力を読む:
   `process=0` になる。クリーンな環境でシェルを再起動。
 - **`foo` が PATH 上のどこにもない**: インストールするか、シェルの
   PATH に追加してから `runex doctor` を再実行。
+
+---
+
+## 13. 大量の登録の中から 1 件だけ表示する
+
+**ユースケース:** 登録が増えて `runex list` の出力が画面に収まらず、
+目視で目的の key を探すのが大変。
+
+```bash
+runex list ll
+# ll<TAB>ls -la
+```
+
+positional 引数として key を渡すと、その key と **完全一致** する
+1 件だけを表示する。大文字小文字を区別し、prefix 一致では拾わない
+(`runex list ll` は `ll.` を含まない)。
+
+ヒットしないときは exit 0 で空出力なので、`[[ -z "$(runex list X)" ]]`
+のようなシェル判定にも素直に使える。
+
+`--json` を付けても同じく filter 後の配列を返す:
+
+```bash
+runex list ll --json
+# [
+#   { "key": "ll", "expand": "ls -la", "when_command_exists": null }
+# ]
+```
+
+prefix / 部分一致 / fuzzy 検索が欲しい場合は `runex which <token>`
+の方が用途に近い (per-shell 解決結果や `when_command_exists` の
+判定理由まで一緒に出る)。
+
+---
+
+## 14. `{number}` で数値繰り返し展開
+
+**ユースケース:** `up`, `up2`, `up3`, …, `up10` を全部別ルールで書く
+のが面倒。実態は `../` を回数ぶん繰り返したいだけ。
+
+```toml
+[[abbr]]
+key    = "up{number}"
+expand = "cd {number}"
+number = "../"
+```
+
+```
+up3<Space>     # → cd ../../../
+up10<Space>    # → cd ../../../../../../../../../../
+```
+
+`{number}` placeholder は `key` 側 (末尾の数字を捕捉) と `expand`
+側 (`number * <捕捉回数>` に置換) の両方で意味を持つ。
+
+### exact ルールとの共存
+
+exact key ルールは pattern ルールより常に優先される。これで pattern
+の上に特例を重ねられる:
+
+```toml
+[[abbr]]
+key    = "up{number}"
+expand = "cd {number}"
+number = "../"
+
+[[abbr]]
+key    = "up"          # 素の `up` は pattern に hit しない (数字なし)
+expand = "cd .."
+
+[[abbr]]
+key    = "up3"         # `up3` だけ特別扱いしたい
+expand = "cd ~/notes"
+```
+
+```
+up<Space>      # → cd ..
+up2<Space>     # → cd ../../
+up3<Space>     # → cd ~/notes   (exact ルール優先)
+up4<Space>     # → cd ../../../../
+```
+
+### 制限と注意点
+
+- 認識される placeholder は `{number}` のみ。`{foo}` など他の
+  `{...}` は parse 時点で reject。
+- 捕捉できる数値は 1〜128。`up0` / `up129` は pass-through。
+- `number` unit は 32 bytes 以内。これで展開結果が既存の `expand`
+  上限 4096 bytes を超えないことが保証される。
+- ASCII 半角数字のみ。`up3<Space>` は OK、`up３` (全角) は NG。
+- cursor placeholder `{}` と同居できる。named 置換が先に走り、
+  その後 `{}` が除去されてカーソルがその位置に置かれる。
 
 ---
 

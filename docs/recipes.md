@@ -222,6 +222,68 @@ bash/zsh have no trigger-on-paste race in the first place).
 
 ---
 
+## 6c. WSL + mise: keystroke latency from `runex` PATH lookup
+
+**Use case:** if you noticed `Space` causing the prompt to blank
+for ~1 second on WSL Linux before the expansion landed, you were
+hitting per-keystroke `mise` startup overhead. The static integration
+cache (the modern `runex init` layout) fixes this at the source.
+
+**Symptom (0.1.14 and earlier):**
+
+- Your bashrc has `eval "$(runex export bash)"` from `runex init`.
+- Your `$PATH` has `~/.local/share/mise/shims` ahead of
+  `~/.cargo/bin` (the standard `mise activate` setup).
+- `mise install` placed a `runex` shim under
+  `~/.local/share/mise/shims/runex`.
+- Every Space press invokes `__runex_expand`, which calls
+  `'runex' hook ...`. PATH resolves `runex` to the mise shim,
+  which spawns the real `mise` binary, which then `exec`s the
+  actual runex. Result: ~470 ms per keystroke before the hook
+  even runs (measured: 0m0.474s through the shim, 0m0.002s direct).
+
+**Fix:** re-run `runex init <shell>` once.
+
+```bash
+runex init bash --yes
+exec bash    # or open a new terminal
+```
+
+That writes `~/.cache/runex/integration.bash` with the absolute
+`runex` path baked in, replaces the rcfile's `eval $(...)` line
+with a static `source` of that cache file, and per-keystroke
+hook calls go directly to the real binary — no shim, no PATH
+walk, no measurable latency.
+
+**Verify:**
+
+```sh
+runex doctor
+# integration:bash:cache: cache up-to-date at ~/.cache/runex/integration.bash
+```
+
+If you saw `Outdated WARN` instead, that's the legacy cache; the
+re-init above clears it.
+
+**Related minor speedup:** `runex hook` also runs
+`when_command_exists` checks via `which::which`, which walks
+`$PATH`. On WSL the inherited Windows PATH adds 90+ entries under
+`/mnt/c/...` that get stat()ed over 9p. If you don't need any
+Windows tools from inside WSL, drop those entries from `$PATH`
+in your bashrc:
+
+```bash
+PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '^/mnt/c/' | paste -sd ':' -)
+export PATH
+```
+
+This is purely a `which::which` cache-miss optimisation; it's
+optional and unrelated to the runex install. The static cache
+file means runex itself no longer cares about
+your PATH shape after init.
+
+---
+
 ## 7. Different commands on Windows and Unix
 
 **Use case:** `rm -i` on Unix, `Remove-Item` in PowerShell.
@@ -272,24 +334,62 @@ short-circuits the precondition — always expand. An empty
 
 **Use case:** you want abbreviations to keep working after `sudo`.
 runex's command-position detection treats `sudo <token>` the same as
-`<token>` at the start of the line.
+`<token>` at the start of the line — so does `|`, `||`, `&&`, `;`.
 
 ```toml
 [[abbr]]
-key    = "apt-up"
-expand = "apt update && apt upgrade"
+key    = "apt-update"
+expand = "apt update"
 ```
 
 **Try it:**
 
 ```
-sudo apt-up<Space>
+sudo apt-update<Space>
 ```
 
-expands to `sudo apt update && apt upgrade `. Same with `|` and `&&`:
-runex recognises `<token>` after `|`, `||`, `&&`, `;`, and `sudo` as
-command position. `runex which <token> --why` will show the rule
-matched.
+expands to `sudo apt update `. `runex which apt-update --why` will
+confirm the rule matched. Same trick works after `|`, `||`, `&&`,
+`;`, and `sudo` itself.
+
+### Pitfall: `sudo <abbr>` does **not** propagate `sudo` across `&&`
+
+`sudo` only applies to the single command it prefixes. If the
+expansion contains `&&` or `;`, every command on the right of those
+separators runs as your normal user. So this trips people up:
+
+```toml
+[[abbr]]
+key    = "apt-up"
+expand = "apt update && apt upgrade"   # WRONG: apt upgrade won't be root
+```
+
+```
+sudo apt-up<Space>
+# expands to: sudo apt update && apt upgrade
+# `apt update` runs as root, `apt upgrade` runs as you and fails.
+```
+
+If the whole pipeline needs root, bake `sudo` into each command and
+type the abbr without `sudo` in front of it (issue #4):
+
+```toml
+[[abbr]]
+key    = "aptup"
+expand = "sudo apt update && sudo apt upgrade"   # OK: both as root
+```
+
+```
+aptup<Space>
+# expands to: sudo apt update && sudo apt upgrade
+```
+
+Rule of thumb:
+
+- **Single command** → put `sudo` on the command line (`sudo abbr`)
+  and leave it out of the `expand` value.
+- **Multi-command (`&&`, `;`, `|`)** → bake `sudo` into every command
+  in `expand` and call the abbr bare.
 
 ---
 
@@ -396,6 +496,102 @@ Cross-check:
   with `process=0`. Restart the shell with a clean environment.
 - **`foo` isn't on any registered PATH**: install it, or add its
   install dir to your shell's PATH and rerun `runex doctor`.
+
+---
+
+## 13. Looking up one abbreviation in a long list
+
+**Use case:** your config has grown past a screenful of rules and
+`runex list` scrolls off the top before you can find the one you
+care about.
+
+```bash
+runex list ll
+# ll<TAB>ls -la
+```
+
+Pass the key as a positional argument to `runex list` and only the
+matching entry is printed. The match is exact and case-sensitive —
+`runex list ll` does not also print `ll.` — so a hit is unambiguous
+and a non-match is silent (`runex list nope` exits 0 with no output,
+which is the same shape a `[[ -z "$(runex list X)" ]]` script needs).
+
+The filter applies to `--json` the same way:
+
+```bash
+runex list ll --json
+# [
+#   { "key": "ll", "expand": "ls -la", "when_command_exists": null }
+# ]
+```
+
+For prefix / substring / fuzzy lookup, use `runex which <token>`
+instead — it reports the same key plus the per-shell expansion and any
+`when_command_exists` gates that were applied.
+
+---
+
+## 14. Numeric repetition with `{number}`
+
+**Use case:** writing `up`, `up2`, `up3`, … `up10` as separate rules
+when they all just want to repeat the same unit (`../`) gets old fast.
+
+```toml
+[[abbr]]
+key    = "up{number}"
+expand = "cd {number}"
+number = "../"
+```
+
+```
+up3<Space>     # → cd ../../../
+up10<Space>    # → cd ../../../../../../../../../../
+```
+
+The `{number}` placeholder appears in both the `key` (where it
+captures the trailing digits) and the `expand` (where it gets
+replaced by `number * <captured count>`).
+
+### Coexisting with exact rules
+
+Exact-key rules always win when they could also match the token.
+That means you can layer special cases on top of a pattern:
+
+```toml
+[[abbr]]
+key    = "up{number}"
+expand = "cd {number}"
+number = "../"
+
+[[abbr]]
+key    = "up"          # bare `up` doesn't match the pattern (no digits)
+expand = "cd .."
+
+[[abbr]]
+key    = "up3"         # special case wins for `up3` even when the
+expand = "cd ~/notes"  # pattern would also handle it
+```
+
+```
+up<Space>      # → cd ..
+up2<Space>     # → cd ../../
+up3<Space>     # → cd ~/notes   (exact rule wins)
+up4<Space>     # → cd ../../../../
+```
+
+### Limits and gotchas
+
+- `{number}` is the only recognised placeholder today; `{foo}` or
+  any other `{...}` shape is rejected at config-parse time.
+- The captured number must be 1–128. `up0` and `up129` pass through
+  unchanged (no expansion).
+- The `number` unit is capped at 32 bytes so the rendered result
+  cannot exceed the existing 4096-byte limit on `expand`.
+- Only ASCII decimal digits count — `up3<Space>` works, `up３`
+  (full-width) does not.
+- The cursor placeholder `{}` works in the same template; named
+  substitution happens first, then `{}` is removed and the cursor
+  lands there.
 
 ---
 

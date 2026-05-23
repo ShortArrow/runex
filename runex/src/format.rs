@@ -401,6 +401,7 @@ mod tests {
             key: key.into(),
             expand: crate::domain::model::PerShellString::All(exp.into()),
             when_command_exists: None,
+            number: None,
         }
     }
 
@@ -411,6 +412,7 @@ mod tests {
             when_command_exists: Some(crate::domain::model::PerShellCmds::All(
                 cmds.into_iter().map(String::from).collect(),
             )),
+            number: None,
         }
     }
 

@@ -270,7 +270,7 @@ fn suggest_similar(name: &str, candidates: &[&str]) -> Option<String> {
 const KNOWN_TOP_LEVEL_KEYS: &[&str] = &["version", "keybind", "precache", "abbr"];
 
 /// Known keys inside an `[[abbr]]` table.
-const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists"];
+const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists", "number"];
 
 /// Known keys inside `[keybind]`.
 const KNOWN_KEYBIND_KEYS: &[&str] = &["trigger", "self_insert"];
@@ -532,6 +532,7 @@ where
         checks.push(check_effective_search_path(summary));
     }
     checks.extend(integration_marker_checks(&env_info.check_rcfile_markers));
+    checks.extend(integration_cache_checks(&env_info.check_rcfile_markers));
     if let Some(export) = env_info.clink_export_for_drift_check.as_deref() {
         let r = crate::infra::integration_check::check_clink_lua_freshness(
             export,
@@ -582,6 +583,30 @@ fn integration_marker_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
     out
 }
 
+/// Phase G: run the static integration-cache freshness check for
+/// each shell. Outputs `integration:<shell>:cache` rows in doctor.
+/// `Skipped` is the common case (no cache installed yet) and is
+/// rendered as Ok so users without Phase G install don't see noise.
+fn integration_cache_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
+    use crate::infra::env::SystemHomeDir;
+    use crate::infra::integration_check::check_cache_freshness;
+    use crate::domain::shell::Shell;
+    let mut out = Vec::new();
+    if sel.bash {
+        out.push(integration_check_to_check(check_cache_freshness(Shell::Bash, &SystemHomeDir)));
+    }
+    if sel.zsh {
+        out.push(integration_check_to_check(check_cache_freshness(Shell::Zsh, &SystemHomeDir)));
+    }
+    if sel.pwsh {
+        out.push(integration_check_to_check(check_cache_freshness(Shell::Pwsh, &SystemHomeDir)));
+    }
+    if sel.nu {
+        out.push(integration_check_to_check(check_cache_freshness(Shell::Nu, &SystemHomeDir)));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,6 +629,7 @@ mod tests {
             when_command_exists: Some(crate::domain::model::PerShellCmds::All(
                 cmds.into_iter().map(String::from).collect(),
             )),
+            number: None,
         }
     }
 
@@ -612,6 +638,7 @@ mod tests {
             key: key.into(),
             expand: crate::domain::model::PerShellString::All(exp.into()),
             when_command_exists: None,
+            number: None,
         }
     }
 
@@ -855,6 +882,7 @@ mod tests {
             key: "ls".into(),
             expand: crate::domain::model::PerShellString::All("lsd".into()),
             when_command_exists: Some(crate::domain::model::PerShellCmds::All(vec!["cmd\x07inject".into()])),
+            number: None,
         }]);
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.contains("command:"));
@@ -889,6 +917,7 @@ mod tests {
             key: "ls".into(),
             expand: crate::domain::model::PerShellString::All("lsd".into()),
             when_command_exists: Some(crate::domain::model::PerShellCmds::All(vec!["cmd\x1b[2Jevil".into()])),
+            number: None,
         }]);
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.starts_with("command:"));

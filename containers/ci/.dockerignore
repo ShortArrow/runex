@@ -1,0 +1,9 @@
+# Build context is `containers/ci/` (see build-ci-image.yml `context:`).
+#
+# Only `sanity.sh` is COPY'd into the image; the Dockerfile itself is
+# read by buildx via `file:` and doesn't need to ship in the context.
+# Excluding everything else keeps the context tiny so cache hits are
+# stable across unrelated edits in the repo.
+
+*
+!sanity.sh
