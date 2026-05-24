@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-05-23
+
 ### Fixed
 
 - **Misleading `sudo` recipe in docs (#4).** `docs/recipes.md` and its
