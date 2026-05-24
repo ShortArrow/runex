@@ -327,6 +327,14 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
   to "literal space" when `runex hook` errors out as an unknown
   subcommand, and it's hard to debug from the user side. Don't skip.
 
+  The helper edits `packaging/aur-bin/PKGBUILD` and writes
+  `packaging/aur-bin/.SRCINFO` **in this repo as well** (the AUR
+  clone copy is taken from those). Commit the in-repo changes as
+  part of the back-merge step so the template stays in sync with
+  the published AUR version — otherwise the in-repo PKGBUILD
+  drifts (it stayed pinned at 0.1.11 across the 0.1.12–0.1.14
+  cycle before this rule was added).
+
 - [ ] **Homebrew tap.** Use the helper:
 
   ```bash
