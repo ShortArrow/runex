@@ -313,15 +313,18 @@ If a trigger key produces a literal space instead of expanding:
    output with its own header). The cache's interactive guard runs
    before the function definitions, so a malformed cache silently
    skips them. Re-run `runex init pwsh` to rewrite the cache cleanly.
-7. **Git Bash: Ctrl+C does not clear the line after a `{}`-placeholder
-   expansion** (cygwin/msys readline limitation). On Git Bash specifically,
-   pressing `Ctrl+C` immediately after expanding an abbreviation whose
-   `expand` contained `{}` (so the cursor lands in the middle of the
-   line) does **not** clear the line buffer. A subsequent `Enter` then
-   runs the stale expanded command, e.g. an empty `git commit -am ''`.
-   The same flow works correctly on Linux bash, WSL bash, zsh, pwsh,
-   and nu — only Git Bash's cygwin readline is affected. Workaround:
-   press `Backspace` (or any character key) before `Ctrl+C`, or just
-   delete the line manually. Runex 0.1.16 will treat cygwin/msys bash
-   as a distinct shell variant so the bash template can apply a
-   workaround tailored to that backend.
+7. **Git Bash: trade-off — command-position detection is disabled.**
+   On Git Bash specifically, runex switches to a *bake-mode* dispatcher
+   that looks expansions up from a static table baked into the cache
+   file, never spawning the `runex` Windows binary from inside the
+   trigger handler. That is what fixes the 0.1.16 Ctrl+C-after-
+   expansion bug (cygwin readline lost the next SIGINT whenever a
+   `bind -x` handler spawned a Win32 process). The trade-off: the
+   bake dispatcher expands any trailing token that matches an
+   abbreviation, including in argument position. For example, on
+   Linux bash `echo gst<Space>` leaves `gst` alone because it is not
+   the command word, but on Git Bash it expands. Quote the literal
+   (`echo "gst"`) or pick abbreviation keys that won't collide with
+   English words. Linux bash, WSL bash, zsh, pwsh, and nu continue
+   to use the runtime hook with full command-position detection;
+   only Git Bash takes the trade-off.
