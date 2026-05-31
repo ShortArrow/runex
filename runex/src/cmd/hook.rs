@@ -24,18 +24,17 @@ pub(crate) fn handle(
 ) -> CmdResult {
     let shell = Shell::from_str(shell_str).map_err(|e| format!("{}", e))?;
 
+    // Shells pass `--cursor` in their own unit: pwsh uses UTF-16 code
+    // units (.NET / PSReadLine native), every other shell uses a char
+    // (Unicode scalar value) count. The domain layer expects a byte
+    // offset. Convert once here at the cmd/app boundary so every
+    // downstream path sees a consistent byte cursor (issue #6).
+    let cursor = crate::app::hook::shell_cursor_to_byte(shell, line, cursor);
+
     // Per-keystroke cost guard. An oversize --line short-circuits to
     // a literal-space InsertSpace before any expansion logic runs.
     if line.len() > MAX_HOOK_LINE_BYTES {
-        let cursor_safe = cursor.min(line.len());
-        let mut s = String::with_capacity(line.len() + 1);
-        s.push_str(&line[..cursor_safe]);
-        s.push(' ');
-        s.push_str(&line[cursor_safe..]);
-        let action = crate::app::hook::HookAction::InsertSpace {
-            line: s,
-            cursor: cursor_safe + 1,
-        };
+        let action = crate::app::hook::insert_space_action(line, cursor);
         println!("{}", crate::app::hook::render(shell, &action));
         return Ok(CmdOutcome::Ok);
     }
@@ -43,17 +42,7 @@ pub(crate) fn handle(
     // If the user pasted a block, the pwsh wrapper sets this flag so we skip
     // expansion entirely and behave like a normal space keypress.
     if paste_pending {
-        let action = crate::app::hook::HookAction::InsertSpace {
-            line: {
-                let mut s = String::with_capacity(line.len() + 1);
-                let cursor = cursor.min(line.len());
-                s.push_str(&line[..cursor]);
-                s.push(' ');
-                s.push_str(&line[cursor..]);
-                s
-            },
-            cursor: cursor.min(line.len()) + 1,
-        };
+        let action = crate::app::hook::insert_space_action(line, cursor);
         println!("{}", crate::app::hook::render(shell, &action));
         return Ok(CmdOutcome::Ok);
     }
@@ -68,12 +57,7 @@ pub(crate) fn handle(
         // No valid config: emit a plain InsertSpace and return. This avoids
         // making every keypress a no-op (which would swallow the trigger key)
         // when a user has a malformed config they haven't fixed yet.
-        let cursor_safe = cursor.min(line.len());
-        let mut s = String::with_capacity(line.len() + 1);
-        s.push_str(&line[..cursor_safe]);
-        s.push(' ');
-        s.push_str(&line[cursor_safe..]);
-        let action = crate::app::hook::HookAction::InsertSpace { line: s, cursor: cursor_safe + 1 };
+        let action = crate::app::hook::insert_space_action(line, cursor);
         println!("{}", crate::app::hook::render(shell, &action));
         return Ok(CmdOutcome::Ok);
     };

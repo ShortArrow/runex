@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-05-31
+
+### Fixed
+
+- **Multi-byte (UTF-8) input corrupted by `runex hook` cursor
+  mismatch (#6).** Every shell sends `--cursor` in its own native
+  unit — bash, zsh, clink, and nu count Unicode scalar values
+  (= chars); pwsh counts UTF-16 code units. The Rust hook used the
+  raw value as a byte offset, which agreed by accident on pure ASCII
+  but split mid-character on Japanese, emoji, or any other non-ASCII
+  input. The reporter's PoC: typing `ls ./おはよう ./test1` with the
+  cursor at char 10 and pressing Space inserted the space between
+  「は」 and 「よ」 instead of after 「う」, and pressing Space
+  repeatedly grew that misplaced gap. The same misalignment was
+  surfacing as silent corruption in any expansion that ran with a
+  multi-byte buffer.
+
+  `cmd::hook` now converts the incoming cursor into a byte offset
+  exactly once at the cmd/app boundary (via
+  `app::hook::shell_cursor_to_byte`), and `app::hook::render`
+  converts back to the shell's native unit on the way out. pwsh's
+  UTF-16 path uses a separate helper so cursors landing right after
+  an emoji (a surrogate pair = 2 code units) round-trip
+  byte-for-byte. zsh keeps splitting `LBUFFER`/`RBUFFER` by byte
+  because that's what zsh's renderer needs; the conversion only
+  applies where a cursor *number* crosses the shell boundary.
+
+  The Git Bash bake-mode dispatcher introduced in 0.1.17 is
+  unaffected — it slices `${READLINE_LINE:0:READLINE_POINT}` in
+  pure bash, which is char-based, so the bake path was correct
+  to begin with.
+
+### Internal
+
+- `app::hook` gained four conversion helpers (`char_cursor_to_byte`,
+  `byte_cursor_to_char`, `utf16_cursor_to_byte`, `byte_cursor_to_utf16`)
+  and a dispatcher (`shell_cursor_to_byte`) used at the cmd/app
+  boundary. Each is unit-tested for ASCII identity, Japanese (BMP
+  3-byte), emoji (surrogate-pair / 4-byte), combining marks, RTL
+  marks, NUL, empty line, past-end clamping, and round-trip
+  symmetry against its inverse.
+
+- `cmd::hook::handle` lost three near-identical `let cursor_safe =
+  cursor.min(line.len()); let mut s = String::with_capacity(...);
+  s.push_str(&line[..cursor_safe]); ...` blocks. The shared shape now
+  lives behind `app::hook::insert_space_action(line, byte_cursor)`,
+  which the oversize-line / paste-pending / config-load-failure
+  short-circuits call. Tidy First refactor that ships in the same PR
+  as the fix.
+
+### Tests
+
+- 28 new unit tests in `app::hook` (= the four conversion helpers,
+  plus round-trip property tests against their inverses).
+- 7 new e2e tests in `tests/cli_integration.rs::hook_*` running
+  `runex hook --shell <s> --line <multibyte> --cursor <N>` for each
+  of bash / zsh / pwsh / clink / nu and asserting the shell-correct
+  cursor unit comes back. The bash case is the issue reporter's PoC
+  verbatim; the pwsh case exercises the emoji surrogate-pair path.
+
 ## [0.1.17] - 2026-05-31
 
 ### Fixed
