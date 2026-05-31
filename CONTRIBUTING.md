@@ -327,6 +327,46 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
   to "literal space" when `runex hook` errors out as an unknown
   subcommand, and it's hard to debug from the user side. Don't skip.
 
+  The helper edits `packaging/aur-bin/PKGBUILD` and writes
+  `packaging/aur-bin/.SRCINFO` **in this repo as well** (the AUR
+  clone copy is taken from those). Commit the in-repo changes as
+  part of the back-merge step so the template stays in sync with
+  the published AUR version — otherwise the in-repo PKGBUILD
+  drifts (it stayed pinned at 0.1.11 across the 0.1.12–0.1.14
+  cycle before this rule was added).
+
+- [ ] **AUR `runex` (source).** Sibling of `runex-bin` (binary);
+  this package builds from the `runex` crate published to crates.io
+  by `release.yml`. It is **not interchangeable** with `runex-bin`
+  — users pick one, and the PKGBUILD declares
+  `conflicts=('runex-bin')` (and `runex-bin` declares
+  `conflicts=('runex')`) to enforce that. Use the helper:
+
+  ```bash
+  packaging/aur/release.sh X.Y.Z ~/aur/runex
+  ```
+
+  Same sha-fetch + PKGBUILD + .SRCINFO + local-commit flow as
+  `runex-bin`, but the source is the `.crate` from crates.io —
+  so the script must run **after** the crates.io publish completes
+  (= same gate as Homebrew). Push manually:
+
+  ```bash
+  cd ~/aur/runex
+  GIT_SSH_COMMAND='ssh -i ~/.ssh/aur' git push origin master
+  ```
+
+  The helper also edits `packaging/aur/PKGBUILD` and writes
+  `packaging/aur/.SRCINFO` in this repo. Commit those in the
+  back-merge step alongside the `runex-bin` updates — same rule,
+  same reason (the in-repo template stays the source of truth so
+  it doesn't drift like `runex-bin`'s did across 0.1.12–0.1.14).
+
+  Historical note: `runex` was a third-party AUR package
+  (maintainer: Rafael Dominiquini) through 0.1.16. Maintainership
+  was transferred to ShortArrow on 2026-05-25. Dominiquini is
+  preserved as `Contributor:` in the PKGBUILD header.
+
 - [ ] **Homebrew tap.** Use the helper:
 
   ```bash

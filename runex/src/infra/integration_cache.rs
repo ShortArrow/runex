@@ -48,7 +48,17 @@ use crate::infra::env::{xdg_cache_home_with, HomeDirResolver};
 /// header layout changes in a way that doctor / future runex
 /// versions need to reject. Read by
 /// [`crate::infra::integration_check::check_cache_freshness`].
-pub(crate) const INTEGRATION_CACHE_VERSION: u32 = 1;
+///
+/// History
+/// -------
+/// - `1` (0.1.13–0.1.16): runtime-hook integration; `bind -x` invokes
+///   `runex hook` on every keypress.
+/// - `2` (0.1.17): bash integration adds the bake-mode dispatcher used
+///   by the cygwin/msys path (issue #7 workaround). v1 caches still
+///   load on the exec path, so the bump exists to push `runex doctor`
+///   into nudging Git Bash users back to `runex init bash` so they
+///   pick up the Ctrl+C fix.
+pub(crate) const INTEGRATION_CACHE_VERSION: u32 = 2;
 
 /// Marker token that appears in the cache header so doctor can
 /// re-identify a runex-managed file even if the user has renamed
@@ -291,7 +301,8 @@ mod tests {
     #[test]
     fn cache_header_contains_required_fields() {
         let h = cache_header("#", "/abs/path/to/runex");
-        assert!(h.contains("runex-integration-version: 1"));
+        let expected_version = format!("runex-integration-version: {INTEGRATION_CACHE_VERSION}");
+        assert!(h.contains(&expected_version), "header missing version field: {h}");
         assert!(h.contains("runex-bin: /abs/path/to/runex"));
         assert!(h.contains("do not edit"));
     }

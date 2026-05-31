@@ -161,7 +161,7 @@ fn cache_header_pins_version_and_bin() {
     let body = std::fs::read_to_string(&cache).unwrap();
     let head: Vec<&str> = body.lines().take(3).collect();
     assert!(
-        head.iter().any(|l| l.contains("runex-integration-version: 1")),
+        head.iter().any(|l| l.contains("runex-integration-version:")),
         "cache must contain version header: head=\n{head:#?}"
     );
     assert!(

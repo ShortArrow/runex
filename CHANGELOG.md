@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-05-31
+
+### Fixed
+
+- **Git Bash: Ctrl+C is lost after an expansion (#7).** Under Git Bash
+  (cygwin/msys bash) the readline `bind -x` handler is invoked on top
+  of the cygwin signal layer. Spawning a Win32 `.exe` from inside that
+  handler — which is exactly what every `runex hook` call did at
+  trigger time — caused the very next `SIGINT` to be lost, so the
+  user's reflexive `Ctrl+C` after an unwanted expansion no longer
+  cleared the line buffer, and pressing `Enter` ran the stale
+  expanded command. Reproduced on Windows 11 + Git Bash 2.50 with
+  every abbreviation, regardless of cursor position or whether the
+  subprocess output was consumed via `$(...)` or a temp file. The
+  root cause is the spawn itself, not how the output is read.
+
+  The bash integration cache now ships a **bake-mode dispatcher**
+  selected at source time by `case "${OSTYPE-}"`. Under
+  `msys*`/`cygwin*` the trigger handler resolves the abbreviation
+  from a static table baked into the cache file (associative
+  arrays for exact + condition + pattern rules, plus a tiny
+  pure-bash renderer for `{}` cursor placement and `{number}`
+  repetition). No subprocess is spawned, so the next `SIGINT`
+  reaches the shell as it should and `Ctrl+C` clears the line as
+  on every other platform.
+
+### Changed
+
+- **Shell taxonomy: `Shell::CygwinBash` variant dropped from the
+  plan.** The 0.1.16 CHANGELOG mentioned that 0.1.17 would
+  introduce a `Shell::CygwinBash` enum variant. After PoC we found
+  the difference is purely a runtime-environment quirk, not a
+  language-level shell distinction, and that taxonomy expansion
+  would have pushed across the enum, config, export, init, and
+  infra layers for a problem that fits in one runtime `case`
+  block. The shipping approach keeps `Shell` unchanged and routes
+  through `$OSTYPE` inside the cache file instead. Linux bash,
+  WSL bash, zsh, pwsh, and nu users see no change.
+
+- **Bash integration cache version bumped 1 → 2.** Caches written
+  by 0.1.16 still source cleanly under 0.1.17 (the legacy exec
+  path is still the `*)` arm of the `case`), but `runex doctor`
+  now flags v1 caches as stale so users get nudged into
+  `runex init bash` to pick up the bake dispatcher on Git Bash.
+
+### Known interim trade-off (tracked for closure in 0.1.18)
+
+- **Git Bash only: argument-position tokens also expand in 0.1.17.**
+  The exec-path hook understood that `echo gst` does not expand
+  `gst` because it is in argument position, not command position.
+  The 0.1.17 bake path skips that check — re-implementing the
+  state machine in pure bash is straightforward but adds enough
+  surface that it was carved out into 0.1.18 so the Ctrl+C fix
+  could ship first. Until 0.1.18 lands, the bake path expands
+  any trailing token that matches an abbreviation regardless of
+  the preceding word. Note that `docs/recipes.md`'s explicit
+  command-position rules (`sudo gst`, tokens after `|`/`||`/
+  `&&`/`;`) keep working on both paths because those positions
+  *are* command positions. Documented in `docs/setup.{md,ja.md}`
+  and pinned by a regression test
+  (`tests/bash_cygwin_bake_pty.rs::cygwin_bake_expands_even_when_token_is_not_in_command_position`)
+  so the 0.1.18 fix is a deliberate behaviour change, not a
+  stealth regression. Workarounds while 0.1.17 is current:
+  quote literals you don't want expanded (`echo "gst"`) or pick
+  abbreviation keys that won't collide with English words. Every
+  other shell (including Linux bash and WSL bash) retains full
+  command-position detection.
+
 ## [0.1.16] - 2026-05-23
 
 ### Fixed
