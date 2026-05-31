@@ -44,7 +44,13 @@ fi
 
 sha_of() {
     local url="$1"
-    curl -fsSL "$url" | sha256sum | awk '{print $1}'
+    # crates.io's CDN rejects requests without a User-Agent ("403 Forbidden"),
+    # so we always send one. GitHub raw is fine without it but harmless.
+    curl -fsSL \
+        -H "User-Agent: runex-aur-release (https://github.com/ShortArrow/runex)" \
+        "$url" \
+        | sha256sum \
+        | awk '{print $1}'
 }
 
 CRATE_URL="https://crates.io/api/v1/crates/runex/${VERSION}/download"
