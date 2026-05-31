@@ -298,6 +298,12 @@ pub(crate) fn export_script(shell: Shell, bin: &str, config: Option<&Config>) ->
         .replace("{BASH_BIN}", &bash_quote_string(bin))
         .replace("{BASH_BIND_LINES}", &bash_bind_lines(trigger))
         .replace("{BASH_SELF_INSERT_LINES}", &bash_self_insert_lines(self_insert))
+        .replace(
+            "{BASH_CYG_DISPATCHER}",
+            &config
+                .map(crate::app::bash_static_dispatcher::generate_cygwin_dispatcher)
+                .unwrap_or_default(),
+        )
         .replace("{ZSH_BIN}", &bash_quote_string(bin))
         .replace("{ZSH_BIND_LINES}", &zsh_bind_lines(trigger))
         .replace("{ZSH_SELF_INSERT_LINES}", &zsh_self_insert_lines(self_insert))
@@ -612,13 +618,123 @@ mod tests {
         );
     }
 
+    // ── Cygwin/MSYS (Git Bash) bake-mode dispatcher (issue #7) ─────────
+
     #[test]
-    fn bash_script_does_not_embed_known_tokens() {
-        // New design: the abbreviation list is consulted at keypress time by
-        // `runex hook`, not baked into the bootstrap as a `case` block. This
-        // keeps the emitted script independent of user-supplied key strings —
-        // which, besides being simpler, avoids a whole class of injection
-        // concerns (quoting gcm's key into a `case` arm).
+    fn bash_script_includes_cyg_dispatcher_when_config_has_abbrs() {
+        let config = Config {
+            version: 1,
+            keybind: crate::domain::model::KeybindConfig {
+                trigger: crate::domain::model::PerShellKey {
+                    default: Some(TriggerKey::Space),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            precache: crate::domain::model::PrecacheConfig::default(),
+            abbr: vec![crate::domain::model::Abbr {
+                key: "gst".into(),
+                expand: crate::domain::model::PerShellString::All("git status".into()),
+                when_command_exists: None,
+                number: None,
+            }],
+        };
+        let s = export_script(Shell::Bash, "runex", Some(&config));
+        assert!(
+            s.contains("__runex_cyg_expand"),
+            "bash script must define the cygwin bake dispatcher: {s}"
+        );
+        assert!(
+            s.contains("[\"gst\"]=\"git status\""),
+            "bash script must bake the abbreviation table for the cygwin path: {s}"
+        );
+    }
+
+    #[test]
+    fn bash_script_omits_cyg_dispatcher_when_config_is_none() {
+        // `runex export bash` (no config) is the legacy escape hatch.
+        // It must stay byte-compatible with pre-0.1.17 callers so users
+        // who source it via `eval "$(runex export bash)"` aren't broken.
+        let s = export_script(Shell::Bash, "runex", None);
+        // The dispatcher block is empty — no bake-mode function definition
+        // and no abbreviation table. The template still contains a
+        // `case "${OSTYPE-}"` switch and a defensive `declare -F` probe,
+        // but with no `__runex_cyg_expand` defined the probe falls through
+        // to the exec path. That's the legacy escape hatch contract.
+        assert!(
+            !s.contains("__runex_cyg_expand() {"),
+            "bash export without a config must not define the bake dispatcher function: {s}"
+        );
+        assert!(
+            !s.contains("__runex_abbr_expand"),
+            "bash export without a config must not bake the abbreviation table: {s}"
+        );
+    }
+
+    #[test]
+    fn bash_script_includes_ostype_dispatcher_switch() {
+        let config = Config {
+            version: 1,
+            keybind: crate::domain::model::KeybindConfig {
+                trigger: crate::domain::model::PerShellKey {
+                    default: Some(TriggerKey::Space),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            precache: crate::domain::model::PrecacheConfig::default(),
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Bash, "runex", Some(&config));
+        assert!(
+            s.contains("case \"${OSTYPE-}\""),
+            "bash script must dispatch on OSTYPE at source time: {s}"
+        );
+        assert!(
+            s.contains("msys*|cygwin*"),
+            "bash script must recognize msys/cygwin OSTYPE values: {s}"
+        );
+    }
+
+    #[test]
+    fn bash_script_keeps_legacy_exec_path_function_for_non_cygwin() {
+        let config = Config {
+            version: 1,
+            keybind: crate::domain::model::KeybindConfig {
+                trigger: crate::domain::model::PerShellKey {
+                    default: Some(TriggerKey::Space),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            precache: crate::domain::model::PrecacheConfig::default(),
+            abbr: vec![],
+        };
+        let s = export_script(Shell::Bash, "runex", Some(&config));
+        assert!(
+            s.contains("__runex_exec_expand"),
+            "bash script must keep the legacy `runex hook` exec path: {s}"
+        );
+        assert!(
+            s.contains("hook --shell bash"),
+            "the exec path still invokes `runex hook`: {s}"
+        );
+    }
+
+    #[test]
+    fn legacy_exec_path_does_not_embed_known_tokens() {
+        // The Linux/WSL exec path consults the abbreviation list at keypress
+        // time by spawning `runex hook`, not by baking tokens into the
+        // bootstrap — that's what keeps the exec path independent of user
+        // key strings and avoids a whole class of injection concerns
+        // (quoting gcm's key into a `case` arm).
+        //
+        // The cygwin/msys bake path *does* embed tokens in
+        // `__runex_abbr_expand[...]` by design (issue #7 workaround), so we
+        // only assert here that the legacy bash single-quote form (`'gcm'`)
+        // and the historical helper name are absent. The bake path uses
+        // double quotes (`"gcm"`) inside an associative array, which is
+        // syntactically distinct.
         let config = Config {
             version: 1,
             keybind: crate::domain::model::KeybindConfig::default(),
@@ -631,8 +747,14 @@ mod tests {
             }],
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
-        assert!(!s.contains("'gcm'"), "bash bootstrap must not embed tokens anymore");
-        assert!(!s.contains("__runex_is_known_token"), "legacy helper removed");
+        assert!(
+            !s.contains("'gcm'"),
+            "legacy exec path must not single-quote-embed tokens: {s}"
+        );
+        assert!(
+            !s.contains("__runex_is_known_token"),
+            "legacy helper removed (was for the pre-hook bake path)"
+        );
     }
 
     #[test]

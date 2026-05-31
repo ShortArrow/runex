@@ -22,6 +22,7 @@
 //! — they go through `app::*`. The architecture rule
 //! `no_cmd_to_domain_behavior_imports` enforces this.
 
+pub mod bash_static_dispatcher;
 pub mod config;
 pub mod doctor;
 pub mod expand;
