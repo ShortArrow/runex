@@ -52,19 +52,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now flags v1 caches as stale so users get nudged into
   `runex init bash` to pick up the bake dispatcher on Git Bash.
 
-### Known trade-off
+### Known interim trade-off (tracked for closure in 0.1.18)
 
-- **Git Bash only: command-position detection is now disabled.**
+- **Git Bash only: argument-position tokens also expand in 0.1.17.**
   The exec-path hook understood that `echo gst` does not expand
   `gst` because it is in argument position, not command position.
-  Re-implementing that state machine in pure bash would more than
-  double the size of the dispatcher block for marginal benefit,
-  so the bake path expands any trailing token that matches an
-  abbreviation, regardless of context. This is the *intentional*
-  cost of fixing #7. Documented in `docs/setup.{md,ja.md}` and
-  pinned by a regression test
-  (`tests/bash_cygwin_bake_pty.rs::cygwin_bake_expands_even_when_token_is_not_in_command_position`).
-  Quote literals you don't want expanded (`echo "gst"`) or pick
+  The 0.1.17 bake path skips that check — re-implementing the
+  state machine in pure bash is straightforward but adds enough
+  surface that it was carved out into 0.1.18 so the Ctrl+C fix
+  could ship first. Until 0.1.18 lands, the bake path expands
+  any trailing token that matches an abbreviation regardless of
+  the preceding word. Note that `docs/recipes.md`'s explicit
+  command-position rules (`sudo gst`, tokens after `|`/`||`/
+  `&&`/`;`) keep working on both paths because those positions
+  *are* command positions. Documented in `docs/setup.{md,ja.md}`
+  and pinned by a regression test
+  (`tests/bash_cygwin_bake_pty.rs::cygwin_bake_expands_even_when_token_is_not_in_command_position`)
+  so the 0.1.18 fix is a deliberate behaviour change, not a
+  stealth regression. Workarounds while 0.1.17 is current:
+  quote literals you don't want expanded (`echo "gst"`) or pick
   abbreviation keys that won't collide with English words. Every
   other shell (including Linux bash and WSL bash) retains full
   command-position detection.

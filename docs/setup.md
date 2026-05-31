@@ -313,18 +313,23 @@ If a trigger key produces a literal space instead of expanding:
    output with its own header). The cache's interactive guard runs
    before the function definitions, so a malformed cache silently
    skips them. Re-run `runex init pwsh` to rewrite the cache cleanly.
-7. **Git Bash: trade-off — command-position detection is disabled.**
-   On Git Bash specifically, runex switches to a *bake-mode* dispatcher
-   that looks expansions up from a static table baked into the cache
-   file, never spawning the `runex` Windows binary from inside the
-   trigger handler. That is what fixes the 0.1.16 Ctrl+C-after-
-   expansion bug (cygwin readline lost the next SIGINT whenever a
-   `bind -x` handler spawned a Win32 process). The trade-off: the
-   bake dispatcher expands any trailing token that matches an
-   abbreviation, including in argument position. For example, on
-   Linux bash `echo gst<Space>` leaves `gst` alone because it is not
-   the command word, but on Git Bash it expands. Quote the literal
-   (`echo "gst"`) or pick abbreviation keys that won't collide with
-   English words. Linux bash, WSL bash, zsh, pwsh, and nu continue
-   to use the runtime hook with full command-position detection;
-   only Git Bash takes the trade-off.
+7. **Git Bash: 0.1.17 interim trade-off — argument-position tokens
+   also expand.** On Git Bash specifically, runex 0.1.17 switches
+   to a *bake-mode* dispatcher that looks expansions up from a
+   static table baked into the cache file, never spawning the
+   `runex` Windows binary from inside the trigger handler. That is
+   what fixes the 0.1.16 Ctrl+C-after-expansion bug (cygwin
+   readline lost the next SIGINT whenever a `bind -x` handler
+   spawned a Win32 process). The 0.1.17 dispatcher expands any
+   trailing token that matches an abbreviation, including in
+   argument position — e.g. `echo gst<Space>` expands `gst` on
+   Git Bash even though Linux bash leaves it alone. The
+   command-position rules from `docs/recipes.md` (`sudo gst`,
+   `<token>` after `|` / `||` / `&&` / `;`) still hold on both
+   paths because those positions *are* command positions.
+   Workarounds while 0.1.17 is current: quote the literal
+   (`echo "gst"`) or pick abbreviation keys that won't collide
+   with English words. **Tracked for closure in 0.1.18**:
+   re-implementing command-position detection in pure bash so the
+   bake path matches the exec path. Linux bash, WSL bash, zsh,
+   pwsh, and nu retain full command-position detection.

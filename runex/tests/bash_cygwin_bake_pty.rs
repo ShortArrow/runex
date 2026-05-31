@@ -209,20 +209,23 @@ fn cygwin_bake_strips_cursor_placeholder_from_rendered_expansion() {
 
 #[test]
 fn cygwin_bake_expands_even_when_token_is_not_in_command_position() {
-    // *** Documented degradation vs. the exec path ***
+    // *** 0.1.17 interim degradation vs. the exec path ***
     //
     // The Rust hook (`domain::hook::is_command_position`) walks the
     // line and refuses to expand `gst` when it appears after `echo`,
-    // inside a pipeline, after `sudo`, etc. The bake path does not —
-    // re-implementing that state machine in pure bash would more than
-    // double the size of the dispatcher block and add maintenance
-    // burden, so the cygwin path expands any trailing token that
-    // matches an abbreviation, regardless of context. This is called
-    // out in docs/setup.{md,ja.md}.
+    // inside a pipeline (after `|`, but note that `|`/`||`/`&&`/`;`
+    // and `sudo` are themselves *command-position* prefixes — see
+    // docs/recipes.md). The 0.1.17 bake path skips the check
+    // entirely, so the cygwin path expands any trailing token that
+    // matches an abbreviation regardless of the preceding word.
+    // Re-implementing the state machine in pure bash is feasible
+    // and is tracked for 0.1.18; carving it out kept the Ctrl+C fix
+    // small enough to ship as a focused release.
     //
-    // This test pins that trade-off so a future contributor who
-    // "fixes" the apparent inconsistency will see it as an explicit
-    // change in behaviour, not a stealth regression.
+    // This test pins the 0.1.17 behaviour so the 0.1.18 fix is an
+    // intentional behaviour change (= flip the assertion / delete
+    // this test) rather than a stealth regression. Documented in
+    // docs/setup.{md,ja.md} and CHANGELOG.md.
     if !bash4_available() {
         eprintln!("skipping: bash 4+ not available");
         return;
