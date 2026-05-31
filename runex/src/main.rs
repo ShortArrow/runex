@@ -260,7 +260,12 @@ enum Commands {
         /// Current buffer contents
         #[arg(long)]
         line: String,
-        /// Current cursor position as a byte offset into `line`
+        /// Current cursor position. Shells pass this in their own native
+        /// unit: bash, zsh, clink, and nu count Unicode scalar values
+        /// (= chars); pwsh counts UTF-16 code units (its PSReadLine /
+        /// .NET native unit). `cmd::hook` converts to a byte offset
+        /// via `app::hook::shell_cursor_to_byte` before handing the
+        /// value to the domain layer (issue #6).
         #[arg(long)]
         cursor: usize,
         /// True if a paste is in progress (pwsh). When set, the hook skips
