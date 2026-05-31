@@ -1858,3 +1858,172 @@ fn hook_at_cap_still_expands() {
          is asserting the wrong branch: {stdout}"
     );
 }
+
+// ─── hook: multi-byte cursor (issue #6) ──────────────────────────────
+//
+// Shells pass `--cursor` in their own native unit: bash, zsh, clink, and
+// nu count Unicode scalar values (= Rust `char`); pwsh counts UTF-16
+// code units. The domain layer slices the line by byte. Without
+// conversion the slice straddles UTF-8 char boundaries on any non-ASCII
+// input and the rendered command comes out corrupted — the
+// reporter-supplied PoC was a Japanese path argument that ended up with
+// a space inserted between two of its characters. These tests pin the
+// boundary conversion so a future regression surfaces here, not in a
+// user's everyday Japanese / emoji input.
+
+/// PoC reproduction from the issue. With cursor at char index 10
+/// (= immediately after「う」), the expected outcome is a space inserted
+/// at byte 18 (= same logical position), producing three consecutive
+/// spaces before `./test1`. The buggy version put the space at byte 10
+/// (mid「お」/「は」) and rendered `lsd ./おは よう  ./test1`.
+#[test]
+fn hook_bash_inserts_space_at_char_cursor_in_japanese_line() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(
+        &[
+            "hook",
+            "--shell", "bash",
+            "--line", "lsd ./おはよう  ./test1",
+            "--cursor", "10",
+        ],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "hook must succeed for a multi-byte line: {stdout}");
+    assert!(
+        stdout.contains("READLINE_LINE='lsd ./おはよう   ./test1'"),
+        "hook must insert space at char cursor 10 (= byte 18, right after う), \
+         yielding three spaces between う and ./test1; got: {stdout}",
+    );
+}
+
+/// READLINE_POINT must come back in *characters* too, not bytes. The
+/// space lands after char 10, advancing the cursor to char 11.
+#[test]
+fn hook_bash_returns_char_cursor_for_japanese_line() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(
+        &[
+            "hook",
+            "--shell", "bash",
+            "--line", "lsd ./おはよう  ./test1",
+            "--cursor", "10",
+        ],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok);
+    assert!(
+        stdout.contains("READLINE_POINT=11"),
+        "READLINE_POINT must come back as a char index (11), not a byte \
+         index (19); got: {stdout}"
+    );
+}
+
+/// zsh's renderer emits LBUFFER / RBUFFER substrings rather than a
+/// cursor number, so the byte-cursor split that `line.split_at` does
+/// must land on a char boundary. Verify a Japanese-only line splits
+/// cleanly with cursor at the end.
+#[test]
+fn hook_zsh_splits_japanese_line_at_char_boundary() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(
+        &["hook", "--shell", "zsh", "--line", "おはよう", "--cursor", "4"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok);
+    // Char 4 = end of line; split puts the whole string in LBUFFER and
+    // RBUFFER is empty. The trailing space comes from the InsertSpace
+    // fallback (no abbr matches).
+    assert!(
+        stdout.contains("LBUFFER='おはよう '"),
+        "got: {stdout}",
+    );
+    assert!(stdout.contains("RBUFFER=''"), "got: {stdout}");
+}
+
+/// nu emits a JSON object. Both `line` and `cursor` must be in chars
+/// (= what `commandline set-cursor` expects), not bytes.
+#[test]
+fn hook_nu_returns_char_cursor_for_multibyte_line() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(
+        &["hook", "--shell", "nu", "--line", "おはよう", "--cursor", "4"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("nu hook output must be valid JSON: {e}, got: {stdout}"));
+    assert_eq!(v["line"], "おはよう ");
+    // 4 chars original + 1 space appended = char cursor 5. The buggy
+    // pre-#6 version returned the byte length 13 here.
+    assert_eq!(v["cursor"], 5);
+}
+
+/// pwsh sends UTF-16 code units, and an emoji outside the BMP
+/// (U+1F3AF 🎯) is 2 UTF-16 code units. Cursor=4 (= 2 BMP chars 'gs' +
+/// 1 emoji 2 units after the emoji) sits at the byte position right
+/// after the emoji. The InsertSpace path puts a space there, advancing
+/// the cursor to UTF-16 unit 5 in the response.
+#[test]
+fn hook_pwsh_handles_emoji_surrogate_pair() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(
+        &["hook", "--shell", "pwsh", "--line", "gs🎯end", "--cursor", "4"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "got: {stdout}");
+    // After the space insertion the line is "gs🎯 end" and the cursor
+    // is right after the inserted space.
+    assert!(
+        stdout.contains("$__RUNEX_LINE = 'gs🎯 end'"),
+        "got: {stdout}"
+    );
+    assert!(
+        stdout.contains("$__RUNEX_CURSOR = 5"),
+        "pwsh cursor must come back in UTF-16 code units: 2 (gs) + 2 (🎯 \
+         as surrogate pair) + 1 (space) = 5; got: {stdout}"
+    );
+}
+
+/// clink emits a Lua table. cursor must round-trip in characters
+/// (template-level `-1` / `+1` handle the 0-based/1-based difference).
+#[test]
+fn hook_clink_returns_char_cursor_for_multibyte_line() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(
+        &["hook", "--shell", "clink", "--line", "おはよう", "--cursor", "4"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok);
+    // clink's lua quote is `"..."` (lua_quote_string), not bash-style
+    // single quotes.
+    assert!(
+        stdout.contains(r#"line = "おはよう ""#),
+        "got: {stdout}"
+    );
+    assert!(
+        stdout.contains("cursor = 5"),
+        "clink cursor must come back as a char count (5), not byte (13); \
+         got: {stdout}"
+    );
+}
+
+/// Defensive: an out-of-range cursor (= shell sent something larger
+/// than the line's char count) must clamp, not panic. Empty stdout
+/// would be acceptable too, but the existing handler emits an
+/// InsertSpace at the line end.
+#[test]
+fn hook_clamps_excessive_cursor_for_multibyte_line() {
+    let cfg = write_config("version = 1\n");
+    let (_, _, ok) = run(
+        &["hook", "--shell", "bash", "--line", "おはよう", "--cursor", "9999"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "out-of-range cursor must not crash hook");
+}

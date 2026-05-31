@@ -10,8 +10,13 @@ use crate::domain::shell::{bash_quote_string, lua_quote_string, pwsh_quote_strin
 
 /// Outcome of a hook call — what the shell adapter should do to its buffer.
 ///
-/// `line` is the full new buffer text and `cursor` is the new cursor position
-/// in **bytes** from the start of `line`. Shells are expected to replace their
+/// `line` is the full new buffer text and `cursor` is the new cursor
+/// position as a **byte offset** from the start of `line`. The byte
+/// offset is the domain layer's internal unit; conversion to / from the
+/// shell-native unit (char count for bash/zsh/clink/nu, UTF-16 code
+/// units for pwsh) is the caller's responsibility via
+/// `app::hook::shell_cursor_to_byte` on the way in and `app::hook::render`
+/// on the way out (issue #6). Shells are expected to replace their
 /// buffer and cursor with these values atomically.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum HookAction {
