@@ -55,14 +55,9 @@ fn git_bash() -> Option<PathBuf> {
 }
 
 /// Resolve the MSYS2 bash binary. MSYS2 is a separate install from
-/// Git for Windows and is not present by default; tests that take
-/// this path skip silently when it isn't found. Where Git Bash
-/// reports `OSTYPE=msys`, MSYS2's main `usr/bin/bash` also reports
-/// `msys` — the bake dispatcher's `case "${OSTYPE-}"` covers both
-/// the same way, so the exercise here is "does the same cache file
-/// keep working under a different cygwin-derived shell binary".
-///
-/// Common install paths (chocolatey, scoop, manual installer):
+/// Git for Windows; tests skip silently when it isn't found. MSYS2's
+/// `usr/bin/bash` reports `OSTYPE=cygwin` (not `msys`), so a passing
+/// MSYS2 run also proves the `cygwin*` arm of the dispatcher case.
 fn msys2_bash() -> Option<PathBuf> {
     let candidates = [
         r"C:\msys64\usr\bin\bash.exe",
@@ -85,6 +80,22 @@ fn msys2_bash() -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
+/// Resolve the upstream Cygwin (cygwin.com) bash binary. Different
+/// project from MSYS2 — closer to the original cygwin newlib + DLL,
+/// often installed at `C:\cygwin64`. Like MSYS2 it sets
+/// `OSTYPE=cygwin`, but the underlying cygwin1.dll is a separate
+/// codebase, so a passing run here proves the dispatcher works on
+/// the real cygwin runtime (not just msys2's fork). Skipped when
+/// not installed, which is the common case on CI.
+fn cygwin_bash() -> Option<PathBuf> {
+    let candidates = [
+        r"C:\cygwin64\bin\bash.exe",
+        r"C:\cygwin\bin\bash.exe",
+        r"C:\tools\cygwin\bin\bash.exe",
+    ];
+    candidates.iter().map(PathBuf::from).find(|p| p.exists())
+}
+
 /// Generic resolver used by the parameterised tests below. Returns
 /// (label, path) pairs for whichever cygwin-family bash binaries the
 /// machine has installed. An empty result means "skip all dispatcher
@@ -98,6 +109,9 @@ fn cygwin_family_bashes() -> Vec<(&'static str, PathBuf)> {
     }
     if let Some(p) = msys2_bash() {
         out.push(("MSYS2 bash", p));
+    }
+    if let Some(p) = cygwin_bash() {
+        out.push(("Cygwin bash", p));
     }
     out
 }
