@@ -21,14 +21,16 @@
 //! the existing `runex hook` exec path; one cache file serves every
 //! bash flavour the user might run with the same dotfiles.
 //!
-//! ## Trade-off (documented in `docs/setup.{md,ja.md}`)
+//! ## Command-position parity (issue #9, fixed in 0.1.19)
 //!
-//! Command-position detection (e.g. `echo gst` *not* expanding `gst`) is
-//! handled in Rust by `domain::hook::is_command_position`. Re-implementing
-//! that state machine in pure bash would more than double the size of
-//! this module and add maintenance burden, so the bake path treats every
-//! trailing token as if it were in command position. This is a known and
-//! intentional regression vs. the exec path.
+//! The bake path reproduces `domain::hook::is_command_position` in pure
+//! bash via `__runex_cyg_is_command_position`: a `case` over the four
+//! pipeline operators (`&&`, `||`, `|`, `;`) plus a trailing-`sudo`
+//! recursion that itself defers to the same operator check. The result
+//! is byte-equivalent to what the Linux / WSL exec path returns for the
+//! same READLINE_LINE / READLINE_POINT. The 0.1.17 trade-off where
+//! Git Bash expanded any trailing token regardless of context (e.g.
+//! `echo gst<Space>` would still expand `gst`) no longer applies.
 
 use crate::domain::expand::NUMBER_PLACEHOLDER;
 use crate::domain::model::{Config, Shell};
@@ -373,6 +375,95 @@ mod tests {
     fn pattern_table_lines_empty_for_empty_config() {
         assert_eq!(pattern_table_lines(&cfg(vec![])), "");
     }
+
+    // ── command-position helper (issue #9) ───────────────────────────────
+
+    /// The bake dispatcher must include a pure-bash command-position
+    /// helper so the runtime check (issue #9 closeout of the 0.1.17
+    /// trade-off) can run without spawning the runex binary from the
+    /// `bind -x` handler.
+    #[test]
+    fn bake_includes_command_position_helper() {
+        let c = cfg(vec![plain_abbr("gst", "git status")]);
+        let s = generate_cygwin_dispatcher(&c);
+        assert!(
+            s.contains("__runex_cyg_is_command_position"),
+            "bake dispatcher must define a pure-bash command-position helper: {s}"
+        );
+    }
+
+    /// The command-position helper recognises every pipeline / list
+    /// operator that the Rust `domain::hook::is_command_position`
+    /// recognises. The patterns must appear in the helper body so a
+    /// future regression that drops one of them surfaces here.
+    #[test]
+    fn bake_command_position_helper_recognizes_pipeline_ops() {
+        let c = cfg(vec![plain_abbr("gst", "git status")]);
+        let s = generate_cygwin_dispatcher(&c);
+        for pat in [r#"*"&&""#, r#"*"||""#, r#"*"|""#, r#"*";""#] {
+            assert!(
+                s.contains(pat),
+                "bake helper must match pipeline operator pattern {pat}: {s}"
+            );
+        }
+    }
+
+    /// `sudo` at the end of the prefix should mark command position
+    /// (provided the part before `sudo` is itself command position).
+    /// The bake helper must look at the last whitespace-separated
+    /// word.
+    #[test]
+    fn bake_command_position_helper_recognizes_sudo() {
+        let c = cfg(vec![plain_abbr("gst", "git status")]);
+        let s = generate_cygwin_dispatcher(&c);
+        assert!(
+            s.contains(r#"if [ "$last_word" = "sudo" ]"#),
+            "bake helper must check for trailing `sudo` word: {s}"
+        );
+    }
+
+    /// The bake expand function must invoke the command-position
+    /// helper before doing the abbreviation lookup. Without this the
+    /// helper would be dead code and the 0.1.17 trade-off would
+    /// silently survive.
+    #[test]
+    fn bake_expand_calls_command_position_before_lookup() {
+        let c = cfg(vec![plain_abbr("gst", "git status")]);
+        let s = generate_cygwin_dispatcher(&c);
+        let expand_body = &s[s.find("__runex_cyg_expand()").expect("expand fn must exist")..];
+        let cmd_pos_idx = expand_body
+            .find("__runex_cyg_is_command_position")
+            .expect("expand body must call the command-position helper");
+        let lookup_idx = expand_body
+            .find("__runex_cyg_lookup ")
+            .expect("expand body must call lookup");
+        assert!(
+            cmd_pos_idx < lookup_idx,
+            "command-position check must precede the abbreviation lookup; \
+             cmd_pos at {cmd_pos_idx}, lookup at {lookup_idx}: {expand_body}"
+        );
+    }
+
+    /// The 0.1.17 dispatcher computed `prefix="${left%$token}"`, which
+    /// makes bash treat the token as a `%` glob — a `*` / `?` / `[` in
+    /// the token would match unexpected portions of the left side and
+    /// corrupt the prefix. Issue #9 switches to a substring slice
+    /// (`${left:0:<len(left) - len(token)>}`) so the prefix is
+    /// computed byte-for-byte, regardless of what characters the token
+    /// happens to contain.
+    #[test]
+    fn bake_uses_substring_prefix_calc_not_glob_pattern() {
+        let c = cfg(vec![plain_abbr("gst", "git status")]);
+        let s = generate_cygwin_dispatcher(&c);
+        assert!(
+            !s.contains(r#"prefix="${left%$token}""#),
+            "bake expand must not use `${{left%$token}}` glob pattern (issue #9): {s}"
+        );
+        assert!(
+            s.contains("prefix=\"${left:0:$((${#left} - ${#token}))}\""),
+            "bake expand must compute prefix via substring slice (issue #9): {s}"
+        );
+    }
 }
 
 /// Wrap `s` as a bash double-quoted string suitable for embedding inside
@@ -588,6 +679,39 @@ __runex_cyg_pattern_lookup() {{
         return
     done
 }}
+__runex_cyg_is_command_position() {{
+    # Sets __runex_cmd_pos = 1 if $1 is a command-position prefix,
+    # 0 otherwise. Mirrors `domain::hook::is_command_position`:
+    #   - empty / whitespace-only prefix → command position
+    #   - ends with `&&` / `||` / `|` / `;` → command position
+    #   - ends with the word `sudo` whose prefix is itself command
+    #     position → command position
+    local prefix="$1"
+    while [ "${{prefix: -1}}" = " " ]; do
+        prefix="${{prefix:0:${{#prefix}}-1}}"
+    done
+    if [ -z "$prefix" ]; then __runex_cmd_pos=1; return; fi
+    case "$prefix" in
+        *"&&"|*"||"|*"|"|*";") __runex_cmd_pos=1; return ;;
+    esac
+    local last_word="${{prefix##* }}"
+    local before_last
+    if [ "$last_word" = "$prefix" ]; then
+        before_last=""
+    else
+        before_last="${{prefix:0:$((${{#prefix}} - ${{#last_word}}))}}"
+    fi
+    if [ "$last_word" = "sudo" ]; then
+        while [ "${{before_last: -1}}" = " " ]; do
+            before_last="${{before_last:0:${{#before_last}}-1}}"
+        done
+        if [ -z "$before_last" ]; then __runex_cmd_pos=1; return; fi
+        case "$before_last" in
+            *"&&"|*"||"|*"|"|*";") __runex_cmd_pos=1; return ;;
+        esac
+    fi
+    __runex_cmd_pos=0
+}}
 __runex_cyg_expand() {{
     local left right token prefix
     left="${{READLINE_LINE:0:READLINE_POINT}}"
@@ -603,6 +727,18 @@ __runex_cyg_expand() {{
         READLINE_POINT=$((READLINE_POINT + 1))
         return
     fi
+    # Substring slice for prefix (= avoid `${{left%$token}}` glob
+    # interpretation when the token contains `?`, `*`, or `[`).
+    prefix="${{left:0:$((${{#left}} - ${{#token}}))}}"
+    # Command-position check (issue #9): if the prefix is not a
+    # command position, fall back to a literal space insertion
+    # without consulting the abbreviation tables.
+    __runex_cyg_is_command_position "$prefix"
+    if [ "$__runex_cmd_pos" -eq 0 ]; then
+        READLINE_LINE="${{left}} ${{right}}"
+        READLINE_POINT=$((READLINE_POINT + 1))
+        return
+    fi
     __runex_cyg_lookup "$token"
     if [ -z "$__runex_out" ]; then __runex_cyg_pattern_lookup "$token"; fi
     if [ -z "$__runex_out" ]; then
@@ -610,7 +746,6 @@ __runex_cyg_expand() {{
         READLINE_POINT=$((READLINE_POINT + 1))
         return
     fi
-    prefix="${{left%$token}}"
     if [ -n "$__runex_cursor_off" ]; then
         READLINE_LINE="${{prefix}}${{__runex_out}}${{right}}"
         READLINE_POINT=$(( ${{#prefix}} + __runex_cursor_off ))
