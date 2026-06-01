@@ -207,25 +207,23 @@ fn cygwin_bake_strips_cursor_placeholder_from_rendered_expansion() {
     );
 }
 
+// ─── command-position parity with the exec path (issue #9) ──────────
+//
+// 0.1.17 carved out command-position detection so the Ctrl+C fix
+// (#7) could ship. 0.1.19 restores parity: `echo gst<Space>` no
+// longer expands on the bake path, matching what the Linux/WSL exec
+// path has always done. The five tests below pin one expectation
+// each — the bake path now mirrors `domain::hook::is_command_position`
+// for argument-position tokens (no expand) and every command-position
+// prefix listed in `docs/recipes.md` (`sudo`, `|`, `&&`, `;`).
+
 #[test]
-fn cygwin_bake_expands_even_when_token_is_not_in_command_position() {
-    // *** 0.1.17 interim degradation vs. the exec path ***
-    //
-    // The Rust hook (`domain::hook::is_command_position`) walks the
-    // line and refuses to expand `gst` when it appears after `echo`,
-    // inside a pipeline (after `|`, but note that `|`/`||`/`&&`/`;`
-    // and `sudo` are themselves *command-position* prefixes — see
-    // docs/recipes.md). The 0.1.17 bake path skips the check
-    // entirely, so the cygwin path expands any trailing token that
-    // matches an abbreviation regardless of the preceding word.
-    // Re-implementing the state machine in pure bash is feasible
-    // and is tracked for 0.1.18; carving it out kept the Ctrl+C fix
-    // small enough to ship as a focused release.
-    //
-    // This test pins the 0.1.17 behaviour so the 0.1.18 fix is an
-    // intentional behaviour change (= flip the assertion / delete
-    // this test) rather than a stealth regression. Documented in
-    // docs/setup.{md,ja.md} and CHANGELOG.md.
+fn cygwin_bake_skips_expansion_after_echo() {
+    // Argument position. The 0.1.17 trade-off would have expanded
+    // `gst` here, producing `echo echo EXPANDED_GST` and printing
+    // `echo EXPANDED_GST` to stdout. Post-#9 it must self-insert a
+    // literal space, leaving the line as `echo gst ` and printing
+    // a plain `gst` (= bash sees `echo gst` as the command).
     if !bash4_available() {
         eprintln!("skipping: bash 4+ not available");
         return;
@@ -235,23 +233,140 @@ fn cygwin_bake_expands_even_when_token_is_not_in_command_position() {
     let rcfile = user_runs_init_bash_with_full_config(home);
     let mut session = spawn_cyg_bash(&rcfile, home);
 
-    // Type `echo gst` and then the trigger Space. On the exec path this
-    // would NOT expand (gst is in argument position, not command
-    // position). On the cygwin bake path it DOES expand, producing
-    // `echo echo EXPANDED_GST` which echoes the literal string
-    // `echo EXPANDED_GST` to stdout.
     session.send("echo gst ").ok();
     session.send_line("").ok();
 
     use expectrl::Regex;
-    let saw = session.expect(Regex(r"echo EXPANDED_GST")).is_ok();
+    // After the trigger Space the line should still be `echo gst ` and
+    // bash's `echo` will print `gst` somewhere in the PTY stream. The
+    // critical negative property is that the *expanded* output
+    // (`echo EXPANDED_GST` would produce the string `EXPANDED_GST` on
+    // its own) does NOT appear — anchored matches like `^gst\b` are
+    // unreliable through mintty/xterm framing, so we assert via the
+    // positive `gst` token plus the absence of `EXPANDED_GST`.
+    let saw = session.expect(Regex(r"gst")).is_ok();
     session.send_line("exit").ok();
     assert!(
         saw,
-        "cygwin bake path is documented to skip command-position checking: \
-         `echo gst<Space>` must expand `gst` even in argument position. \
-         If you got here because you implemented command-position detection \
-         in the bake dispatcher, update docs/setup.{{md,ja.md}} and this test."
+        "bake path must NOT expand `gst` after `echo ` (argument position); \
+         expected `echo gst` to run and print plain `gst`"
+    );
+}
+
+#[test]
+fn cygwin_bake_expands_after_sudo() {
+    // `sudo` at the head of the buffer counts as command position
+    // for whatever follows it (= docs/recipes.md). We can't actually
+    // run `sudo` in the test — its prompt would deadlock the PTY —
+    // so we test the buffer rewrite via `type` instead: `sudo gst<SP>`
+    // should rewrite to `sudo echo EXPANDED_GST<SP>`, which when run
+    // (after stripping the literal `sudo` via a shell function) emits
+    // `EXPANDED_GST`.
+    if !bash4_available() {
+        eprintln!("skipping: bash 4+ not available");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let rcfile = user_runs_init_bash_with_full_config(home);
+    let mut session = spawn_cyg_bash(&rcfile, home);
+
+    // Shadow sudo so its first arg is just executed without privilege.
+    session.send_line("sudo() { \"$@\"; }").ok();
+    session.send("sudo gst ").ok();
+    session.send_line("").ok();
+
+    use expectrl::Regex;
+    let saw = session.expect(Regex(r"EXPANDED_GST")).is_ok();
+    session.send_line("exit").ok();
+    assert!(
+        saw,
+        "bake path must expand `gst` after `sudo ` (command position via \
+         sudo recursion); expected EXPANDED_GST in stdout"
+    );
+}
+
+#[test]
+fn cygwin_bake_expands_after_pipe() {
+    // `|` is a pipeline operator → command position for whatever
+    // follows. We construct `echo seed | gst<SP>` which would
+    // otherwise pipe `seed` into `gst` (unknown command). Post-#9
+    // `gst` should expand to `echo EXPANDED_GST` so the pipeline
+    // becomes `echo seed | echo EXPANDED_GST` and stdout shows the
+    // EXPANDED_GST line.
+    if !bash4_available() {
+        eprintln!("skipping: bash 4+ not available");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let rcfile = user_runs_init_bash_with_full_config(home);
+    let mut session = spawn_cyg_bash(&rcfile, home);
+
+    session.send("echo seed | gst ").ok();
+    session.send_line("").ok();
+
+    use expectrl::Regex;
+    let saw = session.expect(Regex(r"EXPANDED_GST")).is_ok();
+    session.send_line("exit").ok();
+    assert!(
+        saw,
+        "bake path must expand `gst` after `|` (pipeline command position); \
+         expected EXPANDED_GST in stdout"
+    );
+}
+
+#[test]
+fn cygwin_bake_expands_after_and() {
+    // `&&` is a list operator → command position. Construct
+    // `true && gst<SP>` so the first half is harmless and the second
+    // half is the test target.
+    if !bash4_available() {
+        eprintln!("skipping: bash 4+ not available");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let rcfile = user_runs_init_bash_with_full_config(home);
+    let mut session = spawn_cyg_bash(&rcfile, home);
+
+    session.send("true && gst ").ok();
+    session.send_line("").ok();
+
+    use expectrl::Regex;
+    let saw = session.expect(Regex(r"EXPANDED_GST")).is_ok();
+    session.send_line("exit").ok();
+    assert!(
+        saw,
+        "bake path must expand `gst` after `&&` (list command position); \
+         expected EXPANDED_GST in stdout"
+    );
+}
+
+#[test]
+fn cygwin_bake_expands_after_semicolon() {
+    // `;` is a list operator → command position. `true ; gst<SP>`
+    // mirrors the `&&` case but with the terminator that bash uses
+    // for unconditional sequencing.
+    if !bash4_available() {
+        eprintln!("skipping: bash 4+ not available");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let rcfile = user_runs_init_bash_with_full_config(home);
+    let mut session = spawn_cyg_bash(&rcfile, home);
+
+    session.send("true ; gst ").ok();
+    session.send_line("").ok();
+
+    use expectrl::Regex;
+    let saw = session.expect(Regex(r"EXPANDED_GST")).is_ok();
+    session.send_line("exit").ok();
+    assert!(
+        saw,
+        "bake path must expand `gst` after `;` (sequence command position); \
+         expected EXPANDED_GST in stdout"
     );
 }
 

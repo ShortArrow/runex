@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-06-01
+
+### Fixed
+
+- **Git Bash bake path: argument-position tokens no longer expand
+  (#9).** 0.1.17 introduced the bake-mode dispatcher to fix the
+  cygwin signal loss after `bind -x` (#7), but as a carved-out
+  interim trade-off the bake path expanded any trailing token that
+  matched an abbreviation regardless of whether the prefix was a
+  command position. Linux bash / WSL bash / zsh / pwsh / nu refused
+  to expand `echo gst<Space>` because `echo ` is not a command
+  position; Git Bash expanded it.
+
+  The bake dispatcher now reproduces `domain::hook::is_command_position`
+  in pure bash — a `case` statement over the four pipeline operators
+  (`&&`, `||`, `|`, `;`) plus a trailing-`sudo` recursion that
+  defers to the same operator check — so the bake path produces the
+  same buffer rewrite as the exec path for every input. The 0.1.17
+  documented trade-off no longer applies.
+
+### Internal
+
+- `app::bash_static_dispatcher::generate_cygwin_dispatcher` now emits
+  a helper `__runex_cyg_is_command_position` and invokes it from
+  `__runex_cyg_expand` before the abbreviation lookup. The trade-off
+  docstring at the top of the module is replaced with a parity note
+  that maps each Rust branch (`trim_trailing_spaces`,
+  `ends_with_pipeline_operator`, `strip_trailing_sudo`) to its bash
+  counterpart.
+
+- The bake expand function's `prefix` computation switches from
+  `${left%$token}` to a substring slice
+  (`${left:0:$((${#left} - ${#token}))}`). The old form treated the
+  token as a `%` glob pattern, so a token containing `?` / `*` / `[`
+  would strip an unintended portion of the left side. The substring
+  form is byte-faithful regardless of the token's contents.
+
+### Tests
+
+- 5 new unit tests in `app::bash_static_dispatcher::tests` pin
+  structural invariants of the generated dispatcher (helper function
+  present, every pipeline-op `case` pattern present, sudo word check
+  present, command-position check runs before lookup, the prefix
+  uses the substring slice rather than the `%` glob).
+- 5 new Linux PTY tests in `tests/bash_cygwin_bake_pty.rs` cover
+  argument position (`echo gst<Space>` does not expand) and each
+  command-position prefix (`sudo`, `|`, `&&`, `;`). The 0.1.17
+  trade-off pin (`cygwin_bake_expands_even_when_token_is_not_in_command_position`)
+  is replaced by a positive `cygwin_bake_skips_expansion_after_echo`
+  test — same input buffer, opposite expectation.
+- 4 new Windows-local smoke tests in `tests/bash_gitbash_smoke.rs`
+  drive `__runex_expand` with `READLINE_LINE` directly on every
+  cygwin-family bash installed (Git Bash, MSYS2, optionally upstream
+  Cygwin) and assert the rewritten buffer matches the exec-path
+  output.
+- 1 new Linux exec-path PTY test
+  (`bash_pty_integration::space_does_not_expand_after_echo_argument_position`)
+  mirrors the bake-path counterpart so the parity is visible in a
+  single diff.
+
+### Docs
+
+- `docs/setup.md` / `docs/setup.ja.md` troubleshooting item 7
+  ("Git Bash 0.1.17 interim trade-off") is removed — the trade-off
+  no longer applies.
+
 ## [0.1.18] - 2026-05-31
 
 ### Fixed
