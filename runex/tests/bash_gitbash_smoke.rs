@@ -435,3 +435,116 @@ echo "POINT=$READLINE_POINT""#,
         );
     });
 }
+
+// ─── command-position (issue #9) — Windows-local smokes ─────────────
+//
+// These four tests drive `__runex_expand` directly with crafted
+// READLINE_LINE / READLINE_POINT values against every cygwin-family
+// bash that happens to be installed (Git Bash, MSYS2, optional
+// Cygwin). PTY isn't required: we just inspect the buffer rewrite
+// the bake dispatcher produces, which is exactly what the runtime
+// would have observed.
+
+#[test]
+fn bake_skips_expansion_after_echo_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_skips_expansion_after_echo", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        // `echo gst` with the cursor right after `gst`. `echo ` is
+        // not a command position, so the bake dispatcher must
+        // self-insert a literal space rather than expanding `gst`.
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="echo gst"
+READLINE_POINT=8
+__runex_expand
+echo "LINE=$READLINE_LINE""#,
+        );
+        assert!(
+            out.contains("LINE=echo gst "),
+            "[{label}] bake must NOT expand `gst` after `echo ` (issue #9 \
+             argument-position parity); got:\n{out}"
+        );
+        assert!(
+            !out.contains("git status"),
+            "[{label}] bake leaked the expanded form into argument position: \
+             {out}"
+        );
+    });
+}
+
+#[test]
+fn bake_expands_after_sudo_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_expands_after_sudo", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        // `sudo` at the head of the buffer is a command position via
+        // the sudo-recursion rule (see `domain::hook::is_command_position`).
+        // The bake dispatcher should expand `gst` to its `expand`
+        // value (`git status`) right after the trailing space.
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="sudo gst"
+READLINE_POINT=8
+__runex_expand
+echo "LINE=$READLINE_LINE""#,
+        );
+        assert!(
+            out.contains("LINE=sudo git status "),
+            "[{label}] bake must expand `gst` after `sudo ` (issue #9 sudo \
+             recursion); got:\n{out}"
+        );
+    });
+}
+
+#[test]
+fn bake_expands_after_pipe_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_expands_after_pipe", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="cat foo | gst"
+READLINE_POINT=13
+__runex_expand
+echo "LINE=$READLINE_LINE""#,
+        );
+        assert!(
+            out.contains("LINE=cat foo | git status "),
+            "[{label}] bake must expand `gst` after `|` (issue #9 pipeline \
+             command position); got:\n{out}"
+        );
+    });
+}
+
+#[test]
+fn bake_expands_after_and_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_expands_after_and", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="true && gst"
+READLINE_POINT=11
+__runex_expand
+echo "LINE=$READLINE_LINE""#,
+        );
+        assert!(
+            out.contains("LINE=true && git status "),
+            "[{label}] bake must expand `gst` after `&&` (issue #9 list \
+             command position); got:\n{out}"
+        );
+    });
+}
