@@ -181,9 +181,6 @@ pub(crate) fn lua_quote_string(value: &str) -> String {
     out
 }
 
-/// Generate the `bind` lines for bash, removing the old binding before adding the new one.
-/// Only the configured trigger key is touched; other keys are left as-is.
-
 #[cfg(test)]
 mod tests {
     use super::*;

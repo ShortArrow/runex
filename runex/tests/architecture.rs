@@ -65,11 +65,10 @@ fn production_lines(content: &str) -> Vec<(usize, String)> {
                     }
                 }
                 '}' => {
-                    if let Some(&top) = test_mod_depths.last() {
-                        if depth == top {
+                    if let Some(&top) = test_mod_depths.last()
+                        && depth == top {
                             test_mod_depths.pop();
                         }
-                    }
                     depth = depth.saturating_sub(1);
                 }
                 _ => {}
@@ -104,11 +103,10 @@ fn collect_rs_files(dir: &Path) -> Vec<(PathBuf, String)> {
         let path = entry.path();
         if path.is_dir() {
             out.extend(collect_rs_files(&path));
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            if let Ok(content) = fs::read_to_string(&path) {
+        } else if path.extension().is_some_and(|e| e == "rs")
+            && let Ok(content) = fs::read_to_string(&path) {
                 out.push((path, content));
             }
-        }
     }
     out
 }
@@ -152,11 +150,10 @@ fn use_lines(content: &str) -> Vec<(usize, String)> {
         }
 
         // Capture `use crate::…` lines that aren't inside a test mod.
-        if trimmed.starts_with("use crate::") || trimmed.starts_with("pub use crate::") {
-            if test_mod_depths.is_empty() {
+        if (trimmed.starts_with("use crate::") || trimmed.starts_with("pub use crate::"))
+            && test_mod_depths.is_empty() {
                 out.push((i + 1, line.to_string()));
             }
-        }
 
         // Naive brace counter that ignores braces inside string /
         // char literals and `//` comments. Good enough for this
@@ -178,11 +175,10 @@ fn use_lines(content: &str) -> Vec<(usize, String)> {
                     }
                 }
                 '}' => {
-                    if let Some(&top) = test_mod_depths.last() {
-                        if depth == top {
+                    if let Some(&top) = test_mod_depths.last()
+                        && depth == top {
                             test_mod_depths.pop();
                         }
-                    }
                     depth = depth.saturating_sub(1);
                 }
                 _ => {}

@@ -78,14 +78,12 @@ pub(crate) fn make_command_exists<'a>(
             return cached;
         }
 
-        if let Some(ref h) = hint {
-            if let Some(&cached) = h.commands.get(cmd) {
-                if cached {
+        if let Some(ref h) = hint
+            && let Some(&cached) = h.commands.get(cmd)
+                && cached {
                     cache.borrow_mut().insert(cmd.to_owned(), true);
                     return true;
                 }
-            }
-        }
 
         let live_check = |c: &str| -> bool {
             #[cfg(windows)]
@@ -151,14 +149,12 @@ pub(crate) fn make_command_exists_owned(
             return cached;
         }
 
-        if let Some(ref h) = hint {
-            if let Some(&cached) = h.commands.get(cmd) {
-                if cached {
+        if let Some(ref h) = hint
+            && let Some(&cached) = h.commands.get(cmd)
+                && cached {
                     cache.borrow_mut().insert(cmd.to_owned(), true);
                     return true;
                 }
-            }
-        }
 
         let live_check = |c: &str| -> bool {
             #[cfg(windows)]

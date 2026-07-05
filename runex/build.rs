@@ -22,15 +22,13 @@ fn main() {
     if let Ok(output) = Command::new("git")
         .args(["rev-parse", "--short=12", "HEAD"])
         .output()
-    {
-        if output.status.success() {
+        && output.status.success() {
             let commit = String::from_utf8_lossy(&output.stdout);
             let commit = commit.trim();
             if !commit.is_empty() {
                 println!("cargo:rustc-env=RUNEX_GIT_COMMIT={commit}");
             }
         }
-    }
 }
 
 /// Tell cargo to invalidate the build whenever the current branch's HEAD
@@ -59,12 +57,11 @@ fn register_git_head_watch() {
 
     // If HEAD is "ref: refs/heads/<branch>", watch that file too — that's
     // what changes on `git commit` while staying on the same branch.
-    if let Ok(head_contents) = std::fs::read_to_string(&head_path) {
-        if let Some(ref_path) = head_contents.trim().strip_prefix("ref: ") {
+    if let Ok(head_contents) = std::fs::read_to_string(&head_path)
+        && let Some(ref_path) = head_contents.trim().strip_prefix("ref: ") {
             let target = git_dir.join(ref_path);
             if target.exists() {
                 println!("cargo:rerun-if-changed={}", target.display());
             }
         }
-    }
 }

@@ -150,12 +150,7 @@ pub(crate) fn absorb_registry_path_str(
     seen: &mut HashSet<Vec<u16>>,
 ) -> usize {
     let mut added = 0usize;
-    let mut entries_taken = 0usize;
-    for seg in raw.split(';') {
-        if entries_taken >= MAX_PATH_ENTRIES {
-            break;
-        }
-        entries_taken += 1;
+    for seg in raw.split(';').take(MAX_PATH_ENTRIES) {
         let expanded = expand_env_vars(seg);
         if push_dedup(&expanded, combined, seen) {
             added += 1;

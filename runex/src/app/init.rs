@@ -82,7 +82,7 @@ fn sanitize_nu_cache_path_literal(s: &str) -> String {
     s.chars()
         .filter(|&c| {
             !matches!(c, '\'' | '\n' | '\r' | '\t')
-                && !(c as u32 <= 0x1F)
+                && (c as u32 > 0x1F)
                 && c as u32 != 0x7F
                 && !crate::domain::sanitize::is_deceptive_unicode(c)
         })

@@ -46,6 +46,10 @@ pub(crate) enum ClipboardError {
          or use WSL with powershell.exe in PATH)"
     )]
     NoProvider,
+    // Only the unix external-provider path (xclip / wl-paste /
+    // powershell.exe bridge) enforces the 500 ms deadline; the
+    // Windows native reader is synchronous.
+    #[cfg(unix)]
     #[error("clipboard read timed out after 500 ms")]
     Timeout,
     #[error("clipboard text exceeds maximum size of {cap} bytes ({actual} bytes)")]
@@ -78,7 +82,7 @@ pub(crate) fn read_clipboard_text() -> Result<String, ClipboardError> {
 
 #[cfg(windows)]
 fn read_raw() -> Result<String, ClipboardError> {
-    use std::ptr;
+    
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, GetClipboardData, OpenClipboard,
@@ -131,8 +135,7 @@ fn read_raw() -> Result<String, ClipboardError> {
     // must NOT free it.
     let locked = unsafe { GlobalLock(handle as _) } as *const u16;
     if locked.is_null() {
-        return Err(ClipboardError::Io(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(ClipboardError::Io(io::Error::other(
             "GlobalLock failed",
         )));
     }

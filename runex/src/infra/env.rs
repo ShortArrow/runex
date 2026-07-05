@@ -161,11 +161,10 @@ pub(crate) fn xdg_cache_home_with(env: &dyn HomeDirResolver) -> Option<PathBuf> 
     if let Some(p) = env.env_var("XDG_CACHE_HOME") {
         return Some(PathBuf::from(p));
     }
-    if cfg!(windows) {
-        if let Some(p) = env.env_var("LOCALAPPDATA") {
+    if cfg!(windows)
+        && let Some(p) = env.env_var("LOCALAPPDATA") {
             return Some(PathBuf::from(p));
         }
-    }
     env.home_dir().map(|h| {
         if cfg!(windows) {
             h.join("AppData").join("Local")

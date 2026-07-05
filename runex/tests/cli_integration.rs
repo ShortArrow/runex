@@ -1465,7 +1465,7 @@ fn export_with_control_char_in_bin_exits_nonzero() {
 #[test]
 fn export_with_rlo_in_bin_exits_nonzero() {
     let cfg = write_config("version = 1\n");
-    let bin_with_rlo = format!("run\u{202e}ex");
+    let bin_with_rlo = "run\u{202e}ex".to_string();
     let (_, stderr, ok) = run(&["export", "bash", &format!("--bin={bin_with_rlo}")], Some(cfg.path()), None);
     assert!(!ok, "export --bin with RLO (U+202E) must exit non-zero");
     assert!(
@@ -1478,7 +1478,7 @@ fn export_with_rlo_in_bin_exits_nonzero() {
 #[test]
 fn export_with_zero_width_joiner_in_bin_exits_nonzero() {
     let cfg = write_config("version = 1\n");
-    let bin_with_zwj = format!("run\u{200d}ex");
+    let bin_with_zwj = "run\u{200d}ex".to_string();
     let (_, stderr, ok) = run(&["export", "bash", &format!("--bin={bin_with_zwj}")], Some(cfg.path()), None);
     assert!(!ok, "export --bin with ZWJ (U+200D) must exit non-zero");
     assert!(

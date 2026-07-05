@@ -35,6 +35,302 @@
 use crate::domain::expand::NUMBER_PLACEHOLDER;
 use crate::domain::model::{Config, Shell};
 
+/// Wrap `s` as a bash double-quoted string suitable for embedding inside
+/// an associative-array initializer like `["key"]="value"`.
+///
+/// Escapes the four characters that bash interprets inside a
+/// double-quoted string (`"`, `\`, `$`, `` ` ``) so the value survives
+/// as literal bytes. Single quotes are left alone — they are literal
+/// inside double quotes and the `{}` placeholder is frequently embedded
+/// inside `'...'` argument quoting.
+///
+/// ASCII control characters and deceptive Unicode are silently dropped,
+/// matching the policy of [`crate::domain::shell::bash_quote_string`].
+fn bash_double_quote_for_assoc(s: &str) -> String {
+    use crate::domain::sanitize::{is_deceptive_unicode, is_unicode_line_separator};
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '$' => out.push_str("\\$"),
+            '`' => out.push_str("\\`"),
+            c if c.is_ascii_control() => {}
+            c if is_unicode_line_separator(c) => {}
+            c if is_deceptive_unicode(c) => {}
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Build the `__runex_abbr_expand` associative-array body for the bake
+/// dispatcher: one `    ["key"]="expand"` line per non-pattern rule.
+///
+/// Rules whose key contains `{` are skipped — they are pattern rules and
+/// are handled by [`pattern_table_lines`] further down. Rules without a
+/// bash-applicable expansion (e.g. `pwsh`-only `ByShell` with no
+/// `default`) are dropped silently; the user already validated that the
+/// config makes sense for the shells they care about, and dropping is the
+/// only response that keeps the bake path bytewise equivalent to the
+/// exec path for bash.
+fn exact_table_lines(config: &Config) -> String {
+    let mut lines = Vec::new();
+    for rule in &config.abbr {
+        if rule.key.contains('{') {
+            continue;
+        }
+        let Some(expand) = rule.expand.for_shell(Shell::Bash) else {
+            continue;
+        };
+        lines.push(format!(
+            "    [{}]={}",
+            bash_double_quote_for_assoc(&rule.key),
+            bash_double_quote_for_assoc(expand),
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Build the `__runex_abbr_cond` associative-array body: one
+/// `    ["key"]="cmd1:cmd2"` line per rule that has a non-empty
+/// `when_command_exists` list for bash.
+///
+/// `:` is used as the join character because the dispatcher in
+/// `bash.sh` splits the list with `IFS=':'` — neither a command name
+/// nor a `bash_double_quote_for_assoc`'d byte sequence can contain a
+/// raw `:` that would confuse the split. Empty lists are skipped (a
+/// guard of "no commands required" is equivalent to no guard at all).
+fn cond_table_lines(config: &Config) -> String {
+    let mut lines = Vec::new();
+    for rule in &config.abbr {
+        if rule.key.contains('{') {
+            continue;
+        }
+        let Some(cmds) = rule
+            .when_command_exists
+            .as_ref()
+            .and_then(|w| w.for_shell(Shell::Bash))
+        else {
+            continue;
+        };
+        if cmds.is_empty() {
+            continue;
+        }
+        let joined = cmds.join(":");
+        lines.push(format!(
+            "    [{}]={}",
+            bash_double_quote_for_assoc(&rule.key),
+            bash_double_quote_for_assoc(&joined),
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Build the `__runex_abbr_patterns` indexed-array body for rules whose
+/// key contains `{number}`.
+///
+/// Each emitted line is a single bash double-quoted string concatenated
+/// with `$'\037'` (ANSI-C-quoted US, 0x1F) field separators:
+///
+/// ```text
+///     "prefix"$'\037'"suffix"$'\037'"template"$'\037'"unit"
+/// ```
+///
+/// The bake dispatcher in `bash.sh` splits this with
+/// `IFS=$'\037' read -r prefix suffix template unit`. US is safe as a
+/// separator because the config validator rejects every ASCII control
+/// character in user-facing fields, so it can never appear inside
+/// `prefix` / `suffix` / `template` / `unit`.
+fn pattern_table_lines(config: &Config) -> String {
+    let mut lines = Vec::new();
+    for rule in &config.abbr {
+        let Some(unit) = rule.number.as_deref() else {
+            continue;
+        };
+        let Some(pos) = rule.key.find(NUMBER_PLACEHOLDER) else {
+            continue;
+        };
+        let Some(template) = rule.expand.for_shell(Shell::Bash) else {
+            continue;
+        };
+        let prefix = &rule.key[..pos];
+        let suffix = &rule.key[pos + NUMBER_PLACEHOLDER.len()..];
+        let sep = "$'\\037'";
+        lines.push(format!(
+            "    {prefix}{sep}{suffix}{sep}{template}{sep}{unit}",
+            prefix   = bash_double_quote_for_assoc(prefix),
+            suffix   = bash_double_quote_for_assoc(suffix),
+            template = bash_double_quote_for_assoc(template),
+            unit     = bash_double_quote_for_assoc(unit),
+            sep      = sep,
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Generate the full cygwin/msys bake-mode dispatcher block:
+///
+/// 1. `__runex_cyg_expand` — public entry, called from `__runex_expand`
+///    when sourced under Git Bash (selected by the `case "${OSTYPE-}"`
+///    switch at the bottom of this block).
+/// 2. `__runex_abbr_expand` / `__runex_abbr_cond` / `__runex_abbr_patterns`
+///    — static tables baked from `config`.
+/// 3. `__runex_cyg_lookup` / `__runex_cyg_pattern_lookup` / `__runex_cyg_render`
+///    — helpers that operate purely on bash variables (no subprocesses).
+/// 4. `case "${OSTYPE-}"` — re-defines `__runex_expand` to either the
+///    bake path (cygwin / msys) or keep the exec path (Linux / WSL).
+///
+/// This block is inserted into `bash.sh` at `{BASH_CYG_DISPATCHER}` and
+/// is empty when `runex export bash` is called without a config so the
+/// legacy escape hatch (`eval "$(runex export bash)"`) stays unchanged.
+pub(crate) fn generate_cygwin_dispatcher(config: &Config) -> String {
+    let exact = exact_table_lines(config);
+    let cond = cond_table_lines(config);
+    let patterns = pattern_table_lines(config);
+    let exact_block = if exact.is_empty() { String::new() } else { format!("\n{exact}\n") };
+    let cond_block  = if cond.is_empty()  { String::new() } else { format!("\n{cond}\n") };
+    let pattern_block = if patterns.is_empty() { String::new() } else { format!("\n{patterns}\n") };
+    format!(
+        r#"declare -gA __runex_abbr_expand=({exact_block})
+declare -gA __runex_abbr_cond=({cond_block})
+__runex_abbr_patterns=({pattern_block})
+__runex_cyg_render() {{
+    local text="$1" pos
+    pos="${{text%%\{{\}}*}}"
+    if [ "$pos" = "$text" ]; then
+        __runex_out="$text"
+        __runex_cursor_off=""
+    else
+        __runex_cursor_off="${{#pos}}"
+        __runex_out="${{pos}}${{text#*\{{\}}}}"
+    fi
+}}
+__runex_cyg_lookup() {{
+    local key="$1" raw conds c
+    __runex_out=""
+    __runex_cursor_off=""
+    raw="${{__runex_abbr_expand[$key]-}}"
+    [ -z "$raw" ] && return
+    conds="${{__runex_abbr_cond[$key]-}}"
+    if [ -n "$conds" ]; then
+        local IFS=':'
+        for c in $conds; do command -v "$c" >/dev/null 2>&1 || return; done
+    fi
+    [ "$raw" = "$key" ] && return
+    __runex_cyg_render "$raw"
+}}
+__runex_cyg_pattern_lookup() {{
+    local token="$1" entry prefix suffix template unit rest n i repeated rendered
+    __runex_out=""
+    __runex_cursor_off=""
+    for entry in "${{__runex_abbr_patterns[@]}}"; do
+        IFS=$'\037' read -r prefix suffix template unit <<<"$entry"
+        [ "${{token#"$prefix"}}" = "$token" ] && continue
+        rest="${{token#"$prefix"}}"
+        if [ -n "$suffix" ]; then
+            [ "${{rest%"$suffix"}}" = "$rest" ] && continue
+            rest="${{rest%"$suffix"}}"
+        fi
+        [ -z "$rest" ] && continue
+        case "$rest" in (*[!0-9]*) continue ;; esac
+        n="$rest"
+        [ "$n" -le 0 ] 2>/dev/null && continue
+        [ "$n" -gt 128 ] 2>/dev/null && continue
+        repeated=""
+        for ((i=0; i<n; i++)); do repeated="${{repeated}}${{unit}}"; done
+        [ "${{#repeated}}" -gt 4096 ] && continue
+        rendered="${{template//\{{number\}}/$repeated}}"
+        [ "${{#rendered}}" -gt 4096 ] && continue
+        __runex_cyg_render "$rendered"
+        return
+    done
+}}
+__runex_cyg_is_command_position() {{
+    # Sets __runex_cmd_pos = 1 if $1 is a command-position prefix,
+    # 0 otherwise. Mirrors `domain::hook::is_command_position`:
+    #   - empty / whitespace-only prefix → command position
+    #   - ends with `&&` / `||` / `|` / `;` → command position
+    #   - ends with the word `sudo` whose prefix is itself command
+    #     position → command position
+    local prefix="$1"
+    while [ "${{prefix: -1}}" = " " ]; do
+        prefix="${{prefix:0:${{#prefix}}-1}}"
+    done
+    if [ -z "$prefix" ]; then __runex_cmd_pos=1; return; fi
+    case "$prefix" in
+        *"&&"|*"||"|*"|"|*";") __runex_cmd_pos=1; return ;;
+    esac
+    local last_word="${{prefix##* }}"
+    local before_last
+    if [ "$last_word" = "$prefix" ]; then
+        before_last=""
+    else
+        before_last="${{prefix:0:$((${{#prefix}} - ${{#last_word}}))}}"
+    fi
+    if [ "$last_word" = "sudo" ]; then
+        while [ "${{before_last: -1}}" = " " ]; do
+            before_last="${{before_last:0:${{#before_last}}-1}}"
+        done
+        if [ -z "$before_last" ]; then __runex_cmd_pos=1; return; fi
+        case "$before_last" in
+            *"&&"|*"||"|*"|"|*";") __runex_cmd_pos=1; return ;;
+        esac
+    fi
+    __runex_cmd_pos=0
+}}
+__runex_cyg_expand() {{
+    local left right token prefix
+    left="${{READLINE_LINE:0:READLINE_POINT}}"
+    right="${{READLINE_LINE:READLINE_POINT}}"
+    if [ -n "$right" ] && [ "${{right:0:1}}" != " " ]; then
+        READLINE_LINE="${{left}} ${{right}}"
+        READLINE_POINT=$((READLINE_POINT + 1))
+        return
+    fi
+    token="${{left##* }}"
+    if [ -z "$token" ]; then
+        READLINE_LINE="${{left}} ${{right}}"
+        READLINE_POINT=$((READLINE_POINT + 1))
+        return
+    fi
+    # Substring slice for prefix (= avoid `${{left%$token}}` glob
+    # interpretation when the token contains `?`, `*`, or `[`).
+    prefix="${{left:0:$((${{#left}} - ${{#token}}))}}"
+    # Command-position check (issue #9): if the prefix is not a
+    # command position, fall back to a literal space insertion
+    # without consulting the abbreviation tables.
+    __runex_cyg_is_command_position "$prefix"
+    if [ "$__runex_cmd_pos" -eq 0 ]; then
+        READLINE_LINE="${{left}} ${{right}}"
+        READLINE_POINT=$((READLINE_POINT + 1))
+        return
+    fi
+    __runex_cyg_lookup "$token"
+    if [ -z "$__runex_out" ]; then __runex_cyg_pattern_lookup "$token"; fi
+    if [ -z "$__runex_out" ]; then
+        READLINE_LINE="${{left}} ${{right}}"
+        READLINE_POINT=$((READLINE_POINT + 1))
+        return
+    fi
+    if [ -n "$__runex_cursor_off" ]; then
+        READLINE_LINE="${{prefix}}${{__runex_out}}${{right}}"
+        READLINE_POINT=$(( ${{#prefix}} + __runex_cursor_off ))
+    else
+        READLINE_LINE="${{prefix}}${{__runex_out}} ${{right}}"
+        READLINE_POINT=$(( ${{#prefix}} + ${{#__runex_out}} + 1 ))
+    fi
+}}
+"#,
+        exact_block = exact_block,
+        cond_block = cond_block,
+        pattern_block = pattern_block,
+    )
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,299 +760,4 @@ mod tests {
             "bake expand must compute prefix via substring slice (issue #9): {s}"
         );
     }
-}
-
-/// Wrap `s` as a bash double-quoted string suitable for embedding inside
-/// an associative-array initializer like `["key"]="value"`.
-///
-/// Escapes the four characters that bash interprets inside a
-/// double-quoted string (`"`, `\`, `$`, `` ` ``) so the value survives
-/// as literal bytes. Single quotes are left alone — they are literal
-/// inside double quotes and the `{}` placeholder is frequently embedded
-/// inside `'...'` argument quoting.
-///
-/// ASCII control characters and deceptive Unicode are silently dropped,
-/// matching the policy of [`crate::domain::shell::bash_quote_string`].
-fn bash_double_quote_for_assoc(s: &str) -> String {
-    use crate::domain::sanitize::{is_deceptive_unicode, is_unicode_line_separator};
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '$' => out.push_str("\\$"),
-            '`' => out.push_str("\\`"),
-            c if c.is_ascii_control() => {}
-            c if is_unicode_line_separator(c) => {}
-            c if is_deceptive_unicode(c) => {}
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-/// Build the `__runex_abbr_expand` associative-array body for the bake
-/// dispatcher: one `    ["key"]="expand"` line per non-pattern rule.
-///
-/// Rules whose key contains `{` are skipped — they are pattern rules and
-/// are handled by [`pattern_table_lines`] further down. Rules without a
-/// bash-applicable expansion (e.g. `pwsh`-only `ByShell` with no
-/// `default`) are dropped silently; the user already validated that the
-/// config makes sense for the shells they care about, and dropping is the
-/// only response that keeps the bake path bytewise equivalent to the
-/// exec path for bash.
-fn exact_table_lines(config: &Config) -> String {
-    let mut lines = Vec::new();
-    for rule in &config.abbr {
-        if rule.key.contains('{') {
-            continue;
-        }
-        let Some(expand) = rule.expand.for_shell(Shell::Bash) else {
-            continue;
-        };
-        lines.push(format!(
-            "    [{}]={}",
-            bash_double_quote_for_assoc(&rule.key),
-            bash_double_quote_for_assoc(expand),
-        ));
-    }
-    lines.join("\n")
-}
-
-/// Build the `__runex_abbr_cond` associative-array body: one
-/// `    ["key"]="cmd1:cmd2"` line per rule that has a non-empty
-/// `when_command_exists` list for bash.
-///
-/// `:` is used as the join character because the dispatcher in
-/// `bash.sh` splits the list with `IFS=':'` — neither a command name
-/// nor a `bash_double_quote_for_assoc`'d byte sequence can contain a
-/// raw `:` that would confuse the split. Empty lists are skipped (a
-/// guard of "no commands required" is equivalent to no guard at all).
-fn cond_table_lines(config: &Config) -> String {
-    let mut lines = Vec::new();
-    for rule in &config.abbr {
-        if rule.key.contains('{') {
-            continue;
-        }
-        let Some(cmds) = rule
-            .when_command_exists
-            .as_ref()
-            .and_then(|w| w.for_shell(Shell::Bash))
-        else {
-            continue;
-        };
-        if cmds.is_empty() {
-            continue;
-        }
-        let joined = cmds.join(":");
-        lines.push(format!(
-            "    [{}]={}",
-            bash_double_quote_for_assoc(&rule.key),
-            bash_double_quote_for_assoc(&joined),
-        ));
-    }
-    lines.join("\n")
-}
-
-/// Build the `__runex_abbr_patterns` indexed-array body for rules whose
-/// key contains `{number}`.
-///
-/// Each emitted line is a single bash double-quoted string concatenated
-/// with `$'\037'` (ANSI-C-quoted US, 0x1F) field separators:
-///
-/// ```text
-///     "prefix"$'\037'"suffix"$'\037'"template"$'\037'"unit"
-/// ```
-///
-/// The bake dispatcher in `bash.sh` splits this with
-/// `IFS=$'\037' read -r prefix suffix template unit`. US is safe as a
-/// separator because the config validator rejects every ASCII control
-/// character in user-facing fields, so it can never appear inside
-/// `prefix` / `suffix` / `template` / `unit`.
-fn pattern_table_lines(config: &Config) -> String {
-    let mut lines = Vec::new();
-    for rule in &config.abbr {
-        let Some(unit) = rule.number.as_deref() else {
-            continue;
-        };
-        let Some(pos) = rule.key.find(NUMBER_PLACEHOLDER) else {
-            continue;
-        };
-        let Some(template) = rule.expand.for_shell(Shell::Bash) else {
-            continue;
-        };
-        let prefix = &rule.key[..pos];
-        let suffix = &rule.key[pos + NUMBER_PLACEHOLDER.len()..];
-        let sep = "$'\\037'";
-        lines.push(format!(
-            "    {prefix}{sep}{suffix}{sep}{template}{sep}{unit}",
-            prefix   = bash_double_quote_for_assoc(prefix),
-            suffix   = bash_double_quote_for_assoc(suffix),
-            template = bash_double_quote_for_assoc(template),
-            unit     = bash_double_quote_for_assoc(unit),
-            sep      = sep,
-        ));
-    }
-    lines.join("\n")
-}
-
-/// Generate the full cygwin/msys bake-mode dispatcher block:
-///
-/// 1. `__runex_cyg_expand` — public entry, called from `__runex_expand`
-///    when sourced under Git Bash (selected by the `case "${OSTYPE-}"`
-///    switch at the bottom of this block).
-/// 2. `__runex_abbr_expand` / `__runex_abbr_cond` / `__runex_abbr_patterns`
-///    — static tables baked from `config`.
-/// 3. `__runex_cyg_lookup` / `__runex_cyg_pattern_lookup` / `__runex_cyg_render`
-///    — helpers that operate purely on bash variables (no subprocesses).
-/// 4. `case "${OSTYPE-}"` — re-defines `__runex_expand` to either the
-///    bake path (cygwin / msys) or keep the exec path (Linux / WSL).
-///
-/// This block is inserted into `bash.sh` at `{BASH_CYG_DISPATCHER}` and
-/// is empty when `runex export bash` is called without a config so the
-/// legacy escape hatch (`eval "$(runex export bash)"`) stays unchanged.
-pub(crate) fn generate_cygwin_dispatcher(config: &Config) -> String {
-    let exact = exact_table_lines(config);
-    let cond = cond_table_lines(config);
-    let patterns = pattern_table_lines(config);
-    let exact_block = if exact.is_empty() { String::new() } else { format!("\n{exact}\n") };
-    let cond_block  = if cond.is_empty()  { String::new() } else { format!("\n{cond}\n") };
-    let pattern_block = if patterns.is_empty() { String::new() } else { format!("\n{patterns}\n") };
-    format!(
-        r#"declare -gA __runex_abbr_expand=({exact_block})
-declare -gA __runex_abbr_cond=({cond_block})
-__runex_abbr_patterns=({pattern_block})
-__runex_cyg_render() {{
-    local text="$1" pos
-    pos="${{text%%\{{\}}*}}"
-    if [ "$pos" = "$text" ]; then
-        __runex_out="$text"
-        __runex_cursor_off=""
-    else
-        __runex_cursor_off="${{#pos}}"
-        __runex_out="${{pos}}${{text#*\{{\}}}}"
-    fi
-}}
-__runex_cyg_lookup() {{
-    local key="$1" raw conds c
-    __runex_out=""
-    __runex_cursor_off=""
-    raw="${{__runex_abbr_expand[$key]-}}"
-    [ -z "$raw" ] && return
-    conds="${{__runex_abbr_cond[$key]-}}"
-    if [ -n "$conds" ]; then
-        local IFS=':'
-        for c in $conds; do command -v "$c" >/dev/null 2>&1 || return; done
-    fi
-    [ "$raw" = "$key" ] && return
-    __runex_cyg_render "$raw"
-}}
-__runex_cyg_pattern_lookup() {{
-    local token="$1" entry prefix suffix template unit rest n i repeated rendered
-    __runex_out=""
-    __runex_cursor_off=""
-    for entry in "${{__runex_abbr_patterns[@]}}"; do
-        IFS=$'\037' read -r prefix suffix template unit <<<"$entry"
-        [ "${{token#"$prefix"}}" = "$token" ] && continue
-        rest="${{token#"$prefix"}}"
-        if [ -n "$suffix" ]; then
-            [ "${{rest%"$suffix"}}" = "$rest" ] && continue
-            rest="${{rest%"$suffix"}}"
-        fi
-        [ -z "$rest" ] && continue
-        case "$rest" in (*[!0-9]*) continue ;; esac
-        n="$rest"
-        [ "$n" -le 0 ] 2>/dev/null && continue
-        [ "$n" -gt 128 ] 2>/dev/null && continue
-        repeated=""
-        for ((i=0; i<n; i++)); do repeated="${{repeated}}${{unit}}"; done
-        [ "${{#repeated}}" -gt 4096 ] && continue
-        rendered="${{template//\{{number\}}/$repeated}}"
-        [ "${{#rendered}}" -gt 4096 ] && continue
-        __runex_cyg_render "$rendered"
-        return
-    done
-}}
-__runex_cyg_is_command_position() {{
-    # Sets __runex_cmd_pos = 1 if $1 is a command-position prefix,
-    # 0 otherwise. Mirrors `domain::hook::is_command_position`:
-    #   - empty / whitespace-only prefix → command position
-    #   - ends with `&&` / `||` / `|` / `;` → command position
-    #   - ends with the word `sudo` whose prefix is itself command
-    #     position → command position
-    local prefix="$1"
-    while [ "${{prefix: -1}}" = " " ]; do
-        prefix="${{prefix:0:${{#prefix}}-1}}"
-    done
-    if [ -z "$prefix" ]; then __runex_cmd_pos=1; return; fi
-    case "$prefix" in
-        *"&&"|*"||"|*"|"|*";") __runex_cmd_pos=1; return ;;
-    esac
-    local last_word="${{prefix##* }}"
-    local before_last
-    if [ "$last_word" = "$prefix" ]; then
-        before_last=""
-    else
-        before_last="${{prefix:0:$((${{#prefix}} - ${{#last_word}}))}}"
-    fi
-    if [ "$last_word" = "sudo" ]; then
-        while [ "${{before_last: -1}}" = " " ]; do
-            before_last="${{before_last:0:${{#before_last}}-1}}"
-        done
-        if [ -z "$before_last" ]; then __runex_cmd_pos=1; return; fi
-        case "$before_last" in
-            *"&&"|*"||"|*"|"|*";") __runex_cmd_pos=1; return ;;
-        esac
-    fi
-    __runex_cmd_pos=0
-}}
-__runex_cyg_expand() {{
-    local left right token prefix
-    left="${{READLINE_LINE:0:READLINE_POINT}}"
-    right="${{READLINE_LINE:READLINE_POINT}}"
-    if [ -n "$right" ] && [ "${{right:0:1}}" != " " ]; then
-        READLINE_LINE="${{left}} ${{right}}"
-        READLINE_POINT=$((READLINE_POINT + 1))
-        return
-    fi
-    token="${{left##* }}"
-    if [ -z "$token" ]; then
-        READLINE_LINE="${{left}} ${{right}}"
-        READLINE_POINT=$((READLINE_POINT + 1))
-        return
-    fi
-    # Substring slice for prefix (= avoid `${{left%$token}}` glob
-    # interpretation when the token contains `?`, `*`, or `[`).
-    prefix="${{left:0:$((${{#left}} - ${{#token}}))}}"
-    # Command-position check (issue #9): if the prefix is not a
-    # command position, fall back to a literal space insertion
-    # without consulting the abbreviation tables.
-    __runex_cyg_is_command_position "$prefix"
-    if [ "$__runex_cmd_pos" -eq 0 ]; then
-        READLINE_LINE="${{left}} ${{right}}"
-        READLINE_POINT=$((READLINE_POINT + 1))
-        return
-    fi
-    __runex_cyg_lookup "$token"
-    if [ -z "$__runex_out" ]; then __runex_cyg_pattern_lookup "$token"; fi
-    if [ -z "$__runex_out" ]; then
-        READLINE_LINE="${{left}} ${{right}}"
-        READLINE_POINT=$((READLINE_POINT + 1))
-        return
-    fi
-    if [ -n "$__runex_cursor_off" ]; then
-        READLINE_LINE="${{prefix}}${{__runex_out}}${{right}}"
-        READLINE_POINT=$(( ${{#prefix}} + __runex_cursor_off ))
-    else
-        READLINE_LINE="${{prefix}}${{__runex_out}} ${{right}}"
-        READLINE_POINT=$(( ${{#prefix}} + ${{#__runex_out}} + 1 ))
-    fi
-}}
-"#,
-        exact_block = exact_block,
-        cond_block = cond_block,
-        pattern_block = pattern_block,
-    )
 }
