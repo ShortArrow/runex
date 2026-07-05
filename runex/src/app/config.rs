@@ -390,15 +390,14 @@ fn walk_expand_issues(
                 (&PER_SHELL_LABELS[4], nu),
             ];
             for (label, value) in variants {
-                if let Some(s) = value {
-                    if let Some(reason) = check_expand_value(s) {
+                if let Some(s) = value
+                    && let Some(reason) = check_expand_value(s) {
                         f(ValidationIssue::Rule {
                             rule_index,
                             field_path: format!("expand.{}", label),
                             reason,
                         })?;
                     }
-                }
             }
         }
     }
@@ -480,8 +479,8 @@ fn visit_validation_issues(
     for (i, abbr) in config.abbr.iter().enumerate() {
         let rule_index = i + 1;
         // (b-1) key
-        if let Some(reason) = check_abbr_key(&abbr.key) {
-            if f(ValidationIssue::Rule {
+        if let Some(reason) = check_abbr_key(&abbr.key)
+            && f(ValidationIssue::Rule {
                 rule_index,
                 field_path: "key".into(),
                 reason,
@@ -490,17 +489,15 @@ fn visit_validation_issues(
             {
                 return;
             }
-        }
         // (b-2) expand (per-shell aware)
         if walk_expand_issues(&abbr.expand, rule_index, &mut f).is_break() {
             return;
         }
         // (b-3) when_command_exists (per-shell aware + list-level + per-entry)
-        if let Some(cmds) = &abbr.when_command_exists {
-            if walk_cmds_issues(cmds, rule_index, &mut f).is_break() {
+        if let Some(cmds) = &abbr.when_command_exists
+            && walk_cmds_issues(cmds, rule_index, &mut f).is_break() {
                 return;
             }
-        }
         // (b-4) {number} placeholder consistency (issue #1)
         if walk_number_placeholder_issues(abbr, rule_index, &mut f).is_break() {
             return;
@@ -564,15 +561,14 @@ fn walk_number_placeholder_issues(
     }
 
     // 4. Content checks on the unit itself (when present).
-    if let Some(unit) = abbr.number.as_deref() {
-        if let Some(reason) = check_number_unit(unit) {
+    if let Some(unit) = abbr.number.as_deref()
+        && let Some(reason) = check_number_unit(unit) {
             f(ValidationIssue::Rule {
                 rule_index,
                 field_path: "number".into(),
                 reason,
             })?;
         }
-    }
 
     std::ops::ControlFlow::Continue(())
 }
@@ -702,8 +698,8 @@ fn first_keybind_error(config: &Config) -> Option<ConfigError> {
             return Some(ConfigError::PasteInterceptUnsupportedShell(label));
         }
     }
-    if let Some(k) = paste.nu {
-        if k != TriggerKey::CtrlV {
+    if let Some(k) = paste.nu
+        && k != TriggerKey::CtrlV {
             let key_str = match k {
                 TriggerKey::Space => "space",
                 TriggerKey::Tab => "tab",
@@ -713,7 +709,6 @@ fn first_keybind_error(config: &Config) -> Option<ConfigError> {
             };
             return Some(ConfigError::PasteInterceptInvalidKey("nu", key_str));
         }
-    }
 
     None
 }
@@ -743,10 +738,14 @@ pub(crate) fn load_config(path: &std::path::Path) -> Result<Config, ConfigError>
 /// Append an abbreviation rule to a config file.
 ///
 /// Validates the new rule (using the pure `check_*` helpers), then
-/// delegates the file append to
-/// [`crate::infra::config_store::append_abbr_block`]. Phase D D4
-/// will move this wrapper to `app::abbr` and have `cmd/add_remove`
-/// call that instead.
+/// validates the aggregate state the append would produce: the
+/// `--when` list must fit `MAX_CMD_LIST_LEN`, the existing config
+/// must load (so `add` never extends a file the next load rejects,
+/// including a missing or version-less one), and the resulting rule
+/// count must fit `MAX_ABBR_RULES`. Only then delegates the file
+/// append to [`crate::infra::config_store::append_abbr_block`].
+/// Phase D D4 will move this wrapper to `app::abbr` and have
+/// `cmd/add_remove` call that instead.
 pub(crate) fn append_abbr_to_file(
     path: &std::path::Path,
     key: &str,
@@ -761,11 +760,23 @@ pub(crate) fn append_abbr_to_file(
         return Err(ValidationIssue::Rule { rule_index: n, field_path: "expand".into(), reason }.to_config_error());
     }
     if let Some(cmds) = when_command_exists {
+        if cmds.len() > MAX_CMD_LIST_LEN {
+            return Err(ValidationIssue::Rule {
+                rule_index: n,
+                field_path: "when_command_exists".into(),
+                reason: ValidationReason::TooManyCmds,
+            }
+            .to_config_error());
+        }
         for cmd in cmds {
             if let Some(reason) = check_cmd_entry(cmd) {
                 return Err(ValidationIssue::Rule { rule_index: n, field_path: "when_command_exists".into(), reason }.to_config_error());
             }
         }
+    }
+    let existing = load_config(path)?;
+    if existing.abbr.len() + 1 > MAX_ABBR_RULES {
+        return Err(ValidationIssue::Config { reason: ValidationReason::TooManyRules }.to_config_error());
     }
     crate::infra::config_store::append_abbr_block(path, key, expand, when_command_exists)
 }
@@ -1525,6 +1536,66 @@ expand = "git push"
         std::fs::write(&path, "version = 1\n").unwrap();
 
         assert!(append_abbr_to_file(&path, "", "git commit", None).is_err());
+    }
+
+    /// `runex add` must not be able to write a rule that the next
+    /// `load_config` would reject: an oversize `--when` list has to
+    /// fail up front and leave the file untouched.
+    #[test]
+    fn append_abbr_rejects_oversize_when_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "version = 1\n").unwrap();
+
+        let cmds: Vec<String> = (0..=MAX_CMD_LIST_LEN).map(|i| format!("cmd{i}")).collect();
+        let err = append_abbr_to_file(&path, "ls", "lsd", Some(&cmds));
+        assert!(matches!(err, Err(ConfigError::TooManyCmds(_))), "got {err:?}");
+
+        let config = load_config(&path).expect("config must stay loadable");
+        assert_eq!(config.abbr.len(), 0, "oversize rule must not be written");
+    }
+
+    /// Appending the (MAX_ABBR_RULES + 1)-th rule must fail instead
+    /// of producing a config the next load rejects wholesale.
+    #[test]
+    fn append_abbr_rejects_when_rule_cap_reached() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut toml = String::from("version = 1\n");
+        for i in 0..MAX_ABBR_RULES {
+            toml.push_str(&format!("[[abbr]]\nkey = \"k{i}\"\nexpand = \"x\"\n"));
+        }
+        std::fs::write(&path, &toml).unwrap();
+
+        let err = append_abbr_to_file(&path, "onemore", "y", None);
+        assert!(matches!(err, Err(ConfigError::TooManyRules)), "got {err:?}");
+
+        let config = load_config(&path).expect("config must stay loadable");
+        assert_eq!(config.abbr.len(), MAX_ABBR_RULES);
+    }
+
+    /// Appending to a nonexistent config must fail (and not create a
+    /// version-less file); `runex init` owns config creation.
+    #[test]
+    fn append_abbr_rejects_missing_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        assert!(append_abbr_to_file(&path, "gcm", "git commit -m", None).is_err());
+        assert!(!path.exists(), "append must not create a config file");
+    }
+
+    /// Appending to a config missing `version = 1` would leave a file
+    /// the next load rejects; fail up front instead.
+    #[test]
+    fn append_abbr_rejects_versionless_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "").unwrap();
+
+        assert!(append_abbr_to_file(&path, "gcm", "git commit -m", None).is_err());
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(after, "", "append must leave the broken config untouched");
     }
 
     #[test]
