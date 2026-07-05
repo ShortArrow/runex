@@ -70,7 +70,7 @@ pub(crate) fn handle(
             install_clink_lua(yes, &config_path, env)?;
             None
         }
-        _ => install_rcfile_integration(shell, yes, env)?,
+        _ => install_rcfile_integration(shell, &config_path, yes, env)?,
     };
 
     println!();
@@ -100,6 +100,7 @@ pub(crate) fn handle(
 /// inseparable in the install flow).
 fn install_rcfile_integration(
     shell: Shell,
+    config_path: &Path,
     yes: bool,
     env: &dyn HomeDirResolver,
 ) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
@@ -151,8 +152,14 @@ fn install_rcfile_integration(
     // Write the cache file (idempotent: atomic replace, regenerates
     // even if marker is present so re-running picks up new templates
     // / config / runex binary location).
+    // Generate the cache from the same config file `handle` seeded
+    // (honours `--config`); mirrors `refresh_existing_caches`. The
+    // baked hook still resolves its config at runtime via
+    // `RUNEX_CONFIG` / the default path — `--config` at init time
+    // shapes the static parts (trigger keybinds, bake dispatcher
+    // table) only.
     let bin = crate::util::path::current_exe_or_default("runex");
-    let (_path, config, _err) = resolve_config_opt(None);
+    let (_path, config, _err) = resolve_config_opt(Some(config_path));
     let comment_prefix = crate::infra::integration_cache::comment_prefix_for(shell);
     let header = crate::infra::integration_cache::cache_header(comment_prefix, &bin);
     let body = crate::app::shell_export::export_script(shell, &bin, config.as_ref());
@@ -286,14 +293,13 @@ fn write_clink_lua_safely(install_path: &Path, contents: &str) -> CmdResult {
         })?;
     std::fs::create_dir_all(parent)?;
 
-    if let Ok(meta) = std::fs::symlink_metadata(install_path) {
-        if meta.file_type().is_symlink() {
+    if let Ok(meta) = std::fs::symlink_metadata(install_path)
+        && meta.file_type().is_symlink() {
             return Err(Box::<dyn std::error::Error>::from(format!(
                 "refusing to write through a symlink at {}",
                 sanitize_for_display(&install_path.display().to_string())
             )));
         }
-    }
 
     let file_name = install_path
         .file_name()
@@ -443,6 +449,36 @@ mod tests {
         assert!(
             body.contains(crate::infra::integration_check::RUNEX_INIT_MARKER),
             "bashrc must contain the runex marker: {body}"
+        );
+    }
+
+    /// `runex --config <path> init bash` must generate the
+    /// integration cache from the config at `<path>`, not from the
+    /// default config resolution. Regression: the cache body (bake
+    /// dispatcher table, trigger keybinds) silently came from the
+    /// default config while the seed file was written to `<path>`.
+    #[test]
+    fn handle_generates_cache_from_config_override_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        let env = env_with(home);
+        let cfg_path = home.join("custom-dir").join("myconf.toml");
+        std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cfg_path,
+            "version = 1\n[[abbr]]\nkey = \"zzz9custom\"\nexpand = \"echo custom\"\n",
+        )
+        .unwrap();
+
+        handle(cfg_path.clone(), Some("bash"), true, &env).expect("handle must succeed");
+
+        let cache = crate::infra::integration_cache::cache_path(Shell::Bash, &env)
+            .unwrap()
+            .unwrap();
+        let body = std::fs::read_to_string(&cache).expect("bash cache must exist");
+        assert!(
+            body.contains("zzz9custom"),
+            "cache must be generated from the override config (bake table must contain its abbr): {body}"
         );
     }
 
