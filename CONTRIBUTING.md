@@ -138,14 +138,24 @@ Keep business logic pure — no I/O, no global state, no side effects.
 
 ### Architecture
 
-The workspace is split into two crates with a deliberate boundary:
+`runex` is a single bin-only crate (the former `runex-core` crate was
+absorbed in 0.1.14) layered into modules with a deliberate boundary:
 
-- **Core crate** — pure business logic: config parsing, expansion, diagnostics, shell script generation, sanitisation. No subprocess calls, no terminal output, no global state.
-- **CLI crate** — side effects: argument parsing, file I/O, subprocess execution, terminal output. Calls into the core crate for all logic.
+```text
+  cmd  → app  → domain
+    ↓     ↓
+  util   infra → domain
+```
 
-The rule: if new code does not need to spawn a process or write to stdout, it belongs in the core crate. Formatting helpers are an exception — they live in the CLI crate but remain pure (data in, string out, no printing).
+- **`domain/`** — pure data types and rule-evaluation logic. No I/O, no env, no time. Imports from sibling layers are forbidden.
+- **`app/`** — orchestration / use-case wrappers. Composes `domain` types with `infra` adapters. No `std::fs::*` calls.
+- **`infra/`** — file system, environment, registry adapters. Implements injection traits (`HomeDirResolver`) for `app/`. `infra → domain` only.
+- **`cmd/`** — per-subcommand handlers. Reach behaviour through `app/`; reach leaf utilities through `util/`.
+- **`util/`** — leaf helpers shared by `cmd/*` (shell detection, prompt confirmation, command-existence factory). No command-specific policy.
 
-**Dependency injection at the boundary.** Environment-querying closures (command existence checks, PATH resolution) are constructed once in the CLI layer from user-supplied flags, then passed down into core functions. Core functions never reach into the environment themselves.
+The rule: if new code does not need to spawn a process or write to stdout, it belongs in `domain/` (or `app/` when it composes adapters). Formatting helpers are an exception — they live at the crate root (`format.rs`) but remain pure (data in, string out, no printing). The full layering contract lives in the `runex/src/main.rs` crate-root docstring, and `runex/tests/architecture.rs` enforces it at test time (no `infra → app` imports, no `domain →` anything, no filesystem calls in `app/`).
+
+**Dependency injection at the boundary.** Environment-querying closures (command existence checks, PATH resolution) are constructed once in the `cmd/` layer from user-supplied flags, then passed down into `app/` and `domain/` functions. Those functions never reach into the environment themselves.
 
 **Testability follows from the architecture.** A function that accepts an injected closure can be tested without touching the filesystem or PATH. Design for this — it is not an afterthought.
 
@@ -184,9 +194,9 @@ there's a concrete observation suggesting otherwise.
 
 Any value that originates from user-controlled data (config fields, command names, file paths) and is later rendered to the terminal or embedded in a shell string must be sanitised before use.
 
-**Terminal output** — strip unsafe characters (ASCII control characters, Unicode visual-deception characters such as RLO, BOM, and zero-width spaces) before including user-controlled values in any human-readable output. Use the sanitisation utilities in the core crate.
+**Terminal output** — strip unsafe characters (ASCII control characters, Unicode visual-deception characters such as RLO, BOM, and zero-width spaces) before including user-controlled values in any human-readable output. Use the sanitisation utilities in `runex/src/domain/sanitize.rs`.
 
-**Shell string embedding** — use the quoting helpers provided in the core crate. Never interpolate raw user data into a shell string literal.
+**Shell string embedding** — use the quoting helpers in `runex/src/domain/shell.rs`. Never interpolate raw user data into a shell string literal.
 
 **Config validation** — new config fields must follow the same rules as existing ones: reject control characters, deceptive Unicode, and enforce a byte-length limit. Field limits are documented in `docs/config-reference.md`.
 
