@@ -373,7 +373,7 @@ impl AppContext {
         precache_enabled: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let (config_path, config) = resolve_config(config_flag)?;
-        Ok(Self::assemble(config_path, config, shell_flag, path_prepend, precache_enabled)?)
+        Self::assemble(config_path, config, shell_flag, path_prepend, precache_enabled)
     }
 
     /// Graceful variant: missing/unparseable config is *not* a hard
@@ -1091,6 +1091,19 @@ mod tests {
         fn validate_bin_accepts_normal_name() {
             assert!(cmd::export::validate_bin("runex").is_ok());
             assert!(cmd::export::validate_bin("/usr/local/bin/runex").is_ok());
+        }
+
+        /// `--bin` defaults to `current_exe()`, so a runex installed
+        /// under a path containing spaces (`C:\Program Files\...`,
+        /// `C:\Users\John Doe\.cargo\bin\...`) must validate. The
+        /// shell templates quote the bin placeholder, so a space is
+        /// safe to embed; only control characters and non-ASCII stay
+        /// rejected.
+        #[test]
+        fn validate_bin_accepts_paths_with_spaces() {
+            assert!(cmd::export::validate_bin(r"C:\Program Files\runex\runex.exe").is_ok());
+            assert!(cmd::export::validate_bin(r"C:\Users\John Doe\.cargo\bin\runex.exe").is_ok());
+            assert!(cmd::export::validate_bin("/home/user/my tools/runex").is_ok());
         }
     }
 
