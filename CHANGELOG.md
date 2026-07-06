@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`runex config <show|type|where>` subcommands (#15).** Locate and
+  inspect the active config file. Naming mirrors the OS commands
+  users already know: `config where` prints the resolved config path
+  (`--config` / `RUNEX_CONFIG` / default order; the path prints even
+  when the file is missing, exit code 1 flags the absence, `--json`
+  emits `{path, exists}`), `config type` streams the file contents
+  to stdout (Windows `type` / Unix `cat` semantics, through the same
+  symlink/size-cap read policy as config loading), and `config show`
+  opens the file with the OS-associated application (`explorer.exe`
+  / `open` / `xdg-open`, spawned detached).
+
+### Fixed
+
+- **`runex export` no longer rejects binary paths containing
+  spaces.** `--bin` defaults to `current_exe()`, but the validator
+  required every character to be printable-ASCII-non-space — so an
+  install under `C:\Program Files\...` or a `C:\Users\John Doe\...`
+  home made `runex export` exit 1 (while `runex init`, which never
+  validated, baked the same path fine). The ASCII space is now
+  allowed; control characters and non-ASCII stay rejected. Every
+  shell template quotes the bin placeholder, so the space is safe to
+  embed.
+
+- **`runex add` can no longer write a config the next load
+  rejects.** The append path validated the new rule's fields but not
+  the aggregate constraints: a `--when` list over 64 entries, a
+  10,001st rule, or an append onto a missing / `version`-less file
+  (which silently created an unloadable config) all succeeded at
+  write time and then failed wholesale at the next load — surfacing
+  as every keypress silently falling back to a literal space. All
+  three now fail up front with a specific error and leave the file
+  untouched; config creation stays owned by `runex init`.
+
+- **`runex --config <path> init <shell>` now generates the
+  integration cache from `<path>`.** The non-clink install path
+  resolved its config independently and ignored the `--config`
+  override, so the cache body (bash bake dispatcher table, trigger
+  keybinds) silently came from the default config while the seed
+  file was written to `<path>`. The baked hook still resolves its
+  config at runtime via `RUNEX_CONFIG` / the default path; `--config`
+  at init time shapes the static parts.
+
+### Internal
+
+- All clippy warnings under Rust 1.91 cleared (let-chain collapses,
+  `std::slice::from_ref`, cfg-gating the unix-only
+  `ClipboardError::Timeout` variant, test-module placement).
+- `CONTRIBUTING.md` Architecture section rewritten around the actual
+  single-crate module layering (`cmd → app → domain`,
+  `infra → domain`) instead of the pre-0.1.14 two-crate split.
+
 ## [0.1.19] - 2026-06-01
 
 ### Fixed
