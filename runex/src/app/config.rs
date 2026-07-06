@@ -723,6 +723,13 @@ pub(crate) fn default_config_path() -> Result<PathBuf, ConfigError> {
     crate::infra::config_store::default_config_path()
 }
 
+/// Read the raw config file text without parsing. Thin wrapper so
+/// `cmd::config::handle_type` inherits the same symlink / size-cap
+/// read policy as `load_config` without importing `infra` directly.
+pub(crate) fn read_config_text(path: &std::path::Path) -> Result<String, ConfigError> {
+    crate::infra::config_store::read_config_source(path)
+}
+
 /// Load config from a file path. The I/O happens in `infra`; this
 /// function pairs the read with `parse_config` so callers get a typed
 /// `Config` back.

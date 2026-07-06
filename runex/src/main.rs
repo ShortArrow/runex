@@ -232,6 +232,11 @@ enum Commands {
         /// Abbreviation key to remove
         key: String,
     },
+    /// Locate and inspect the active config file
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
     /// Initialize runex: create config and add shell integration
     Init {
         /// Target shell (bash, zsh, pwsh, clink, nu). When omitted,
@@ -273,6 +278,21 @@ enum Commands {
         #[arg(long)]
         paste_pending: bool,
     },
+}
+
+/// `runex config` sub-actions. Naming mirrors the OS commands users
+/// already know: `where` prints the resolved path (where.exe /
+/// which), `type` streams the contents to stdout (type / cat), and
+/// `show` opens the file with the OS-associated application
+/// (Start-Process / open / xdg-open).
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Open the config file with the OS-associated application
+    Show,
+    /// Print the config file contents to stdout
+    Type,
+    /// Print the resolved config file path
+    Where,
 }
 
 
@@ -626,6 +646,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 default_config_path()?
             };
             cmd::add_remove::handle_remove(&config_path, &key, &infra::env::SystemHomeDir)?
+        }
+        Commands::Config { action } => {
+            let config_path = if let Some(p) = cli.config.as_deref() {
+                p.to_path_buf()
+            } else {
+                default_config_path()?
+            };
+            match action {
+                ConfigAction::Show => cmd::config::handle_show(&config_path)?,
+                ConfigAction::Type => cmd::config::handle_type(&config_path)?,
+                ConfigAction::Where => cmd::config::handle_where(&config_path, cli.json)?,
+            }
         }
     };
 

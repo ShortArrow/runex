@@ -31,6 +31,7 @@
 //! test pins the contract.
 
 pub mod add_remove;
+pub mod config;
 pub mod doctor;
 pub mod expand;
 pub mod export;

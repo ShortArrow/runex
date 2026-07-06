@@ -124,7 +124,7 @@ runex export <shell>             Print the shell integration script (sourced via
 Full CLI reference: `runex --help` (or `runex <subcommand> --help` for a
 specific one). Global flags `--config`, `--path-prepend`, and `--json`
 work on every subcommand where they make sense; `--json` is supported by
-`list`, `doctor`, `version`, `expand`, `which`, and `timings`.
+`list`, `doctor`, `version`, `expand`, `which`, `timings`, and `config where`.
 
 `runex doctor` reports environment-level checks alongside config
 validation: `effective_search_path` (Windows-only PATH augmentation
