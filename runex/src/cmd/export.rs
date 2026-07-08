@@ -16,9 +16,14 @@ use crate::{resolve_config, resolve_config_opt, CmdOutcome, CmdResult, MAX_BIN_L
 ///
 /// Rejects values that are empty, whitespace-only, too long, contain
 /// control characters, or contain non-printable-ASCII characters.
-/// Only printable ASCII is allowed to prevent Unicode homoglyphs and
-/// bidirectional overrides from being silently embedded in generated
-/// shell scripts.
+/// Only printable ASCII (plus the ASCII space) is allowed to prevent
+/// Unicode homoglyphs and bidirectional overrides from being silently
+/// embedded in generated shell scripts.
+///
+/// The ASCII space is permitted because `--bin` defaults to
+/// `current_exe()` and real installs live under paths like
+/// `C:\Program Files\...` or `C:\Users\John Doe\...`; every shell
+/// template quotes the bin placeholder, so a space is safe to embed.
 ///
 /// Returns the error message to surface to the user on validation
 /// failure; `Ok(())` when the value passes. Caller is responsible
@@ -38,7 +43,7 @@ pub(crate) fn validate_bin(bin: &str) -> Result<(), String> {
     if bin.chars().any(|c| c.is_ascii_control() || c == '\u{0085}' || c == '\u{2028}' || c == '\u{2029}') {
         return Err("--bin contains an invalid control character".into());
     }
-    if bin.chars().any(|c| !c.is_ascii() || !c.is_ascii_graphic()) {
+    if bin.chars().any(|c| !c.is_ascii() || (c != ' ' && !c.is_ascii_graphic())) {
         return Err("--bin must contain only printable ASCII characters".into());
     }
     Ok(())

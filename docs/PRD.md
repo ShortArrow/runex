@@ -121,6 +121,9 @@ runex export <shell>                     generate shell integration script
 runex export <shell> --bin <name>        use a custom binary name in the script
 runex timings <key>                      show per-phase timing breakdown of expand
 runex timings                            time all abbreviation rules
+runex config where                       print the resolved config file path
+runex config type                        print the config file contents to stdout
+runex config show                        open the config file with the OS-associated app
 runex version                            show version and build commit
 ```
 
@@ -129,7 +132,7 @@ Global flags (accepted by every subcommand):
 ```
 --config <path>      override config file path (overrides RUNEX_CONFIG)
 --path-prepend <dir> prepend directory to PATH for command existence checks
---json               JSON output (supported by: list, doctor, version, expand, which, timings)
+--json               JSON output (supported by: list, doctor, version, expand, which, timings, config where)
 ```
 
 ### 6.3 Config File

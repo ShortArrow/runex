@@ -35,11 +35,10 @@ const MAX_CONFIG_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 /// is unset. All platforms use this same resolution order. Overridden
 /// by the `RUNEX_CONFIG` env var.
 pub(crate) fn default_config_path() -> Result<PathBuf, ConfigError> {
-    if let Ok(p) = std::env::var("RUNEX_CONFIG") {
-        if !p.is_empty() {
+    if let Ok(p) = std::env::var("RUNEX_CONFIG")
+        && !p.is_empty() {
             return Ok(PathBuf::from(p));
         }
-    }
     let dir = crate::infra::env::xdg_config_home_with(&crate::infra::env::SystemHomeDir);
     Ok(dir.ok_or(ConfigError::NoConfigDir)?.join("runex").join("config.toml"))
 }

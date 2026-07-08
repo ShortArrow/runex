@@ -126,6 +126,9 @@ runex export <shell>                     シェル連携スクリプトを生成
 runex export <shell> --bin <name>        スクリプト内のバイナリ名を変更
 runex timings <key>                      展開フローのフェーズ別所要時間を表示
 runex timings                            全ルールの所要時間を計測
+runex config where                       解決済みの設定ファイルパスを表示
+runex config type                        設定ファイルの内容を stdout に出力
+runex config show                        OS の関連付けアプリで設定ファイルを開く
 runex version                            バージョンとビルドコミットを表示
 ```
 
@@ -134,7 +137,7 @@ runex version                            バージョンとビルドコミット
 ```
 --config <path>      設定ファイルパスを上書き（RUNEX_CONFIG より優先）
 --path-prepend <dir> コマンド存在チェック用に DIR を PATH の先頭に追加
---json               JSON 形式で出力（対応: list, doctor, version, expand, which, timings）
+--json               JSON 形式で出力（対応: list, doctor, version, expand, which, timings, config where）
 ```
 
 ### 6.3 設定ファイル

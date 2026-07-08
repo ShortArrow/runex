@@ -583,7 +583,7 @@ mod tests {
         write(&p, "-- runex shell integration for clink\nlocal RUNEX_BIN = \"r\"\n");
         let r = check_clink_lua_freshness(
             "-- runex shell integration for clink\nlocal RUNEX_BIN = \"r\"\n",
-            &[p.clone()],
+            std::slice::from_ref(&p),
         );
         assert!(
             matches!(r, IntegrationCheck::Ok { .. }),
@@ -598,7 +598,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("runex.lua");
         write(&p, "line1\r\nline2\r\n");
-        let r = check_clink_lua_freshness("line1\nline2\n", &[p.clone()]);
+        let r = check_clink_lua_freshness("line1\nline2\n", std::slice::from_ref(&p));
         assert!(
             matches!(r, IntegrationCheck::Ok { .. }),
             "CRLF/LF mismatch must not flag drift; got {r:?}"
@@ -610,7 +610,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("runex.lua");
         write(&p, "old script\n");
-        let r = check_clink_lua_freshness("new script\n", &[p.clone()]);
+        let r = check_clink_lua_freshness("new script\n", std::slice::from_ref(&p));
         match r {
             IntegrationCheck::Outdated { path, .. } => assert_eq!(path, p),
             other => panic!("expected Outdated, got {other:?}"),

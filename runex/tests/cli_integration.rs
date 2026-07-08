@@ -1465,7 +1465,7 @@ fn export_with_control_char_in_bin_exits_nonzero() {
 #[test]
 fn export_with_rlo_in_bin_exits_nonzero() {
     let cfg = write_config("version = 1\n");
-    let bin_with_rlo = format!("run\u{202e}ex");
+    let bin_with_rlo = "run\u{202e}ex".to_string();
     let (_, stderr, ok) = run(&["export", "bash", &format!("--bin={bin_with_rlo}")], Some(cfg.path()), None);
     assert!(!ok, "export --bin with RLO (U+202E) must exit non-zero");
     assert!(
@@ -1478,7 +1478,7 @@ fn export_with_rlo_in_bin_exits_nonzero() {
 #[test]
 fn export_with_zero_width_joiner_in_bin_exits_nonzero() {
     let cfg = write_config("version = 1\n");
-    let bin_with_zwj = format!("run\u{200d}ex");
+    let bin_with_zwj = "run\u{200d}ex".to_string();
     let (_, stderr, ok) = run(&["export", "bash", &format!("--bin={bin_with_zwj}")], Some(cfg.path()), None);
     assert!(!ok, "export --bin with ZWJ (U+200D) must exit non-zero");
     assert!(
@@ -2026,4 +2026,79 @@ fn hook_clamps_excessive_cursor_for_multibyte_line() {
         None,
     );
     assert!(ok, "out-of-range cursor must not crash hook");
+}
+
+// ─── runex config <show|type|where> (issue #15) ─────────────────────
+
+/// `config where` prints the resolved config path so users can see
+/// which file runex is actually reading (--config / RUNEX_CONFIG /
+/// default resolution order).
+#[test]
+fn config_where_prints_resolved_path() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(&["config", "where"], Some(cfg.path()), None);
+    assert!(ok, "config where must succeed for an existing config");
+    assert_eq!(
+        stdout.trim(),
+        cfg.path().display().to_string(),
+        "config where must print the resolved path"
+    );
+}
+
+/// The path is still printed when the file does not exist (that IS
+/// the diagnostic value), but the exit code flags the absence.
+#[test]
+fn config_where_missing_file_prints_path_and_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("nope.toml");
+    let (stdout, _, ok) = run(&["config", "where"], Some(&missing), None);
+    assert!(!ok, "config where must exit non-zero for a missing config");
+    assert_eq!(stdout.trim(), missing.display().to_string());
+}
+
+#[test]
+fn config_where_json_reports_path_and_existence() {
+    let cfg = write_config("version = 1\n");
+    let (stdout, _, ok) = run(&["--json", "config", "where"], Some(cfg.path()), None);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(v["path"].as_str().unwrap(), cfg.path().display().to_string());
+    assert!(v["exists"].as_bool().unwrap());
+}
+
+/// `config type` streams the raw file contents to stdout (Windows
+/// `type` / Unix `cat` semantics), so the output is greppable.
+#[test]
+fn config_type_prints_file_contents() {
+    let cfg = write_config("version = 1\n\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n");
+    let (stdout, _, ok) = run(&["config", "type"], Some(cfg.path()), None);
+    assert!(ok, "config type must succeed for an existing config");
+    assert!(stdout.contains("version = 1"), "got: {stdout}");
+    assert!(stdout.contains("key = \"gcm\""), "got: {stdout}");
+}
+
+#[test]
+fn config_type_missing_file_fails_with_init_hint() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("nope.toml");
+    let (_, stderr, ok) = run(&["config", "type"], Some(&missing), None);
+    assert!(!ok, "config type must exit non-zero for a missing config");
+    assert!(
+        stderr.contains("runex init"),
+        "stderr must hint at `runex init`; got: {stderr}"
+    );
+}
+
+/// `config show` opens the file with the OS-associated application;
+/// the only path we can assert end-to-end is the missing-file error.
+#[test]
+fn config_show_missing_file_fails_with_init_hint() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("nope.toml");
+    let (_, stderr, ok) = run(&["config", "show"], Some(&missing), None);
+    assert!(!ok, "config show must exit non-zero for a missing config");
+    assert!(
+        stderr.contains("runex init"),
+        "stderr must hint at `runex init`; got: {stderr}"
+    );
 }

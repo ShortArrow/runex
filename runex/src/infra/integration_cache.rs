@@ -128,13 +128,12 @@ pub(crate) fn write_cache_file(path: &Path, contents: &str) -> Result<(), CacheE
         source: e,
     })?;
 
-    if let Ok(meta) = std::fs::symlink_metadata(path) {
-        if meta.file_type().is_symlink() {
+    if let Ok(meta) = std::fs::symlink_metadata(path)
+        && meta.file_type().is_symlink() {
             return Err(CacheError::SymlinkAtTarget {
                 path: path.to_path_buf(),
             });
         }
-    }
 
     let file_name = path
         .file_name()

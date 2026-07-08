@@ -1042,6 +1042,29 @@ mod tests {
         );
     }
 
+    /// `--bin` defaults to `current_exe()`, which on real installs can
+    /// contain spaces (`C:\Program Files\...`, `C:\Users\John Doe\...`).
+    /// Every shell's quote helper must embed the path verbatim inside
+    /// its quoted form so the generated hook still resolves the binary.
+    #[test]
+    fn export_script_embeds_bin_path_with_spaces_quoted() {
+        let bin = r"C:\Program Files\runex\runex.exe";
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Pwsh] {
+            let s = export_script(shell, bin, None);
+            assert!(
+                s.contains(bin),
+                "{shell:?} script must embed the space-containing bin path intact: {s}"
+            );
+        }
+        // Clink embeds the path in a lua double-quoted literal, so the
+        // backslashes appear escaped; the space must still survive.
+        let s = export_script(Shell::Clink, bin, None);
+        assert!(
+            s.contains(&bin.replace('\\', r"\\")),
+            "Clink script must embed the space-containing bin path lua-escaped: {s}"
+        );
+    }
+
     #[test]
     fn nu_quote_string_escapes_tab() {
         let s = nu_quote_string("run\tex");
