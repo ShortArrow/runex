@@ -534,9 +534,18 @@ Submission steps:
    to the same `wingetcreate update` invocation, or by manually
    committing on a `winget-pkgs` fork and opening the PR with `gh pr
    create`. Title format: `New version: ShortArrow.runex version X.Y.Z`.
-3. **Post the checklist confirmation as a PR comment** so reviewers
-   don't have to verify each box themselves. Mention which boxes
-   are blocked by Defender (the local-install row).
+3. **Fill in the PR body template** (do not post a separate
+   checklist comment — it duplicates the template and reads as
+   noise). Keep the description to 1-2 lines ("Update
+   ShortArrow.runex to X.Y.Z. Manifest generated with
+   wingetcreate."), check each checklist box honestly, link the
+   upstream issue on the `Resolves` line when one applies, and note
+   on the local-install row when Defender blocks it. When editing
+   via `gh pr edit --body`, the replacement body must itself contain
+   the trailing `###### Microsoft Reviewers: [Open in CodeFlow]`
+   line — `gh pr edit` replaces the whole body, so omitting it
+   deletes the line and including it twice doubles it; verify
+   exactly one remains.
 4. **Watch the validation pipeline.** Status is reported as PR
    comments from `@microsoft-github-policy-service` and tags like
    `Validation-Defender-Error`.
