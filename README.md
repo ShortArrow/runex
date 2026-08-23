@@ -1,6 +1,7 @@
 # runex
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ShortArrow/runex)
+[![Downloads](https://img.shields.io/github/downloads/ShortArrow/runex/total.svg?maxAge=2592001)](https://github.com/ShortArrow/runex/releases/)
 
 English | [日本語](docs/README.ja.md)
 
