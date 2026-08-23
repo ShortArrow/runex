@@ -1,5 +1,7 @@
 # runex
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ShortArrow/runex)
+
 English | [日本語](docs/README.ja.md)
 
 > Turn runes into commands.
