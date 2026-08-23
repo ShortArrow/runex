@@ -2,6 +2,7 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ShortArrow/runex)
 [![Downloads](https://img.shields.io/github/downloads/ShortArrow/runex/total.svg?maxAge=2592001)](https://github.com/ShortArrow/runex/releases/)
+[![AUR Version](https://img.shields.io/aur/version/runex-bin)](https://aur.archlinux.org/packages/runex-bin)
 
 English | [日本語](docs/README.ja.md)
 
