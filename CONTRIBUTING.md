@@ -283,9 +283,15 @@ All commands from the repo root.
 - [ ] **Tag and push** to trigger the binary build workflow:
 
   ```bash
-  git tag -a vX.Y.Z -m "Release vX.Y.Z"
+  git tag -s vX.Y.Z -m "Release vX.Y.Z"
+  git tag -v vX.Y.Z
   git push origin vX.Y.Z
   ```
+
+  `-s` signs the tag; `-a` does not, and `commit.gpgsign` covers only
+  commits, so tags up to v0.1.20 went out unsigned while every commit
+  was signed. `git tag -v` must print a good signature, not just the
+  tagger line.
 
   `.github/workflows/release.yml` runs and takes ~10 minutes to
   build every target platform (see "Binary release workflow" below)
