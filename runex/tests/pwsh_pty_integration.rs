@@ -37,15 +37,34 @@ fn space_triggers_expand_for_known_token() {
         return;
     };
 
-    // Same shape as the bash / zsh tests. PSReadLine binds the
-    // trigger key inside the integration script's
-    // `Set-PSReadLineKeyHandler -Chord Spacebar` call; pressing
-    // Space should fire the runex hook handler and rewrite the
-    // buffer.
-    session.send("gcm ");
-    session.send_line("");
-
+    // Type the token, let PSReadLine render it, THEN press Space as a
+    // separate keystroke so the trigger handler fires on its own key
+    // event (sending "gcm " in one write makes PSReadLine treat the
+    // space as an ordinary self-insert). The handler replaces the
+    // buffer with `echo EXPANDED `; Enter then submits it.
+    // Type one char at a time and wait for each to render, so the
+    // buffer is settled at `gcm` before Space arrives — otherwise the
+    // trigger key can reach PSReadLine while it is still processing the
+    // token and be handled as a plain self-insert.
+    session.send("g").expect("send g");
+    session.expect_regex("g").expect("echo g");
+    session.send("c").expect("send c");
+    session.expect_regex("gc").expect("echo gc");
+    session.send("m").expect("send m");
+    session.expect_regex("gcm").expect("echo gcm");
+    session.send(" ").expect("send space");
+    // The rewritten buffer renders as `echo EXPANDED` with syntax
+    // coloring between the two words, so match the single word
+    // `EXPANDED` — it appears only because the abbreviation expanded
+    // (bootstrap output was cleared before this point).
     session
-        .expect_regex(r"EXPANDED")
-        .expect("pwsh should have echoed EXPANDED after the gcm<Space> expansion");
+        .expect_regex("EXPANDED")
+        .expect("pwsh Space should expand gcm so EXPANDED appears in the buffer");
+    session.enter().expect("submit the line");
+    // After submission the command runs and prints EXPANDED on its own
+    // line. Wait for a SECOND occurrence (the first was the buffer
+    // render above) to prove the expanded command actually executed.
+    session
+        .expect_regex_nth("EXPANDED", 2)
+        .expect("pwsh should have echoed EXPANDED after submitting the expanded line");
 }
