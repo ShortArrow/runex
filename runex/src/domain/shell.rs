@@ -91,6 +91,40 @@ pub(crate) fn pwsh_quote_string(token: &str) -> String {
     out
 }
 
+/// Quote `value` as a PowerShell double-quoted string that evaluates back
+/// to exactly `value`.
+///
+/// This is the literal for *buffer text* (`$__RUNEX_LINE`), where the
+/// hook's cursor is measured against the full line and dropping a
+/// character would land the cursor off by one (issue #21). Paths use
+/// [`pwsh_quote_string`] instead.
+///
+/// - `` ` ``, `$` and the four characters PowerShell's tokenizer accepts
+///   as a double quote (`"`, U+201C, U+201D, U+201E) get a backtick.
+/// - LF and CR become `` `n `` / `` `r ``: pwsh splits native stdout on
+///   them before the wrapper re-joins with a bare LF, so raw ones would
+///   not survive the round trip. Every other character is inert inside
+///   a double-quoted literal and is emitted as is.
+///
+/// Only backtick escapes that Windows PowerShell 5.1 understands are
+/// used, since the same bootstrap runs there.
+pub(crate) fn pwsh_double_quote_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\n' => out.push_str("`n"),
+            '\r' => out.push_str("`r"),
+            '`' | '$' | '"' | '\u{201C}' | '\u{201D}' | '\u{201E}' => {
+                out.push('`');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Quote `value` for use as an external Nu shell command invocation (`^"..."`).
 ///
 /// The `^` prefix forces Nu to execute the string as an external command rather
@@ -403,6 +437,43 @@ mod tests {
         let s = pwsh_quote_string("run\nex");
         assert!(!s.contains('\n'), "literal newline must not appear: {s:?}");
         assert!(!s.contains("'`"), "backtick-concat form must not be used (token split risk): {s:?}");
+    }
+
+
+    #[test]
+    fn pwsh_double_quote_string_wraps_in_double_quotes() {
+        assert_eq!(pwsh_double_quote_string("gs end"), "\"gs end\"");
+    }
+
+    #[test]
+    fn pwsh_double_quote_string_escapes_backtick_quote_and_dollar() {
+        assert_eq!(pwsh_double_quote_string("a`b"), "\"a``b\"");
+        assert_eq!(pwsh_double_quote_string("a\"b"), "\"a`\"b\"");
+        assert_eq!(pwsh_double_quote_string("a$b"), "\"a`$b\"");
+    }
+
+    #[test]
+    fn pwsh_double_quote_string_escapes_typographic_double_quotes() {
+        // PowerShell's tokenizer treats U+201C, U+201D and U+201E as
+        // string delimiters, so unescaped they would end the literal.
+        assert_eq!(pwsh_double_quote_string("a\u{201C}b"), "\"a`\u{201C}b\"");
+        assert_eq!(pwsh_double_quote_string("a\u{201D}b"), "\"a`\u{201D}b\"");
+        assert_eq!(pwsh_double_quote_string("a\u{201E}b"), "\"a`\u{201E}b\"");
+    }
+
+    #[test]
+    fn pwsh_double_quote_string_encodes_newline_and_carriage_return() {
+        // pwsh splits native stdout on CR / LF before the wrapper joins the
+        // lines back with a bare LF, so either one raw in the eval text
+        // would come back altered. The backtick escapes survive the trip.
+        assert_eq!(pwsh_double_quote_string("a\nb"), "\"a`nb\"");
+        assert_eq!(pwsh_double_quote_string("a\r\nb"), "\"a`r`nb\"");
+    }
+
+    #[test]
+    fn pwsh_double_quote_string_keeps_every_other_char_verbatim() {
+        let line = r"scp -r \\srv\開発\帳票（レポート）\x 'y'";
+        assert_eq!(pwsh_double_quote_string(line), format!("\"{line}\""));
     }
 
     } // mod quote_functions
