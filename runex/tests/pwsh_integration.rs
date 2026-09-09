@@ -23,16 +23,16 @@ mod pwsh {
         env!("CARGO_BIN_EXE_runex")
     }
 
+    /// Drives `runex hook` the way the pwsh bootstrap does and reports
+    /// the result as "line|cursor". The `runex hook` invocation below
+    /// must stay identical to the one in `templates/pwsh.ps1` — in
+    /// particular the joined `--line=$line` form, which is what keeps
+    /// PowerShell from rewriting a leading `~` before runex sees it.
     fn run_helper(config: &NamedTempFile, line: &str, cursor: usize) -> String {
-        // The new hook-based bootstrap puts all buffer logic in the Rust
-        // binary; pwsh just reads buffer state and evals the output. We
-        // mirror that here by calling `runex hook` directly and formatting
-        // the result the same way the legacy `__runex_expand_space` helper
-        // used to report it ("line|cursor").
         let script = r#"
 $line = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:RUNEX_LINE_B64))
 $cursor = [int]$env:RUNEX_CURSOR
-$out = & $env:RUNEX_BIN hook --shell pwsh --line $line --cursor $cursor 2>$null
+$out = & $env:RUNEX_BIN hook --shell pwsh "--line=$line" --cursor $cursor 2>$null
 $__RUNEX_LINE = $null
 $__RUNEX_CURSOR = $null
 if ($out) { Invoke-Expression ($out -join "`n") }
@@ -146,6 +146,20 @@ if ($null -ne $__RUNEX_LINE -and $null -ne $__RUNEX_CURSOR) {
         assert_eq!(
             run_helper(&config, r"cd .\ShortArrow.github.io\", 26),
             r"cd .\ShortArrow.github.io\ |27"
+        );
+    }
+
+    /// PowerShell rewrites a leading `~` in a native-command argument to
+    /// `$HOME` even when the value arrives through a variable, so the
+    /// buffer runex receives no longer matches the cursor the shell sent
+    /// (issue #18). The space must land at the end of the untouched line.
+    #[test]
+    fn tilde_prefixed_line_is_passed_to_runex_verbatim() {
+        if !pwsh_available() { return; }
+        let config = write_config();
+        assert_eq!(
+            run_helper(&config, "~/.local/bin/claude.exe", 23),
+            "~/.local/bin/claude.exe |24"
         );
     }
 }

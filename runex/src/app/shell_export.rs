@@ -417,6 +417,25 @@ mod tests {
         assert!(!s.contains("{PWSH_REGISTER_LINES}"), "pwsh script must resolve register lines");
     }
 
+    /// PowerShell expands a leading `~` in any native-command argument
+    /// to `$HOME` — even when the argument comes from a variable or a
+    /// splatted array — so `'--line', $line` hands runex a rewritten
+    /// buffer while `--cursor` still counts the original (issue #18).
+    /// Joining the option and value into one `--line=...` token keeps
+    /// the first character of the argument from being `~`.
+    #[test]
+    fn pwsh_script_joins_line_option_and_value_into_one_argument() {
+        let s = export_script(Shell::Pwsh, "runex", None);
+        assert!(
+            s.contains("\"--line=$line\""),
+            "pwsh bootstrap must pass the buffer as a single --line=<value> token: {s}"
+        );
+        assert!(
+            !s.contains("'--line', $line"),
+            "pwsh bootstrap must not pass the buffer as a bare argument (tilde expansion): {s}"
+        );
+    }
+
     #[test]
     fn pwsh_script_has_paste_guard() {
         // The paste-detection reflection is the one piece of logic that has

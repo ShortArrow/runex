@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an empty buffer. Pre-0.1.21 `runex init clink` output must be
   regenerated (`runex doctor` reports it). Decision recorded in ADR
   0003.
+- **pwsh: a buffer starting with `~` no longer loses the cursor on
+  Space (#18).** PowerShell rewrites a native-command argument that
+  begins with `~` to `$HOME` even when the value comes from a
+  variable, so `runex hook` received `C:\Users\me\.local\bin\claude.exe`
+  while `--cursor` still counted `~\.local\bin\claude.exe`, and the
+  space landed mid-path. The bootstrap now passes the buffer as one
+  `--line=<value>` token, whose first character can never be `~`.
 
 ## [0.1.20] - 2026-07-09
 
