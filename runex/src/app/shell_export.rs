@@ -1025,20 +1025,33 @@ mod tests {
         );
     }
 
-    /// Security: cmd.exe expands `%VAR%` even inside double-quoted argv,
-    /// and `!VAR!` if any caller has SETLOCAL ENABLEDELAYEDEXPANSION
-    /// active. The clink template must reject buffer content containing
-    /// either, to prevent shell-buffer-driven injection through io.popen.
-    /// See `runex-core/src/templates/clink.lua::runex_is_safe_line` for
-    /// the rationale.
+    /// cmd.exe's command line cannot carry arbitrary buffer text: `"`
+    /// toggles its quote state with no escape available (issues #22,
+    /// #23), and `%VAR%` / `!VAR!` expand even inside quotes. The clink
+    /// template therefore sends the buffer hex-encoded and never embeds
+    /// the raw line in the io.popen string.
     #[test]
-    fn clink_safe_line_check_rejects_cmd_metachars() {
+    fn clink_script_sends_buffer_hex_encoded() {
         let s = export_script(Shell::Clink, "runex", None);
-        // The lua regex literal must contain `%%` (escaped `%` in lua
-        // pattern syntax) and `!` so both are rejected at the gate.
         assert!(
-            s.contains("%%!") || s.contains("!%%"),
-            "clink safe-line regex must reject `%` and `!`: {s}"
+            s.contains("--line-hex ' .. runex_hex(line)"),
+            "clink script must pass the buffer through --line-hex: {s}"
+        );
+        assert!(
+            !s.contains("--line ' .. runex_shell_quote(line)"),
+            "clink script must not embed the raw buffer in the cmd.exe string: {s}"
+        );
+    }
+
+    /// Hex doubles the buffer and cmd.exe refuses command lines over
+    /// 8191 characters, so the template must fall back to a literal
+    /// space instead of handing cmd.exe a line it will reject.
+    #[test]
+    fn clink_script_gives_up_before_cmd_exe_line_limit() {
+        let s = export_script(Shell::Clink, "runex", None);
+        assert!(
+            s.contains("CMD_LINE_MAX = 8191"),
+            "clink script must name cmd.exe's 8191-character limit: {s}"
         );
     }
 

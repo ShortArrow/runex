@@ -243,6 +243,29 @@ pub(crate) fn byte_cursor_to_utf16(line: &str, byte_cursor: usize) -> usize {
     utf16
 }
 
+/// Decode the `--line-hex` transport form back into the buffer text.
+///
+/// clink's only route to runex is a cmd.exe command line, which cannot
+/// carry `"`, `%` or `!` inside an argument, so the lua template sends
+/// the buffer as hex of its UTF-8 bytes (ADR 0003). Accepts either
+/// digit case. Rejects odd length, non-hex digits and byte sequences
+/// that are not UTF-8; the caller turns the error into a non-zero exit,
+/// which the template treats as "insert a literal space".
+pub(crate) fn decode_hex_line(hex: &str) -> Result<String, String> {
+    if hex.len() % 2 != 0 {
+        return Err(format!("--line-hex has odd length {}", hex.len()));
+    }
+    let bytes = hex
+        .as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let text = std::str::from_utf8(pair).map_err(|_| "--line-hex contains a non-hex digit".to_string())?;
+            u8::from_str_radix(text, 16).map_err(|_| format!("--line-hex contains a non-hex digit: {text:?}"))
+        })
+        .collect::<Result<Vec<u8>, String>>()?;
+    String::from_utf8(bytes).map_err(|e| format!("--line-hex is not UTF-8: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,6 +577,50 @@ mod tests {
                 utf16_len,
                 "end-of-line round-trip failed for {line:?}"
             );
+        }
+    }
+
+    // ── decode_hex_line (clink transport) ──────────────────────────────
+
+    mod hex_line {
+        use super::*;
+
+        #[test]
+        fn decode_hex_line_round_trips_ascii_with_cmd_metachars() {
+            let line = r#"pwsh -nop -c "mv %PATH% !x! & | < >"#;
+            let hex: String = line.bytes().map(|b| format!("{b:02X}")).collect();
+            assert_eq!(decode_hex_line(&hex), Ok(line.to_string()));
+        }
+
+        #[test]
+        fn decode_hex_line_accepts_lowercase_digits() {
+            assert_eq!(decode_hex_line("6d76"), Ok("mv".to_string()));
+        }
+
+        #[test]
+        fn decode_hex_line_decodes_multibyte_utf8() {
+            let hex: String = "開発".bytes().map(|b| format!("{b:02X}")).collect();
+            assert_eq!(decode_hex_line(&hex), Ok("開発".to_string()));
+        }
+
+        #[test]
+        fn decode_hex_line_empty_is_empty_line() {
+            assert_eq!(decode_hex_line(""), Ok(String::new()));
+        }
+
+        #[test]
+        fn decode_hex_line_rejects_odd_length() {
+            assert!(decode_hex_line("6d7").is_err());
+        }
+
+        #[test]
+        fn decode_hex_line_rejects_non_hex_digit() {
+            assert!(decode_hex_line("6dzz").is_err());
+        }
+
+        #[test]
+        fn decode_hex_line_rejects_invalid_utf8() {
+            assert!(decode_hex_line("FF").is_err());
         }
     }
 }

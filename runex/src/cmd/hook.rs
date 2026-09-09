@@ -14,6 +14,16 @@ use crate::domain::shell::Shell;
 
 use crate::{AppContext, CmdOutcome, CmdResult, MAX_HOOK_LINE_BYTES};
 
+/// Pick the buffer text out of the two clap alternatives. clap's
+/// `buffer` group guarantees exactly one is present; `--line-hex` is
+/// decoded here so `handle` only ever sees the plain buffer.
+pub(crate) fn resolve_line(line: Option<String>, line_hex: Option<String>) -> Result<String, String> {
+    match line {
+        Some(line) => Ok(line),
+        None => crate::app::hook::decode_hex_line(line_hex.as_deref().unwrap_or_default()),
+    }
+}
+
 pub(crate) fn handle(
     shell_str: &str,
     line: &str,

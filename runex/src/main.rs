@@ -257,14 +257,20 @@ enum Commands {
     /// trigger-key press. Returns shell-specific eval text describing the new
     /// buffer/cursor state. Exit code 2 means "nothing to do; shell may
     /// insert the literal trigger key".
-    #[command(hide = true)]
+    #[command(hide = true, group = clap::ArgGroup::new("buffer").required(true))]
     Hook {
         /// Target shell: bash, zsh, pwsh, clink, nu
         #[arg(long, value_name = "SHELL")]
         shell: String,
-        /// Current buffer contents
-        #[arg(long)]
-        line: String,
+        /// Current buffer contents. Exactly one of `--line` / `--line-hex`.
+        #[arg(long, group = "buffer")]
+        line: Option<String>,
+        /// Current buffer contents as uppercase or lowercase hex of the
+        /// UTF-8 bytes. clink uses this form because its only path to
+        /// runex is a cmd.exe command line, which cannot carry `"`, `%`
+        /// or `!` inside an argument (see ADR 0003).
+        #[arg(long, value_name = "HEX", group = "buffer")]
+        line_hex: Option<String>,
         /// Current cursor position. Shells pass this in their own native
         /// unit: bash, zsh, clink, and nu count Unicode scalar values
         /// (= chars); pwsh counts UTF-16 code units (its PSReadLine /
@@ -617,14 +623,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?
         }
         Commands::PasteClipboard => cmd::paste_clipboard::handle()?,
-        Commands::Hook { shell, line, cursor, paste_pending } => cmd::hook::handle(
-            &shell,
-            &line,
-            cursor,
-            paste_pending,
-            cli.config.as_deref(),
-            cli.path_prepend.as_deref(),
-        )?,
+        Commands::Hook { shell, line, line_hex, cursor, paste_pending } => {
+            let line = cmd::hook::resolve_line(line, line_hex)?;
+            cmd::hook::handle(
+                &shell,
+                &line,
+                cursor,
+                paste_pending,
+                cli.config.as_deref(),
+                cli.path_prepend.as_deref(),
+            )?
+        }
         Commands::Add { key, expand, when } => {
             let config_path = if let Some(p) = cli.config.as_deref() {
                 p.to_path_buf()

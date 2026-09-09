@@ -2,57 +2,48 @@
 
 local RUNEX_BIN = {CLINK_BIN}
 
--- Safe-line gate: reject buffers we shouldn't pass through io.popen.
--- Two classes of content are rejected:
---
---   1. ASCII control characters (NUL, C0). These would either truncate
---      cmd.exe's argv parsing or cause the runex CLI's clap parser to
---      bail.
---
---   2. cmd.exe metacharacters that survive double-quote escaping:
---      `%FOO%` is expanded inside *quoted* arguments by cmd.exe, and
---      `!FOO!` is expanded when SETLOCAL ENABLEDELAYEDEXPANSION is in
---      effect anywhere upstream. A buffer like `%PATH%` or
---      `!cmd! & calc & !x!` would be rewritten by cmd before runex hook
---      ever saw it, including being able to inject extra commands.
---      runex_shell_quote escapes only `"` so it cannot defend against
---      these by itself.
---
--- When the buffer contains either, fall through to the trigger key's
--- normal behaviour (literal-space insertion). Users typing literal
--- `%` or `!` lose the runex expansion on that keypress, which is a
--- minor UX trade for closing a real injection class.
---
--- This stays in lua (rather than as a `runex validate-line` subcommand)
--- because the whole point is to short-circuit *before* spending the cost
--- of spawning a cmd.exe + runex.exe.
-local function runex_is_safe_line(line)
-    return not line:find("[%z\1-\31%%!]")
+-- The only route from clink's lua to runex is io.popen, i.e. a cmd.exe
+-- command line, and cmd.exe cannot carry arbitrary buffer text inside an
+-- argument: `"` toggles its quote state and has no escape (a `\"` in the
+-- buffer closed the argument early and turned `2>&1` into a runex
+-- argument, issues #22 and #23), `%VAR%` expands even inside quotes,
+-- `!VAR!` expands under delayed expansion, and C0 control characters
+-- truncate parsing. Instead of escaping each case, the buffer travels as
+-- hex of its UTF-8 bytes: the wire alphabet is [0-9A-F], which cmd.exe
+-- passes through untouched, and `runex hook --line-hex` decodes it.
+-- Rationale and alternatives: docs/decisions/0003-clink-hex-line-transport.md
+local function runex_hex(s)
+    return (s:gsub('.', function(c) return string.format('%02X', c:byte()) end))
 end
 
--- cmd.exe quoting: wrap in double quotes and escape embedded double quotes.
--- POSIX single-quote wrapping would be interpreted literally by cmd.exe and
--- fail (e.g. 'runex' would be treated as a file named "'runex'").
+-- cmd.exe rejects command lines longer than this. Hex doubles the buffer,
+-- so the assembled command is measured before spawning and the trigger
+-- key falls back to a literal space when it would not fit.
+local CMD_LINE_MAX = 8191
+
+-- cmd.exe quoting for the binary path: wrap in double quotes. POSIX
+-- single-quote wrapping would be interpreted literally by cmd.exe and
+-- fail (e.g. 'runex' would be treated as a file named "'runex'"). Only
+-- RUNEX_BIN goes through this; the buffer is hex-encoded instead.
 local function runex_shell_quote(s)
     return '"' .. s:gsub('"', '\\"') .. '"'
 end
 
 local function runex_call_hook(line, cursor)
-    if not runex_is_safe_line(line) then
-        return nil
-    end
     -- io.popen on Windows ultimately calls cmd.exe with the assembled
     -- string. cmd.exe's quote handling (without /S) is heuristic: when the
     -- string starts with `"` AND ends with `"`, cmd strips the outermost
     -- pair before parsing the rest. So we wrap the entire command in an
-    -- extra pair of `"` so the inner quoting around argv0 and --line
-    -- survives. argv0 itself is quoted in case the binary path contains
-    -- spaces (e.g. `Program Files`). Empirically validated by the
-    -- runex/tests/clink_cmd_quoting.rs integration tests.
+    -- extra pair of `"` so the quoting around argv0 survives. argv0 is
+    -- quoted in case the binary path contains spaces (e.g. `Program
+    -- Files`). The layout is mirrored by
+    -- `hook_clink_cmd_exe_roundtrip_keeps_double_quote_in_buffer` in
+    -- runex/tests/cli_integration.rs, which runs it through a real cmd.exe.
     local cmd = '"' .. runex_shell_quote(RUNEX_BIN)
-        .. ' hook --shell clink --line ' .. runex_shell_quote(line)
+        .. ' hook --shell clink --line-hex ' .. runex_hex(line)
         .. ' --cursor ' .. tostring(cursor)
         .. ' 2>&1"'
+    if #cmd > CMD_LINE_MAX then return nil end
     local handle = io.popen(cmd)
     if not handle then return nil end
     local out = handle:read("*a")

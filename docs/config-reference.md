@@ -151,6 +151,10 @@ arguments:
 runex hook --shell <shell> --line "<buffer>" --cursor <byte_offset>
 ```
 
+clink passes the buffer as `--line-hex <hex of the UTF-8 bytes>` instead of
+`--line`: its only path to runex is a cmd.exe command line, which cannot
+carry `"`, `%` or `!` inside an argument (see `docs/decisions/0003`).
+
 The Rust core decides whether to expand (command-position detection,
 known-token check, `when_command_exists`, cursor-placeholder handling) and
 emits a shell-specific directive that the bootstrap evaluates. The five
