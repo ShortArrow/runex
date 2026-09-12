@@ -29,11 +29,8 @@ fn space_triggers_expand_for_known_token() {
         return;
     }
     let config = write_simple_config("gcm", "echo EXPANDED");
-    let Some(mut session) = PtySession::spawn(PtyShell::Zsh, runex_bin_str(), config.path())
-    else {
-        eprintln!("skipping: could not spawn zsh session");
-        return;
-    };
+    let mut session = PtySession::spawn(PtyShell::Zsh, runex_bin_str(), config.path())
+        .expect("the shell is installed, so a PTY session that fails to bootstrap is a real failure, not a skip");
 
     // Same shape as the bash test: type the abbr, then Space (the
     // configured trigger). The zle widget bound by the integration

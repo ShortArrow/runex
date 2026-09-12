@@ -84,10 +84,11 @@ impl PtySession {
     /// source prompt has settled.
     ///
     /// Returns `None` if the shell can't be launched or any of the
-    /// setup steps don't complete within [`DEFAULT_TIMEOUT`]. This
-    /// is intentionally permissive — tests use `let Some(s) = … else
-    /// { return; };` as a runtime skip when the shell isn't
-    /// installed.
+    /// setup steps don't complete within [`DEFAULT_TIMEOUT`]. Tests
+    /// check that the shell is installed *before* calling this, so they
+    /// treat `None` as a failure (`.expect(..)`), never as a skip: a
+    /// harness that quietly stops bootstrapping must turn the suite
+    /// red, not green.
     pub fn spawn(shell: PtyShell, runex_bin: &str, config: &Path) -> Option<Self> {
         let launch = launch_command(shell, runex_bin);
         let mut session = expectrl::spawn(&launch).ok()?;
@@ -188,13 +189,6 @@ impl PtySession {
         self.read_until(needle, DEFAULT_TIMEOUT)
     }
 
-    /// Block until the `n`th occurrence of `needle` appears — used to
-    /// distinguish a buffer render of a word from the command output
-    /// that prints the same word after submission.
-    pub fn expect_regex_nth(&mut self, needle: &str, n: usize) -> Option<()> {
-        self.read_until_nth(needle, n, DEFAULT_TIMEOUT)
-    }
-
     /// Block until the [`SENTINEL_PROMPT`] appears.
     pub fn expect_prompt(&mut self) -> Option<()> {
         self.expect_regex(SENTINEL_PROMPT)
@@ -206,17 +200,10 @@ impl PtySession {
     /// match text that arrived before it was called (the child is
     /// faster than the test).
     fn read_until(&mut self, needle: &str, deadline: Duration) -> Option<()> {
-        self.read_until_nth(needle, 1, deadline)
-    }
-
-    /// Like [`Self::read_until`] but waits for the `n`th occurrence of
-    /// `needle`. Used to skip a command's own terminal echo (1st
-    /// occurrence) and wait for the output it printed (2nd).
-    fn read_until_nth(&mut self, needle: &str, n: usize, deadline: Duration) -> Option<()> {
         let start = Instant::now();
         let mut buf = [0u8; 4096];
         loop {
-            if self.seen.matches(needle).count() >= n {
+            if self.seen.contains(needle) {
                 return Some(());
             }
             if start.elapsed() > deadline {
@@ -255,6 +242,14 @@ impl PtySession {
         let _ = self.read_until("\u{0}__never__\u{0}", Duration::from_millis(600));
         self.seen.clear();
         Some(())
+    }
+
+    #[allow(dead_code)]
+    /// Whether `needle` has appeared in the child's output so far.
+    /// The negative-control tests use it to assert that something did
+    /// *not* happen, which `expect_regex` (a positive wait) cannot say.
+    pub fn saw(&self, needle: &str) -> bool {
+        self.seen.contains(needle)
     }
 
     /// Polite shutdown. Sends `exit`; if the shell ignores it, drop
