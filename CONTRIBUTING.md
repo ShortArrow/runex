@@ -75,22 +75,21 @@ tag. After changing anything under `containers/ci/`, the new digest
 must land in `.github/workflows/ci.yml` for CI to pick the change up.
 
 1. **Trigger a build.** Push your `containers/ci/**` change to a
-   branch. The `Build CI image` workflow runs on push to
-   `main` / `develop`; for feature branches, open a PR (the
-   `pull_request` trigger runs the build with `push: false` so you
-   can verify the Dockerfile compiles without yet uploading to
-   GHCR). Once the PR merges to `develop`, the push trigger
-   uploads the image.
+   branch and open a PR (the `pull_request` trigger runs the build
+   with `push: false` so you can verify the Dockerfile compiles
+   without yet uploading to GHCR). Once the PR merges to `main`,
+   the push trigger uploads the image.
 2. **Copy the digest.** Open the green `Build CI image` run on
-   `develop` (or trigger one manually with
+   `main` (or trigger one manually with
    `gh workflow run build-ci-image.yml`). The run's **Step
    Summary** prints a "Pin in `.github/workflows/ci.yml`:" block
    containing the line you need.
 3. **Update `ci.yml`.** Replace the `image:` value under
    `test-linux.container` with the new
-   `ghcr.io/shortarrow/runex-ci@sha256:<new>`. Commit on
-   `develop` with a message like
-   `ci(linux): bump pinned runex-ci digest to <reason>`.
+   `ghcr.io/shortarrow/runex-ci@sha256:<new>`. Commit on a
+   follow-up branch with a message like
+   `ci(linux): bump pinned runex-ci digest to <reason>` and merge
+   it through a PR.
 4. **Push and verify.** The next CI run should consume the new
    image. Mismatch between Dockerfile changes and the pinned
    digest will manifest as missing-tool failures in `Verify image
@@ -232,7 +231,8 @@ Before touching any version number:
 - [ ] **`cargo test --workspace` is green on Linux.** Run via
   `wsl -d archlinux -e bash -lc 'cd /path/to/runex && cargo test --workspace'`
   (a few `#[cfg(unix)]` tests don't compile on Windows).
-- [ ] **`develop` is in sync with `origin/develop`.** No unpushed
+- [ ] **`main` is in sync with `origin/main`.** Every change meant
+  for the release has been merged through its PR; no unpushed
   commits, no dangling working-tree changes.
 - [ ] **A clean `runex doctor` run on a real machine.** Catches
   integration drift that unit tests don't see (e.g. clink lua
@@ -252,13 +252,16 @@ Before touching any version number:
 
 All commands from the repo root.
 
-- [ ] **Merge develop → main**:
+- [ ] **Start from up-to-date `main`**:
 
   ```bash
   git checkout main
   git pull
-  git merge --no-ff develop
   ```
+
+  The bump commit below is the one commit that lands on `main`
+  without a PR; everything else reaches `main` through a reviewed
+  branch (see "Branch workflow reference").
 
 - [ ] **Bump the version.** Edit `runex/Cargo.toml` `version` to
   the new value. (As of 0.1.14 there is only one crate; the
@@ -345,9 +348,9 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
 
   The helper edits `packaging/aur-bin/PKGBUILD` and writes
   `packaging/aur-bin/.SRCINFO` **in this repo as well** (the AUR
-  clone copy is taken from those). Commit the in-repo changes as
-  part of the back-merge step so the template stays in sync with
-  the published AUR version — otherwise the in-repo PKGBUILD
+  clone copy is taken from those). Commit the in-repo changes in
+  the packaging-sync commit under "Post-release" so the template
+  stays in sync with the published AUR version — otherwise the in-repo PKGBUILD
   drifts (it stayed pinned at 0.1.11 across the 0.1.12–0.1.14
   cycle before this rule was added).
 
@@ -373,8 +376,8 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
   ```
 
   The helper also edits `packaging/aur/PKGBUILD` and writes
-  `packaging/aur/.SRCINFO` in this repo. Commit those in the
-  back-merge step alongside the `runex-bin` updates — same rule,
+  `packaging/aur/.SRCINFO` in this repo. Commit those in the same
+  packaging-sync commit as the `runex-bin` updates — same rule,
   same reason (the in-repo template stays the source of truth so
   it doesn't drift like `runex-bin`'s did across 0.1.12–0.1.14).
 
@@ -404,15 +407,11 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
 
 ### Post-release
 
-- [ ] **Merge main → develop with `--no-ff`** so the bump commit
-  shows up in develop's history with a clear merge marker:
-
-  ```bash
-  git checkout develop
-  git pull
-  git merge --no-ff main
-  git push origin develop
-  ```
+- [ ] **Commit the packaging sync on `main`.** The AUR helpers
+  rewrote `packaging/aur-bin/` and `packaging/aur/` in this repo;
+  commit them as one `chore(packaging): sync AUR templates to X.Y.Z`
+  commit and push. Together with the bump commit these are the only
+  commits that reach `main` outside a PR.
 
 - [ ] **Polish the GitHub release body.** The auto-generated body
   is bare. Fill it in using the template in `### GitHub release body`
@@ -540,9 +539,18 @@ Submission steps:
    to the same `wingetcreate update` invocation, or by manually
    committing on a `winget-pkgs` fork and opening the PR with `gh pr
    create`. Title format: `New version: ShortArrow.runex version X.Y.Z`.
-3. **Post the checklist confirmation as a PR comment** so reviewers
-   don't have to verify each box themselves. Mention which boxes
-   are blocked by Defender (the local-install row).
+3. **Fill in the PR body template** (do not post a separate
+   checklist comment — it duplicates the template and reads as
+   noise). Keep the description to 1-2 lines ("Update
+   ShortArrow.runex to X.Y.Z. Manifest generated with
+   wingetcreate."), check each checklist box honestly, link the
+   upstream issue on the `Resolves` line when one applies, and note
+   on the local-install row when Defender blocks it. When editing
+   via `gh pr edit --body`, the replacement body must itself contain
+   the trailing `###### Microsoft Reviewers: [Open in CodeFlow]`
+   line — `gh pr edit` replaces the whole body, so omitting it
+   deletes the line and including it twice doubles it; verify
+   exactly one remains.
 4. **Watch the validation pipeline.** Status is reported as PR
    comments from `@microsoft-github-policy-service` and tags like
    `Validation-Defender-Error`.
@@ -601,17 +609,28 @@ expectations for users hitting the page on day-of.
 
 ### Branch workflow reference
 
-The branching model assumed by the checklist above:
+The branching model assumed by the checklist above is trunk-based:
 
 ```
-develop  : feature work, bug fixes, docs
-main     : release-only; bump commits and merges from develop
-develop  : merge main back with --no-ff so version bumps show up
+main            : the trunk; always releasable, tags are cut from it
+fix/*, feat/*,
+docs/*, ci/*    : short-lived branches off main, merged back through a PR
 ```
 
-The `--no-ff` on the back-merge is deliberate: it preserves the merge
-commit so the branch history stays clear about which commits came from
-main (version bumps) vs develop (feature work).
+Every change reaches `main` through a PR from a short-lived branch
+named after the issue it closes (`fix/issue-18-pwsh-tilde-line-argument`).
+The two exceptions are the release's own commits: the version bump
+(`chore: bump version to X.Y.Z`, which the tag points at) and the
+packaging sync that follows the AUR pushes. Both are pushed to `main`
+directly so the tag and the templates never wait on a review of a
+mechanical edit.
+
+runex used a `develop` branch through v0.1.20 (feature branches →
+`develop` → `main` at release time, with a `--no-ff` back-merge).
+It was retired after that release because every change was already
+landing as a self-contained PR, so the integration branch only
+delayed fixes and left `develop` and `main` to drift. The branch
+still exists on the remote for history; do not base new work on it.
 
 ### Binary release workflow
 
