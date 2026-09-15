@@ -364,46 +364,100 @@ pub(crate) fn refresh_existing_caches(
     config_path: &Path,
     env: &dyn HomeDirResolver,
 ) {
-    use crate::infra::integration_cache::{
-        cache_header, cache_path, comment_prefix_for, write_cache_file,
-    };
-
-    let bin = crate::util::path::current_exe_or_default("runex");
     // Reload the config under the new state so rule changes
     // (`runex add` / `runex remove` mutations) reach the cache
     // body. resolve_config_opt is graceful: a parse failure or
     // missing file means we still rewrite caches (with empty
     // abbr table) rather than silently ignoring the refresh.
     let (_path, config, _err) = resolve_config_opt(Some(config_path));
-
-    for &shell in &[Shell::Bash, Shell::Zsh, Shell::Pwsh, Shell::Nu] {
-        let target = match cache_path(shell, env) {
-            Ok(Some(p)) => p,
-            Ok(None) => continue, // clink (excluded by cache_path)
-            Err(e) => {
-                eprintln!(
-                    "warning: cache refresh skipped for {:?} (cannot resolve path: {})",
-                    shell, e
-                );
-                continue;
+    // The two warnings keep their pre-`config reload` wording exactly.
+    for outcome in refresh_caches_with(config.as_ref(), env) {
+        match outcome {
+            CacheRefresh::Failed { shell, path: None, error } => {
+                eprintln!("warning: cache refresh skipped for {shell:?} (cannot resolve path: {error})");
             }
-        };
-        if !target.is_file() {
-            continue;
-        }
-        let comment_prefix = comment_prefix_for(shell);
-        let header = cache_header(comment_prefix, &bin);
-        let body = crate::app::shell_export::export_script(shell, &bin, config.as_ref());
-        let contents = format!("{header}{body}");
-        if let Err(e) = write_cache_file(&target, &contents) {
-            eprintln!(
-                "warning: failed to refresh {:?} cache at {}: {}",
-                shell,
-                sanitize_for_display(&target.display().to_string()),
-                e
-            );
+            CacheRefresh::Failed { shell, path: Some(path), error } => {
+                eprintln!(
+                    "warning: failed to refresh {shell:?} cache at {}: {error}",
+                    sanitize_for_display(&path.display().to_string())
+                );
+            }
+            CacheRefresh::Refreshed { .. } | CacheRefresh::NotInstalled { .. } => {}
         }
     }
+}
+
+/// What happened to one shell's integration cache during a refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CacheRefresh {
+    /// The cache existed and was rewritten from `config` at this path.
+    Refreshed { shell: Shell, path: PathBuf },
+    /// No cache file: the user never ran `runex init <shell>`.
+    NotInstalled { shell: Shell },
+    /// The cache could not be located (`path: None`), inspected, or
+    /// rewritten. `error` is the underlying error's message; callers
+    /// decide whether to print `path` alongside it.
+    Failed { shell: Shell, path: Option<PathBuf>, error: String },
+}
+
+/// Rewrite every installed integration cache from `config` and report
+/// the outcome per cache-eligible shell (bash / zsh / pwsh / nu; clink
+/// keeps a static lua file outside this layout). Shells without a
+/// cache file are reported as [`CacheRefresh::NotInstalled`] and never
+/// created here — only `runex init <shell>` opts a shell in. Callers
+/// decide how loud to be: `add` / `remove` warn on failures, `config
+/// reload` prints the whole report.
+pub(crate) fn refresh_caches_with(
+    config: Option<&crate::domain::model::Config>,
+    env: &dyn HomeDirResolver,
+) -> Vec<CacheRefresh> {
+    use crate::infra::integration_cache::{
+        cache_header, cache_path, comment_prefix_for, write_cache_file,
+    };
+
+    let bin = crate::util::path::current_exe_or_default("runex");
+    [Shell::Bash, Shell::Zsh, Shell::Pwsh, Shell::Nu]
+        .into_iter()
+        .filter_map(|shell| {
+            let target = match cache_path(shell, env) {
+                Ok(Some(p)) => p,
+                Ok(None) => return None,
+                Err(e) => {
+                    return Some(CacheRefresh::Failed { shell, path: None, error: e.to_string() })
+                }
+            };
+            // `Path::is_file` folds every stat error into "no": a cache
+            // directory we cannot read would be reported as never
+            // installed, with a `runex init` hint and a clean exit.
+            // Only NotFound means not installed.
+            match std::fs::metadata(&target) {
+                Ok(meta) if meta.is_file() => {}
+                Ok(_) => {
+                    return Some(CacheRefresh::Failed {
+                        shell,
+                        path: Some(target),
+                        error: "cache path is not a regular file".to_string(),
+                    })
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Some(CacheRefresh::NotInstalled { shell })
+                }
+                Err(e) => {
+                    let error = format!(
+                        "cannot inspect cache at {}: {e}",
+                        sanitize_for_display(&target.display().to_string())
+                    );
+                    return Some(CacheRefresh::Failed { shell, path: Some(target), error });
+                }
+            }
+            let header = cache_header(comment_prefix_for(shell), &bin);
+            let body = crate::app::shell_export::export_script(shell, &bin, config);
+            Some(match write_cache_file(&target, &format!("{header}{body}")) {
+                Ok(()) => CacheRefresh::Refreshed { shell, path: target },
+                Err(e) => CacheRefresh::Failed { shell, path: Some(target), error: e.to_string() },
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

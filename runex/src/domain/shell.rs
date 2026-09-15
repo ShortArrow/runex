@@ -22,6 +22,22 @@ impl FromStr for Shell {
     }
 }
 
+/// The lowercase name the CLI accepts for the shell (`runex init
+/// <shell>`, `--shell <shell>`), so user-facing output can name a
+/// shell in the form the user would type back. Round-trips through
+/// [`FromStr`].
+impl fmt::Display for Shell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Shell::Bash => "bash",
+            Shell::Zsh => "zsh",
+            Shell::Pwsh => "pwsh",
+            Shell::Clink => "clink",
+            Shell::Nu => "nu",
+        })
+    }
+}
+
 /// Error returned when a shell name string cannot be parsed into a [`Shell`] variant.
 ///
 /// The `Display` impl sanitizes the raw shell name before embedding it in the message:
@@ -482,6 +498,22 @@ mod tests {
     }
 
     } // mod quote_functions
+
+    mod shell_name {
+        use super::*;
+
+        /// `Display` must print exactly the token `FromStr` accepts, so
+        /// a shell named in output (`runex init <shell>`) can be typed
+        /// back verbatim.
+        #[test]
+        fn display_round_trips_through_from_str() {
+            for shell in [Shell::Bash, Shell::Zsh, Shell::Pwsh, Shell::Clink, Shell::Nu] {
+                let name = shell.to_string();
+                assert_eq!(name, name.to_ascii_lowercase(), "names are lowercase: {name}");
+                assert_eq!(name.parse::<Shell>().unwrap(), shell);
+            }
+        }
+    }
 
 
     mod unicode_edge_cases {

@@ -124,6 +124,7 @@ runex timings                            time all abbreviation rules
 runex config where                       print the resolved config file path
 runex config type                        print the config file contents to stdout
 runex config show                        open the config file with the OS-associated app
+runex config reload                      regenerate the installed shell integration caches from the config file
 runex version                            show version and build commit
 ```
 

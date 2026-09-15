@@ -168,6 +168,14 @@ shells use different output formats but the same flow:
 | clink | `return { line = "...", cursor = N }` (Lua `load()` in a sandbox) |
 | nu | `{"line": "...", "cursor": N}` (parsed via `from json`) |
 
+`runex init <shell>` stores that bootstrap in a cache file
+(`<XDG_CACHE_HOME>/runex/integration.<ext>` for bash / zsh / pwsh / nu;
+clink keeps `runex.lua` under `%LOCALAPPDATA%\clink`) and points the
+shell's rc file at it. `runex add` and `runex remove` rewrite the
+existing cache files after their edit; after editing `config.toml` by
+hand, run `runex config reload` to do the same. `runex doctor` reports a
+cache that has drifted from the installed binary.
+
 Failures (missing config, malformed buffer) are silent: the hook returns
 an `InsertSpace` action so the bootstrap inserts a literal trigger key and
 the user keeps typing. Configuration changes take effect on the next
