@@ -71,9 +71,12 @@ function __runex_register_expand_handler {
             $pastePending = (__runex_queued_key_count) -gt 0
 
             # The hook emits two lines: __RUNEX_LINE and __RUNEX_CURSOR.
-            # pwsh_quote_string produces a double-quoted literal, so the
-            # values are safe to Invoke-Expression. On any failure we
-            # fall back to plain space insertion.
+            # pwsh_double_quote_string produces a double-quoted literal
+            # with every quote, backtick, `$` and line break escaped, so
+            # the values are safe to Invoke-Expression and the buffer
+            # comes back character for character (a multi-line paste
+            # keeps its newline). On any failure we fall back to plain
+            # space insertion.
             # `--line=` is joined to its value on purpose: PowerShell
             # rewrites a native-command argument that starts with `~` to
             # $HOME (even when it comes from a variable), which would hand

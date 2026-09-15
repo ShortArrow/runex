@@ -6,7 +6,7 @@
 
 use crate::domain::expand::expand;
 use crate::domain::model::{Config, ExpandResult, Shell};
-use crate::domain::shell::{bash_quote_string, lua_quote_string, pwsh_quote_string};
+use crate::domain::shell::{bash_quote_string, lua_quote_string, pwsh_double_quote_string};
 
 /// Outcome of a hook call — what the shell adapter should do to its buffer.
 ///
@@ -18,6 +18,10 @@ use crate::domain::shell::{bash_quote_string, lua_quote_string, pwsh_quote_strin
 /// `app::hook::shell_cursor_to_byte` on the way in and `app::hook::render`
 /// on the way out (issue #6). Shells are expected to replace their
 /// buffer and cursor with these values atomically.
+///
+/// Invariant: `cursor` is measured against `line` as it is here, so a
+/// renderer must reproduce `line` character for character — any
+/// character it drops or rewrites moves the cursor (issue #21).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum HookAction {
     /// The token at the cursor expanded; shell should replace the buffer.
@@ -159,7 +163,7 @@ pub(crate) fn render_action(shell: Shell, action: &HookAction) -> String {
         }
         Shell::Pwsh => format!(
             "$__RUNEX_LINE = {}\n$__RUNEX_CURSOR = {}",
-            pwsh_quote_string(line),
+            pwsh_double_quote_string(line),
             cursor,
         ),
         Shell::Clink => format!(
@@ -433,6 +437,20 @@ mod tests {
         assert!(out.starts_with("READLINE_LINE="));
         assert!(out.contains("'\\''"), "render output should escape quotes: {}", out);
         assert!(out.ends_with("; READLINE_POINT=17"));
+    }
+
+    /// A PSReadLine buffer can hold a newline (multi-line paste, Shift+Enter).
+    /// The eval text must carry it as an escape rather than dropping it:
+    /// the cursor is measured against the full line, so a shortened line
+    /// lands the cursor past the end (issue #21).
+    #[test]
+    fn render_pwsh_keeps_embedded_newline() {
+        let action = HookAction::InsertSpace {
+            line: "scp a\nb ".into(),
+            cursor: 8,
+        };
+        let out = render_action(Shell::Pwsh, &action);
+        assert_eq!(out, "$__RUNEX_LINE = \"scp a`nb \"\n$__RUNEX_CURSOR = 8");
     }
 
     #[test]

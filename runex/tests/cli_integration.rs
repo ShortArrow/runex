@@ -1979,7 +1979,7 @@ fn hook_pwsh_handles_emoji_surrogate_pair() {
     // After the space insertion the line is "gs🎯 end" and the cursor
     // is right after the inserted space.
     assert!(
-        stdout.contains("$__RUNEX_LINE = 'gs🎯 end'"),
+        stdout.contains("$__RUNEX_LINE = \"gs🎯 end\""),
         "got: {stdout}"
     );
     assert!(

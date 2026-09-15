@@ -44,6 +44,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while `--cursor` still counted `~\.local\bin\claude.exe`, and the
   space landed mid-path. The bootstrap now passes the buffer as one
   `--line=<value>` token, whose first character can never be `~`.
+- **pwsh: a multi-line buffer no longer loses its line break and
+  cursor on Space (#21).** The eval text sent back to PSReadLine
+  dropped every newline from the buffer (a pasted path that wraps, or
+  Shift+Enter), so the replaced line was one character shorter than
+  the cursor runex had computed. The line is now emitted as a
+  double-quoted PowerShell literal with `` `n `` / `` `r `` escapes,
+  and the typographic quotes U+201C / U+201D / U+201E, which
+  PowerShell's tokenizer also treats as string delimiters, are
+  escaped as well. The literal itself round-trips on Windows
+  PowerShell 5.1 too, but 5.1's native-argument passing strips a `"`
+  from the buffer before `runex hook` receives it, so a buffer
+  containing `"` still comes back without it there; that is a
+  pre-existing 5.1 limitation upstream of this fix.
 
 ## [0.1.20] - 2026-07-09
 

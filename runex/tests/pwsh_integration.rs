@@ -172,4 +172,17 @@ if ($null -ne $__RUNEX_LINE -and $null -ne $__RUNEX_CURSOR) {
             "~/.local/bin/claude.exe |24"
         );
     }
+
+    /// A pasted multi-line path (issue #21) reaches the hook with an
+    /// embedded newline. The returned line must still contain it, so the
+    /// buffer keeps its text and the cursor stays on the trigger space.
+    #[test]
+    fn multiline_buffer_round_trips_with_newline_intact() {
+        if !pwsh_available() { return; }
+        let config = write_config();
+        assert_eq!(
+            run_helper(&config, "scp -r \"\\\\srv\\帳票（レポート\n）\\x\"", 26),
+            "scp -r \"\\\\srv\\帳票（レポート\n）\\x\" |27"
+        );
+    }
 }
