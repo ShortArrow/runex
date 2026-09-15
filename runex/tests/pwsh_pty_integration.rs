@@ -69,11 +69,12 @@ fn space_triggers_expand_for_known_token() {
 
 /// Negative control for the harness itself. With no abbreviation
 /// configured, Space must insert a plain space and `gcm` must run as
-/// what it is in PowerShell — the built-in alias of `Get-Command` —
-/// whose listing proves the session executed the line. A harness that
-/// silently stopped driving the shell would show neither the listing
-/// nor an expansion, so this test fails loudly in that case instead of
-/// passing vacuously.
+/// what it is in PowerShell — the built-in alias of `Get-Command`.
+/// The line asks it for its own name, assembled at run time from two
+/// halves, so the bare `Get-Command` in the output can only come from
+/// execution. A harness that silently stopped driving the shell would
+/// show neither that nor an expansion, so this test fails loudly in
+/// that case instead of passing vacuously.
 #[test]
 fn space_without_matching_abbr_inserts_a_plain_space() {
     if !shell_available("pwsh") {
@@ -91,10 +92,17 @@ fn space_without_matching_abbr_inserts_a_plain_space() {
     session.send("m").expect("send m");
     session.expect_regex("gcm").expect("echo gcm");
     session.send(" ").expect("send space");
-    session.enter().expect("submit the line");
+    // Finish the line so that `gcm` (Get-Command's built-in alias)
+    // prints a token only execution can produce: the argument is
+    // assembled from two halves, so `Get-Command` never appears in the
+    // typed echo, and `% Name` prints it bare — independent of the
+    // terminal width that would truncate a formatted table.
     session
-        .expect_regex("Microsoft.PowerShell.Utility")
-        .expect("`gcm` (Get-Command) should have listed cmdlets, proving the line ran");
+        .send_line("('Get-Com' + 'mand') | % Name")
+        .expect("finish the line");
+    session
+        .expect_regex("Get-Command")
+        .expect("`gcm ('Get-Com' + 'mand') | % Name` should have printed Get-Command, proving the line ran");
     assert!(
         !session.saw("EXPANDED"),
         "no abbreviation is configured, so nothing may have expanded"

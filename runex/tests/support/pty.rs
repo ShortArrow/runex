@@ -75,6 +75,10 @@ pub struct PtySession {
     /// Monotonic counter for the per-line sync token in
     /// [`Self::send_line_synced`].
     sync_counter: u64,
+    /// The last `DSR_QUERY.len() - 1` bytes read, carried across
+    /// `try_read` calls so a query split over two reads is still
+    /// recognised and answered.
+    dsr_carry: Vec<u8>,
 }
 
 impl PtySession {
@@ -96,16 +100,16 @@ impl PtySession {
         // editor's cursor tracking during a keystroke test. The PTY
         // otherwise defaults to a small size. Best-effort.
         let _ = session.get_process_mut().set_window_size(240, 60);
-        let mut this = Self { inner: session, seen: String::new(), sync_counter: 0 };
-        // Wait for the shell's first interactive prompt before sending
-        // anything. reedline / PSReadLine emit a DSR query on startup
-        // and block until it is answered; `read_until` answers it. A
-        // shell whose prompt we can't predict (bash/zsh here still have
-        // their default prompt) just needs its startup output to settle,
-        // so we drain briefly by waiting on a token that won't come and
-        // letting the deadline pass is wasteful — instead, run one sync
-        // round against the *current* (default) prompt via a harmless
-        // command. `send_line_synced` already proves round-trip.
+        let mut this = Self {
+            inner: session,
+            seen: String::new(),
+            sync_counter: 0,
+            dsr_carry: Vec::new(),
+        };
+        // Let the shell reach its first interactive prompt before
+        // sending anything: reedline / PSReadLine emit a DSR query on
+        // startup and block until it is answered, and the first
+        // bootstrap line would otherwise race the editor's init.
         this.settle_startup(shell)?;
         bootstrap(&mut this, shell, runex_bin, config)?;
         // Drop the bootstrap chatter so a test's first `expect` matches
@@ -202,10 +206,23 @@ impl PtySession {
     fn read_until(&mut self, needle: &str, deadline: Duration) -> Option<()> {
         let start = Instant::now();
         let mut buf = [0u8; 4096];
+        // Only the bytes that arrived since the last scan can complete
+        // a match, so scan the tail rather than all of `seen`: with
+        // small reads a full rescan per read is quadratic and can eat
+        // the deadline before a chatty shell has even finished its
+        // banner.
+        let mut scanned: usize = 0;
         loop {
-            if self.seen.contains(needle) {
+            // A match can start no earlier than needle.len()-1 bytes
+            // before the previously scanned end.
+            let from = scanned
+                .saturating_sub(needle.len().saturating_sub(1))
+                .min(self.seen.len());
+            let from = (0..=from).rev().find(|&i| self.seen.is_char_boundary(i)).unwrap_or(0);
+            if self.seen[from..].contains(needle) {
                 return Some(());
             }
+            scanned = self.seen.len();
             if start.elapsed() > deadline {
                 return None;
             }
@@ -213,7 +230,7 @@ impl PtySession {
                 Ok(0) => std::thread::sleep(Duration::from_millis(10)),
                 Ok(n) => {
                     let chunk = &buf[..n];
-                    if chunk.windows(DSR_QUERY.len()).any(|w| w == DSR_QUERY) {
+                    if dsr_query_completes(&mut self.dsr_carry, chunk) {
                         let _ = self.inner.write_all(DSR_ANSWER);
                         let _ = self.inner.flush();
                     }
@@ -369,4 +386,52 @@ fn bootstrap(
         }
     }
     Some(())
+}
+
+/// Whether `chunk`, read after the bytes in `carry`, completes a
+/// [`DSR_QUERY`]. A query can straddle two `try_read` results, so the
+/// scan runs over `carry ++ chunk` and `carry` is left holding the
+/// last `DSR_QUERY.len() - 1` bytes for the next call. Pure so it can
+/// be tested with hand-split sequences.
+fn dsr_query_completes(carry: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    let mut window = std::mem::take(carry);
+    window.extend_from_slice(chunk);
+    let found = window.windows(DSR_QUERY.len()).any(|w| w == DSR_QUERY);
+    let keep = window.len().saturating_sub(DSR_QUERY.len() - 1);
+    *carry = window[keep..].to_vec();
+    found
+}
+
+#[cfg(test)]
+mod dsr_tests {
+    use super::*;
+
+    #[test]
+    fn query_inside_one_chunk_is_found() {
+        let mut carry = Vec::new();
+        assert!(dsr_query_completes(&mut carry, b"prompt> \x1b[6n more"));
+    }
+
+    #[test]
+    fn query_split_across_two_chunks_is_found_on_the_second() {
+        let mut carry = Vec::new();
+        assert!(!dsr_query_completes(&mut carry, b"text\x1b["));
+        assert!(dsr_query_completes(&mut carry, b"6n"));
+    }
+
+    #[test]
+    fn query_split_one_byte_per_chunk_is_found_on_the_last() {
+        let mut carry = Vec::new();
+        for b in [b"\x1b" as &[u8], b"[", b"6"] {
+            assert!(!dsr_query_completes(&mut carry, b));
+        }
+        assert!(dsr_query_completes(&mut carry, b"n"));
+    }
+
+    #[test]
+    fn unrelated_bytes_never_match_and_carry_stays_bounded() {
+        let mut carry = Vec::new();
+        assert!(!dsr_query_completes(&mut carry, b"\x1b[0m\x1b[K some output"));
+        assert!(carry.len() <= DSR_QUERY.len() - 1);
+    }
 }
