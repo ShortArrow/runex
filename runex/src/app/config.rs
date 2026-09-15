@@ -789,11 +789,17 @@ pub(crate) fn append_abbr_to_file(
 }
 
 /// Remove all abbreviation rules with the given key from a config
-/// file. Thin wrapper around
-/// [`crate::infra::config_store::remove_abbr_block`]; kept here for
-/// call-site continuity until Phase D D4 routes `cmd/add_remove`
-/// through `app::abbr`.
+/// file.
+///
+/// Loads the file as a runex config first, the way `add` does, and
+/// refuses on failure. The rewrite in
+/// [`crate::infra::config_store::remove_abbr_block`] replaces the
+/// whole file and follows a symlinked path to its target, so this
+/// gate is what guarantees only a file runex accepts as its config
+/// is ever rewritten — a TOML file that merely carries an `[[abbr]]`
+/// table with a matching key is not enough.
 pub(crate) fn remove_abbr_from_file(path: &std::path::Path, key: &str) -> Result<usize, ConfigError> {
+    load_config(path)?;
     crate::infra::config_store::remove_abbr_block(path, key)
 }
 
@@ -1626,6 +1632,25 @@ expand = "git push"
         let config = load_config(&path).unwrap();
         assert_eq!(config.abbr.len(), 1);
         assert_eq!(config.abbr[0].key, "gp");
+    }
+
+    /// `remove` rewrites the whole file, so it must only ever do so to
+    /// a file runex accepts as its config. A file that merely parses
+    /// as TOML and happens to carry an `[[abbr]]` table with the key
+    /// (here: no `version`, so `load_config` rejects it) must be left
+    /// byte-for-byte alone — the symlink write-through in
+    /// `infra::config_store` relies on this gate.
+    #[test]
+    fn remove_abbr_refuses_a_file_runex_would_not_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("other.toml");
+        let original = "# somebody else's tool\n[package]\nname = \"victim\"\n\n[[abbr]]\nkey = \"ghqm\"\nexpand = \"x\"\n";
+        std::fs::write(&path, original).unwrap();
+
+        let result = remove_abbr_from_file(&path, "ghqm");
+
+        assert!(result.is_err(), "a file load_config rejects must not be rewritten: {result:?}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 
     #[test]

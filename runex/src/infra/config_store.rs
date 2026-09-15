@@ -126,9 +126,15 @@ fn open_config_for_append_safely(path: &Path) -> std::io::Result<std::fs::File> 
 /// the link: the repository copy changes and the link survives.
 /// Renaming over the link itself would swap it for a regular file and
 /// leave the repository copy untouched (issue #29). The security
-/// trade-off is the one already accepted for reads: this rewrite only
-/// ever succeeds on a file that parsed as a runex config, so a link
-/// pointed at some other file cannot be used to overwrite it.
+/// trade-off is the one already accepted for reads. This function does
+/// not validate the file; the caller (`app::config::remove_abbr_from_file`)
+/// loads it as a runex config first and refuses otherwise, so a link
+/// pointed at a file runex would not accept is never rewritten.
+///
+/// Hard links are not preserved: `rename` replaces the directory entry,
+/// so the other name keeps the old content. There is no portable way to
+/// detect a hard link from Rust's stable API on Windows, and dotfile
+/// managers use symlinks, so this is documented rather than guarded.
 fn atomically_write_config(path: &Path, contents: &str) -> Result<(), ConfigError> {
     use std::io::Write;
     let path = std::fs::canonicalize(path).map_err(ConfigError::Io)?;

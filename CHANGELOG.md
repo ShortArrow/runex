@@ -66,7 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the two copies then drifted. The write now resolves the path first
   and renames next to the link's target, so the repository copy
   changes and the link survives. Reads already followed the symlink
-  for the same dotfiles idiom.
+  for the same dotfiles idiom. `remove` now also loads the file as a
+  runex config before rewriting it, as `add` always did, so a link
+  that points at a file runex would not accept is left alone. Hard
+  links are not preserved (the rename replaces one name); use a
+  symlink.
 
 ## [0.1.20] - 2026-07-09
 
