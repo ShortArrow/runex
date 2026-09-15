@@ -104,10 +104,15 @@ pub(crate) fn pwsh_quote_string(token: &str) -> String {
 /// - LF and CR become `` `n `` / `` `r ``: pwsh splits native stdout on
 ///   them before the wrapper re-joins with a bare LF, so raw ones would
 ///   not survive the round trip. Every other character is inert inside
-///   a double-quoted literal and is emitted as is.
+///   a double-quoted literal and is emitted as is — including the
+///   single-quote delimiters U+2018 / U+2019 / U+201A / U+201B, which
+///   only end a *single*-quoted literal.
 ///
 /// Only backtick escapes that Windows PowerShell 5.1 understands are
-/// used, since the same bootstrap runs there.
+/// used, since the same bootstrap runs there. The literal round-trips
+/// on 5.1; what does not is 5.1's native-argument passing, which strips
+/// a `"` from the buffer before `runex hook` ever receives it. That is
+/// upstream of this function and unchanged by it.
 pub(crate) fn pwsh_double_quote_string(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
