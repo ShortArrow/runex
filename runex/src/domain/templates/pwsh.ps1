@@ -74,9 +74,13 @@ function __runex_register_expand_handler {
             # pwsh_quote_string produces a double-quoted literal, so the
             # values are safe to Invoke-Expression. On any failure we
             # fall back to plain space insertion.
+            # `--line=` is joined to its value on purpose: PowerShell
+            # rewrites a native-command argument that starts with `~` to
+            # $HOME (even when it comes from a variable), which would hand
+            # runex a longer buffer than the cursor was measured against.
             $out = $null
             try {
-                $hookArgs = @('hook', '--shell', 'pwsh', '--line', $line, '--cursor', "$cursor")
+                $hookArgs = @('hook', '--shell', 'pwsh', "--line=$line", '--cursor', "$cursor")
                 if ($pastePending) { $hookArgs += '--paste-pending' }
                 $out = & {PWSH_BIN} @hookArgs 2>$null
             } catch {
