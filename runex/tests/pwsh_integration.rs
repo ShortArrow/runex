@@ -24,25 +24,35 @@ mod pwsh {
     }
 
     /// Drives `runex hook` the way the pwsh bootstrap does and reports
-    /// the result as "line|cursor". The `runex hook` invocation below
-    /// must stay identical to the one in `templates/pwsh.ps1` — in
-    /// particular the joined `--line=$line` form, which is what keeps
-    /// PowerShell from rewriting a leading `~` before runex sees it.
+    /// the result as "line|cursor".
+    ///
+    /// The invocation is not written here: the script exports the real
+    /// bootstrap (`runex export pwsh`), lifts the `$hookArgs = @(...)`
+    /// line out of it and evaluates that with `$line` / `$cursor` in
+    /// scope, so the arguments handed to `runex hook` are exactly the
+    /// template's — a change to the template's argument form (such as
+    /// the joined `--line=$line` that keeps PowerShell from rewriting a
+    /// leading `~`) is exercised here rather than mirrored by hand.
+    ///
+    /// The hook producing no usable eval text is reported as
+    /// `NOOUT|`, never patched over: the bootstrap's own fallback
+    /// (insert a literal space) would make a broken hook look right.
     fn run_helper(config: &NamedTempFile, line: &str, cursor: usize) -> String {
         let script = r#"
 $line = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:RUNEX_LINE_B64))
 $cursor = [int]$env:RUNEX_CURSOR
-$out = & $env:RUNEX_BIN hook --shell pwsh "--line=$line" --cursor $cursor 2>$null
+$template = & $env:RUNEX_BIN export pwsh --bin $env:RUNEX_BIN
+$argsLine = @($template | Where-Object { $_ -match '^\s*\$hookArgs = @\(' })
+if ($argsLine.Count -ne 1) { Write-Output "TEMPLATE-HAS-$($argsLine.Count)-HOOKARGS-LINES|"; exit 0 }
+Invoke-Expression $argsLine[0]
+$out = & $env:RUNEX_BIN @hookArgs 2>$null
 $__RUNEX_LINE = $null
 $__RUNEX_CURSOR = $null
 if ($out) { Invoke-Expression ($out -join "`n") }
 if ($null -ne $__RUNEX_LINE -and $null -ne $__RUNEX_CURSOR) {
     Write-Output "$__RUNEX_LINE|$__RUNEX_CURSOR"
 } else {
-    # Fallback: insert a space at the cursor, mirroring the bootstrap.
-    $left  = $line.Substring(0, $cursor)
-    $right = $line.Substring($cursor)
-    Write-Output "$left $right|$($cursor + 1)"
+    Write-Output "NOOUT|"
 }
 "#;
 
