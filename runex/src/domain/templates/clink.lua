@@ -16,10 +16,13 @@ local function runex_hex(s)
     return (s:gsub('.', function(c) return string.format('%02X', c:byte()) end))
 end
 
--- cmd.exe rejects command lines longer than this. Hex doubles the buffer,
--- so the assembled command is measured before spawning and the trigger
--- key falls back to a literal space when it would not fit.
-local CMD_LINE_MAX = 8191
+-- cmd.exe's documented command-line limit is 8191 characters, but that
+-- counts the `cmd.exe /c ` prefix io.popen adds: measured through
+-- `cmd /c`, the longest string cmd.exe still runs is 8158 characters.
+-- Hex doubles the buffer, so the assembled command is measured before
+-- spawning and the trigger key falls back to a literal space when it
+-- would not fit. 8000 leaves headroom for a long %COMSPEC% path.
+local CMD_LINE_MAX = 8000
 
 -- cmd.exe quoting for the binary path: wrap in double quotes. POSIX
 -- single-quote wrapping would be interpreted literally by cmd.exe and
@@ -30,6 +33,10 @@ local function runex_shell_quote(s)
 end
 
 local function runex_call_hook(line, cursor)
+    -- Nothing to expand in an empty buffer, and `--line-hex` with an
+    -- empty value would be collapsed by cmd.exe into a missing value.
+    -- Skip the spawn; the caller inserts the literal space.
+    if line == "" then return nil end
     -- io.popen on Windows ultimately calls cmd.exe with the assembled
     -- string. cmd.exe's quote handling (without /S) is heuristic: when the
     -- string starts with `"` AND ends with `"`, cmd strips the outermost

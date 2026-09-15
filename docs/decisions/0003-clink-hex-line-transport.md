@@ -53,12 +53,19 @@ The buffer travels as hex of its UTF-8 bytes:
   conversions, and rejects odd length, non-hex digits and invalid
   UTF-8. A rejection is a non-zero exit, which the template already
   treats as "insert a literal space".
-- cmd.exe refuses command lines over 8191 characters and hex doubles
-  the buffer, so the template measures the assembled string and falls
-  back to a literal space above that limit. The practical ceiling for
-  clink expansion is therefore a buffer of roughly 4000 bytes; the
-  Rust-side cap `MAX_HOOK_LINE_BYTES` (16 KiB) still applies after
-  decoding.
+- cmd.exe's documented command-line limit is 8191 characters, and that
+  figure includes the `cmd.exe /c ` prefix `io.popen` adds: measured
+  through `cmd /c` on Windows 11, the longest string cmd.exe still runs
+  is 8158 characters. Hex doubles the buffer, so the template measures
+  the assembled string against `CMD_LINE_MAX = 8000` (headroom for a
+  long `%COMSPEC%` path) and falls back to a literal space above it.
+  The practical ceiling for clink expansion is therefore a buffer of
+  roughly 3900 bytes; the Rust-side cap `MAX_HOOK_LINE_BYTES` (16 KiB)
+  still applies after decoding.
+- An empty buffer is not sent at all: `--line-hex` with an empty value
+  would be collapsed by cmd.exe into a missing value and fail in clap
+  on every Space pressed at an empty prompt. The template returns
+  before `io.popen` and the trigger key inserts its literal space.
 
 `runex init clink` output generated before this change keeps calling
 `--line "<buffer>"`, which still works, so old installs degrade to
@@ -90,9 +97,17 @@ stale template.
 - clink users can expand on lines containing `"`, `%`, `!` and any
   other character; the literal-space fallback now only fires for
   buffers too long for cmd.exe.
-- `hook` has two input forms. Every other shell keeps `--line`;
-  `--line-hex` exists for the one shell whose IPC channel is a
+- `hook` has two input forms. The flag itself is shell-agnostic (clap
+  accepts `--line-hex` with any `--shell`); clink is the only template
+  that uses it, because it is the only one whose IPC channel is a
   cmd.exe command line, and `docs/config-reference.md` says so.
+- The returned line is still rendered by `lua_quote_string`, which
+  drops NUL and deceptive Unicode (RLO, BOM, zero-width characters)
+  by design. A buffer containing those comes back without them and
+  is rewritten. That predates this change (the old gate only rejected
+  C0, `%` and `!`) and is left as it is here; a lossless buffer
+  literal for lua, like the one pwsh gained for issue #21, would be
+  the fix.
 - `runex/tests/cli_integration.rs` runs the template's exact command
   string through a real cmd.exe on Windows
   (`hook_clink_cmd_exe_roundtrip_keeps_double_quote_in_buffer`).

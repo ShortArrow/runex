@@ -1043,15 +1043,41 @@ mod tests {
         );
     }
 
-    /// Hex doubles the buffer and cmd.exe refuses command lines over
-    /// 8191 characters, so the template must fall back to a literal
-    /// space instead of handing cmd.exe a line it will reject.
+    /// Hex doubles the buffer and cmd.exe refuses a `cmd /c` string
+    /// longer than 8158 characters (measured; the documented 8191
+    /// counts the prefix cmd.exe itself adds), so the template must
+    /// give up below that instead of handing cmd.exe a line it will
+    /// reject. The constant is read back and compared as a number so
+    /// a tighter margin never fails this pin and a looser one always
+    /// does.
     #[test]
     fn clink_script_gives_up_before_cmd_exe_line_limit() {
         let s = export_script(Shell::Clink, "runex", None);
+        let limit: usize = s
+            .lines()
+            .find_map(|l| l.strip_prefix("local CMD_LINE_MAX = "))
+            .and_then(|v| v.trim().parse().ok())
+            .expect("clink script must define CMD_LINE_MAX");
         assert!(
-            s.contains("CMD_LINE_MAX = 8191"),
-            "clink script must name cmd.exe's 8191-character limit: {s}"
+            limit <= 8158,
+            "CMD_LINE_MAX must not exceed the measured cmd /c cap of 8158, got {limit}"
+        );
+        assert!(
+            s.contains("if #cmd > CMD_LINE_MAX then return nil end"),
+            "clink script must measure the assembled command against CMD_LINE_MAX: {s}"
+        );
+    }
+
+    /// An empty buffer would make the template emit `--line-hex` with
+    /// no value, which cmd.exe collapses into a clap error on every
+    /// Space pressed at an empty prompt. The template must not spawn
+    /// for an empty buffer at all.
+    #[test]
+    fn clink_script_does_not_spawn_for_an_empty_buffer() {
+        let s = export_script(Shell::Clink, "runex", None);
+        assert!(
+            s.contains("if line == \"\" then return nil end"),
+            "clink script must short-circuit the empty buffer before io.popen: {s}"
         );
     }
 
