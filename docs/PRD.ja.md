@@ -129,6 +129,7 @@ runex timings                            全ルールの所要時間を計測
 runex config where                       解決済みの設定ファイルパスを表示
 runex config type                        設定ファイルの内容を stdout に出力
 runex config show                        OS の関連付けアプリで設定ファイルを開く
+runex config reload                      設定ファイルからシェル連携キャッシュを再生成（手編集後に実行）
 runex version                            バージョンとビルドコミットを表示
 ```
 

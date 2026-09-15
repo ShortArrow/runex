@@ -2190,3 +2190,69 @@ fn hook_clink_cmd_exe_roundtrip_keeps_double_quote_in_buffer() {
         "cmd.exe must deliver the hex buffer and the redirection intact; cmd string was: {cmd_string}"
     );
 }
+
+// ─── config reload ─────────────────────────────────────────────────────────────
+
+/// After a hand edit of config.toml the installed integration caches
+/// are stale until something regenerates them. `config reload` does
+/// that for every shell the user has run `runex init` for (cache file
+/// present) and says so per shell; shells without a cache are
+/// reported, not created (issue #30).
+#[test]
+fn config_reload_regenerates_installed_caches() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_dir = home.path().join(".config").join("runex");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    let cfg = cfg_dir.join("config.toml");
+    std::fs::write(&cfg, "version = 1\n\n[[abbr]]\nkey = \"gcm\"\nexpand = \"git commit -m\"\n").unwrap();
+    let cache_dir = home.path().join(".cache").join("runex");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    let bash_cache = cache_dir.join("integration.bash");
+    std::fs::write(&bash_cache, "stale").unwrap();
+
+    let out = init_cmd_in_dir(home.path())
+        .args(["--config"])
+        .arg(&cfg)
+        .args(["config", "reload"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout: {stdout}\nstderr: {stderr}");
+
+    let refreshed = std::fs::read_to_string(&bash_cache).unwrap();
+    assert_ne!(refreshed, "stale", "the installed bash cache must be regenerated");
+    assert!(refreshed.contains("runex-integration-version:"), "regenerated cache carries the header: {refreshed}");
+    assert!(stdout.contains("bash"), "stdout must name the refreshed shell: {stdout}");
+    assert!(
+        !cache_dir.join("integration.zsh").exists(),
+        "reload must not create caches for shells that were never initialised"
+    );
+    assert!(stdout.contains("zsh"), "stdout must list shells that have no cache: {stdout}");
+}
+
+/// A config that does not load is the very thing a hand edit can
+/// produce. Reload must say so and leave every cache as it was rather
+/// than baking an empty table into the shells.
+#[test]
+fn config_reload_rejects_invalid_config_and_leaves_caches_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg_dir = home.path().join(".config").join("runex");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    let cfg = cfg_dir.join("config.toml");
+    std::fs::write(&cfg, "version = 1\n\n[[abbr]]\nkey = 1\n").unwrap();
+    let cache_dir = home.path().join(".cache").join("runex");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    let bash_cache = cache_dir.join("integration.bash");
+    std::fs::write(&bash_cache, "stale").unwrap();
+
+    let out = init_cmd_in_dir(home.path())
+        .args(["--config"])
+        .arg(&cfg)
+        .args(["config", "reload"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "an unloadable config must fail the reload");
+    assert!(!String::from_utf8_lossy(&out.stderr).is_empty(), "the failure must be explained on stderr");
+    assert_eq!(std::fs::read_to_string(&bash_cache).unwrap(), "stale", "caches must be untouched");
+}

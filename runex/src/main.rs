@@ -299,6 +299,9 @@ enum ConfigAction {
     Type,
     /// Print the resolved config file path
     Where,
+    /// Regenerate the installed shell integration caches from the
+    /// config file (after editing it by hand)
+    Reload,
 }
 
 
@@ -666,6 +669,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ConfigAction::Show => cmd::config::handle_show(&config_path)?,
                 ConfigAction::Type => cmd::config::handle_type(&config_path)?,
                 ConfigAction::Where => cmd::config::handle_where(&config_path, cli.json)?,
+                ConfigAction::Reload => {
+                    cmd::config::handle_reload(&config_path, &infra::env::SystemHomeDir)?
+                }
             }
         }
     };

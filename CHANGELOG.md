@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`runex config reload` (#30).** Regenerates the installed shell
+  integration caches (`<XDG_CACHE_HOME>/runex/integration.<ext>` for
+  bash / zsh / pwsh / nu) from the config file, for the case where
+  config.toml was edited by hand rather than through `runex add` /
+  `remove` (which already refresh them). Reports each shell as
+  refreshed, not installed, or failed; a config that does not load
+  exits 1 and leaves every cache untouched. clink keeps its static
+  lua file, refreshed by `runex init clink`.
+
 ### Fixed
 
 - **PTY integration tests for zsh, nu and pwsh were passing without
