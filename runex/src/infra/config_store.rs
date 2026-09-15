@@ -119,8 +119,20 @@ fn open_config_for_append_safely(path: &Path) -> std::io::Result<std::fs::File> 
 /// Atomically replace a config file: write to a sibling temp file then
 /// rename. On Unix the temp file is created with `O_NOFOLLOW` so a
 /// pre-existing symlink at the temp path cannot redirect the write.
+///
+/// `path` is resolved to its final target first, so a config that is
+/// a symlink into a dotfiles repository (the idiom
+/// [`read_config_source`] deliberately follows) is edited *through*
+/// the link: the repository copy changes and the link survives.
+/// Renaming over the link itself would swap it for a regular file and
+/// leave the repository copy untouched (issue #29). The security
+/// trade-off is the one already accepted for reads: this rewrite only
+/// ever succeeds on a file that parsed as a runex config, so a link
+/// pointed at some other file cannot be used to overwrite it.
 fn atomically_write_config(path: &Path, contents: &str) -> Result<(), ConfigError> {
     use std::io::Write;
+    let path = std::fs::canonicalize(path).map_err(ConfigError::Io)?;
+    let path = path.as_path();
     let parent = path.parent().ok_or_else(|| {
         ConfigError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -291,6 +303,58 @@ mod tests {
             result.is_ok(),
             "load_config must follow a symlink to a regular file: {result:?}"
         );
+    }
+
+    /// Create `link -> target` as a file symlink. Returns `None` when
+    /// the platform refuses (Windows without Developer Mode or admin
+    /// rights), so a test can skip rather than fail on such a runner.
+    fn try_symlink_file(target: &Path, link: &Path) -> Option<()> {
+        #[cfg(unix)]
+        let r = std::os::unix::fs::symlink(target, link);
+        #[cfg(windows)]
+        let r = std::os::windows::fs::symlink_file(target, link);
+        match r {
+            Ok(()) => Some(()),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping: cannot create symlinks here ({e})");
+                None
+            }
+            Err(e) => panic!("symlink creation failed unexpectedly: {e}"),
+        }
+    }
+
+    /// The dotfiles idiom keeps `~/.config/runex/config.toml` as a
+    /// symlink into a repository. `remove` must edit the file the link
+    /// points at and leave the link in place — replacing the link with
+    /// a regular file leaves the repository copy untouched, which is
+    /// what issue #29 reports ("remove has no effect on config.toml").
+    #[test]
+    fn remove_abbr_block_writes_through_symlink_and_keeps_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("dotfiles");
+        std::fs::create_dir_all(&repo).unwrap();
+        let target = repo.join("config.toml");
+        std::fs::write(
+            &target,
+            "version = 1\n\n[[abbr]]\nkey = \"aaa\"\nexpand = \"echo a\"\n\n[[abbr]]\nkey = \"ghqm\"\nexpand = \"ghq list\"\n",
+        )
+        .unwrap();
+        let link = dir.path().join("config.toml");
+        let Some(()) = try_symlink_file(&target, &link) else { return; };
+
+        let removed = remove_abbr_block(&link, "ghqm").expect("remove through symlink");
+
+        assert_eq!(removed, 1);
+        assert!(
+            std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(),
+            "the config path must still be a symlink after remove"
+        );
+        let repo_copy = std::fs::read_to_string(&target).unwrap();
+        assert!(
+            !repo_copy.contains("ghqm"),
+            "the symlink target must have lost the rule: {repo_copy}"
+        );
+        assert!(repo_copy.contains("key = \"aaa\""), "unrelated rules must survive");
     }
 
     /// A named pipe reports `metadata().len() == 0` and

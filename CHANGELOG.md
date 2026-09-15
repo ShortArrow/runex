@@ -57,6 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the buffer before `runex hook` receives it, so a buffer
   containing `"` still comes back without it there; that is a
   pre-existing 5.1 limitation upstream of this fix.
+- **`runex remove` now edits a symlinked config in place (#29).**
+  The atomic rewrite (temp file + rename) renamed over the config
+  path itself, so when `~/.config/runex/config.toml` was a symlink
+  into a dotfiles repository the link was replaced by a regular file
+  holding the edited copy while the repository file kept the rule —
+  from the user's side, `remove` had no effect on config.toml, and
+  the two copies then drifted. The write now resolves the path first
+  and renames next to the link's target, so the repository copy
+  changes and the link survives. Reads already followed the symlink
+  for the same dotfiles idiom.
 
 ## [0.1.20] - 2026-07-09
 
