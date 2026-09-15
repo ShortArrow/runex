@@ -370,9 +370,19 @@ pub(crate) fn refresh_existing_caches(
     // missing file means we still rewrite caches (with empty
     // abbr table) rather than silently ignoring the refresh.
     let (_path, config, _err) = resolve_config_opt(Some(config_path));
+    // The two warnings keep their pre-`config reload` wording exactly.
     for outcome in refresh_caches_with(config.as_ref(), env) {
-        if let CacheRefresh::Failed { shell, detail } = outcome {
-            eprintln!("warning: failed to refresh {shell:?} cache: {detail}");
+        match outcome {
+            CacheRefresh::Failed { shell, path: None, error } => {
+                eprintln!("warning: cache refresh skipped for {shell:?} (cannot resolve path: {error})");
+            }
+            CacheRefresh::Failed { shell, path: Some(path), error } => {
+                eprintln!(
+                    "warning: failed to refresh {shell:?} cache at {}: {error}",
+                    sanitize_for_display(&path.display().to_string())
+                );
+            }
+            CacheRefresh::Refreshed { .. } | CacheRefresh::NotInstalled { .. } => {}
         }
     }
 }
@@ -384,8 +394,10 @@ pub(crate) enum CacheRefresh {
     Refreshed { shell: Shell, path: PathBuf },
     /// No cache file: the user never ran `runex init <shell>`.
     NotInstalled { shell: Shell },
-    /// The cache could not be located or rewritten.
-    Failed { shell: Shell, detail: String },
+    /// The cache could not be located (`path: None`), inspected, or
+    /// rewritten. `error` is the underlying error's message; callers
+    /// decide whether to print `path` alongside it.
+    Failed { shell: Shell, path: Option<PathBuf>, error: String },
 }
 
 /// Rewrite every installed integration cache from `config` and report
@@ -411,23 +423,38 @@ pub(crate) fn refresh_caches_with(
                 Ok(Some(p)) => p,
                 Ok(None) => return None,
                 Err(e) => {
-                    return Some(CacheRefresh::Failed {
-                        shell,
-                        detail: format!("cannot resolve cache path: {e}"),
-                    })
+                    return Some(CacheRefresh::Failed { shell, path: None, error: e.to_string() })
                 }
             };
-            if !target.is_file() {
-                return Some(CacheRefresh::NotInstalled { shell });
+            // `Path::is_file` folds every stat error into "no": a cache
+            // directory we cannot read would be reported as never
+            // installed, with a `runex init` hint and a clean exit.
+            // Only NotFound means not installed.
+            match std::fs::metadata(&target) {
+                Ok(meta) if meta.is_file() => {}
+                Ok(_) => {
+                    return Some(CacheRefresh::Failed {
+                        shell,
+                        path: Some(target),
+                        error: "cache path is not a regular file".to_string(),
+                    })
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Some(CacheRefresh::NotInstalled { shell })
+                }
+                Err(e) => {
+                    let error = format!(
+                        "cannot inspect cache at {}: {e}",
+                        sanitize_for_display(&target.display().to_string())
+                    );
+                    return Some(CacheRefresh::Failed { shell, path: Some(target), error });
+                }
             }
             let header = cache_header(comment_prefix_for(shell), &bin);
             let body = crate::app::shell_export::export_script(shell, &bin, config);
             Some(match write_cache_file(&target, &format!("{header}{body}")) {
                 Ok(()) => CacheRefresh::Refreshed { shell, path: target },
-                Err(e) => CacheRefresh::Failed {
-                    shell,
-                    detail: format!("{}: {e}", sanitize_for_display(&target.display().to_string())),
-                },
+                Err(e) => CacheRefresh::Failed { shell, path: Some(target), error: e.to_string() },
             })
         })
         .collect()

@@ -2253,6 +2253,13 @@ fn config_reload_rejects_invalid_config_and_leaves_caches_alone() {
         .output()
         .unwrap();
     assert!(!out.status.success(), "an unloadable config must fail the reload");
-    assert!(!String::from_utf8_lossy(&out.stderr).is_empty(), "the failure must be explained on stderr");
+    // The message must be reload's own, not clap rejecting an unknown
+    // subcommand — otherwise this test passes on a binary without
+    // `config reload` at all.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("did not load, caches left untouched"),
+        "reload must explain the refusal itself: {stderr}"
+    );
     assert_eq!(std::fs::read_to_string(&bash_cache).unwrap(), "stale", "caches must be untouched");
 }

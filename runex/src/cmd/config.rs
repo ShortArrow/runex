@@ -131,9 +131,9 @@ pub(crate) fn handle_reload(config_path: &Path, env: &dyn HomeDirResolver) -> Cm
             CacheRefresh::NotInstalled { shell } => {
                 println!("{shell}: not installed (run `runex init {shell}` to create its cache)")
             }
-            CacheRefresh::Failed { shell, detail } => {
+            CacheRefresh::Failed { shell, error, .. } => {
                 failed = true;
-                eprintln!("{shell}: failed: {detail}");
+                eprintln!("{shell}: failed: {error}");
             }
         }
     }
@@ -207,6 +207,51 @@ mod tests {
         let outcome = handle_reload(&cfg, &env).expect("handle_reload must not Err");
 
         assert!(matches!(outcome, CmdOutcome::ExitCode(1)));
+        assert_eq!(std::fs::read_to_string(&bash_cache).unwrap(), "stale");
+    }
+
+    /// A cache directory that exists but cannot be read is a failure,
+    /// not "not installed": reporting it as the latter would tell the
+    /// user to run `runex init` and exit 0 while nothing was refreshed.
+    /// `Path::is_file` folds the permission error into `false`; the
+    /// refresh must look at the actual stat error. Unix only — Windows
+    /// has no cheap way to make `stat` itself fail on a directory.
+    #[cfg(unix)]
+    #[test]
+    fn reload_reports_an_unreadable_cache_dir_as_failed_and_exits_1() {
+        use crate::domain::shell::Shell;
+        use crate::infra::env::EnvHomeDir;
+        use crate::infra::integration_cache::cache_path;
+        use std::collections::HashMap;
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
+        let vars: HashMap<String, String> = HashMap::from([
+            ("HOME".to_string(), home.to_string_lossy().into_owned()),
+            ("XDG_CACHE_HOME".to_string(), home.join(".cache").to_string_lossy().into_owned()),
+        ]);
+        let env = EnvHomeDir::new(move |n| vars.get(n).cloned());
+        let cfg = home.join("config.toml");
+        std::fs::write(&cfg, "version = 1\n").unwrap();
+        let bash_cache = cache_path(Shell::Bash, &env).unwrap().unwrap();
+        let cache_dir = bash_cache.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(&bash_cache, "stale").unwrap();
+        std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::metadata(&bash_cache).is_ok() {
+            std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("skipping: permissions are not enforced here (running as root?)");
+            return;
+        }
+
+        let outcome = handle_reload(&cfg, &env).expect("handle_reload must not Err");
+
+        std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            matches!(outcome, CmdOutcome::ExitCode(1)),
+            "an unreadable cache must fail the reload, not read as not installed"
+        );
         assert_eq!(std::fs::read_to_string(&bash_cache).unwrap(), "stale");
     }
 
