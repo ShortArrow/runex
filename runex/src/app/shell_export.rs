@@ -1025,20 +1025,59 @@ mod tests {
         );
     }
 
-    /// Security: cmd.exe expands `%VAR%` even inside double-quoted argv,
-    /// and `!VAR!` if any caller has SETLOCAL ENABLEDELAYEDEXPANSION
-    /// active. The clink template must reject buffer content containing
-    /// either, to prevent shell-buffer-driven injection through io.popen.
-    /// See `runex-core/src/templates/clink.lua::runex_is_safe_line` for
-    /// the rationale.
+    /// cmd.exe's command line cannot carry arbitrary buffer text: `"`
+    /// toggles its quote state with no escape available (issues #22,
+    /// #23), and `%VAR%` / `!VAR!` expand even inside quotes. The clink
+    /// template therefore sends the buffer hex-encoded and never embeds
+    /// the raw line in the io.popen string.
     #[test]
-    fn clink_safe_line_check_rejects_cmd_metachars() {
+    fn clink_script_sends_buffer_hex_encoded() {
         let s = export_script(Shell::Clink, "runex", None);
-        // The lua regex literal must contain `%%` (escaped `%` in lua
-        // pattern syntax) and `!` so both are rejected at the gate.
         assert!(
-            s.contains("%%!") || s.contains("!%%"),
-            "clink safe-line regex must reject `%` and `!`: {s}"
+            s.contains("--line-hex ' .. runex_hex(line)"),
+            "clink script must pass the buffer through --line-hex: {s}"
+        );
+        assert!(
+            !s.contains("--line ' .. runex_shell_quote(line)"),
+            "clink script must not embed the raw buffer in the cmd.exe string: {s}"
+        );
+    }
+
+    /// Hex doubles the buffer and cmd.exe refuses a `cmd /c` string
+    /// longer than 8158 characters (measured; the documented 8191
+    /// counts the prefix cmd.exe itself adds), so the template must
+    /// give up below that instead of handing cmd.exe a line it will
+    /// reject. The constant is read back and compared as a number so
+    /// a tighter margin never fails this pin and a looser one always
+    /// does.
+    #[test]
+    fn clink_script_gives_up_before_cmd_exe_line_limit() {
+        let s = export_script(Shell::Clink, "runex", None);
+        let limit: usize = s
+            .lines()
+            .find_map(|l| l.strip_prefix("local CMD_LINE_MAX = "))
+            .and_then(|v| v.trim().parse().ok())
+            .expect("clink script must define CMD_LINE_MAX");
+        assert!(
+            limit <= 8158,
+            "CMD_LINE_MAX must not exceed the measured cmd /c cap of 8158, got {limit}"
+        );
+        assert!(
+            s.contains("if #cmd > CMD_LINE_MAX then return nil end"),
+            "clink script must measure the assembled command against CMD_LINE_MAX: {s}"
+        );
+    }
+
+    /// An empty buffer would make the template emit `--line-hex` with
+    /// no value, which cmd.exe collapses into a clap error on every
+    /// Space pressed at an empty prompt. The template must not spawn
+    /// for an empty buffer at all.
+    #[test]
+    fn clink_script_does_not_spawn_for_an_empty_buffer() {
+        let s = export_script(Shell::Clink, "runex", None);
+        assert!(
+            s.contains("if line == \"\" then return nil end"),
+            "clink script must short-circuit the empty buffer before io.popen: {s}"
         );
     }
 

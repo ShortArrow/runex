@@ -2102,3 +2102,91 @@ fn config_show_missing_file_fails_with_init_hint() {
         "stderr must hint at `runex init`; got: {stderr}"
     );
 }
+
+// ─── hook --line-hex (clink transport) ────────────────────────────────────────
+
+fn hex_of(s: &str) -> String {
+    s.bytes().map(|b| format!("{b:02X}")).collect()
+}
+
+/// clink reaches runex through cmd.exe, whose command line cannot carry a
+/// `"` inside an argument (issues #22, #23). The buffer therefore travels
+/// hex-encoded and runex decodes it before anything else happens.
+#[test]
+fn hook_clink_accepts_hex_encoded_line() {
+    let cfg = write_config("version = 1\n");
+    let line = r#"pwsh -nop -c "mv"#;
+    let (stdout, stderr, ok) = run(
+        &["hook", "--shell", "clink", "--line-hex", &hex_of(line), "--cursor", "16"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(stdout.trim(), r#"return { line = "pwsh -nop -c \"mv ", cursor = 17 }"#);
+}
+
+#[test]
+fn hook_rejects_malformed_line_hex() {
+    let cfg = write_config("version = 1\n");
+    let (_, stderr, ok) = run(
+        &["hook", "--shell", "clink", "--line-hex", "6d7", "--cursor", "1"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(!ok, "odd-length hex must be rejected");
+    // The message must come from the decoder, not from clap not
+    // knowing the flag — the latter would make this test pass on a
+    // binary without --line-hex at all.
+    assert!(
+        stderr.contains("--line-hex has odd length"),
+        "the rejection must name the decoder's reason: {stderr}"
+    );
+}
+
+#[test]
+fn hook_rejects_line_and_line_hex_together() {
+    let cfg = write_config("version = 1\n");
+    let (_, stderr, ok) = run(
+        &["hook", "--shell", "clink", "--line", "mv", "--line-hex", "6d76", "--cursor", "2"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(!ok, "--line and --line-hex are alternatives, not a pair");
+    assert!(
+        stderr.contains("cannot be used with"),
+        "clap must report the two flags as mutually exclusive, proving both exist: {stderr}"
+    );
+}
+
+/// Runs the exact command string `templates/clink.lua` hands to
+/// `io.popen` through a real cmd.exe, the way clink does. The string
+/// layout below mirrors `runex_call_hook` character for character —
+/// the config is passed through `RUNEX_CONFIG` rather than `--config`
+/// so nothing the lua does not emit appears in the string. The buffer
+/// is the one from issue #23: the `"` in it used to close cmd.exe's
+/// quote early and turn `2>&1` into a runex argument.
+#[cfg(windows)]
+#[test]
+fn hook_clink_cmd_exe_roundtrip_keeps_double_quote_in_buffer() {
+    use std::os::windows::process::CommandExt;
+
+    let cfg = write_config("version = 1\n");
+    let line = r#"pwsh -nop -c "mv"#;
+    let cmd_string = format!(
+        "\"\"{bin}\" hook --shell clink --line-hex {hex} --cursor 16 2>&1\"",
+        bin = bin(),
+        hex = hex_of(line),
+    );
+    let out = Command::new("cmd")
+        .env("RUNEX_CONFIG", cfg.path())
+        .raw_arg("/c")
+        .raw_arg(&cmd_string)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout.trim(),
+        r#"return { line = "pwsh -nop -c \"mv ", cursor = 17 }"#,
+        "cmd.exe must deliver the hex buffer and the redirection intact; cmd string was: {cmd_string}"
+    );
+}

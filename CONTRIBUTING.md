@@ -171,10 +171,10 @@ whether the work *requires* state only the live shell process holds:
   buffer (`READLINE_LINE`, `LBUFFER/RBUFFER`, `commandline`, clink's
   `rl_buffer`, PSReadLine `Replace`/`SetCursorPosition`); anything
   that introspects the shell's internal state at runtime (PSReadLine
-  `_queuedKeys` reflection for paste detection); pre-RPC sanitisers
-  that exist specifically to *avoid* spawning a Rust subprocess
-  (clink's `runex_is_safe_line` rejects control characters before the
-  cmd.exe roundtrip).
+  `_queuedKeys` reflection for paste detection); transport encoding
+  that the shell's only IPC channel forces on us (clink hex-encodes the
+  buffer because the cmd.exe command line behind `io.popen` cannot carry
+  `"`, `%` or `!`, see ADR 0003).
 - **Belongs in Rust** — everything else. Token extraction,
   command-position detection, cursor placeholder substitution, shell
   escaping, output formatting, command-existence checks. New rules
@@ -185,8 +185,8 @@ whether the work *requires* state only the live shell process holds:
 The remaining shell code is small, stable, and self-justifying. Avoid
 rewriting it for the sake of consistency — read the comment at the top
 of each template (e.g. `templates/pwsh.ps1` explains why paste
-detection lives in pwsh; `templates/clink.lua` explains why the line
-safety regex stays in lua) and trust the existing rationale unless
+detection lives in pwsh; `templates/clink.lua` explains why the buffer
+is hex-encoded for cmd.exe) and trust the existing rationale unless
 there's a concrete observation suggesting otherwise.
 
 ### Security

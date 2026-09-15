@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   literal substring. All four shells' keystroke tests now drive the
   real integration end to end (verified against a negative control:
   an empty config produces no expansion). Test-only change.
+- **clink: a `"` in the buffer no longer breaks the hook (#22, #23).**
+  The lua template embedded the raw buffer in the cmd.exe command line
+  behind `io.popen`, escaping `"` as `\"`. cmd.exe has no quote escape,
+  so the embedded quote closed the argument early and `2>&1` reached
+  runex as an argument: every Space after a `"` (typed or pasted)
+  printed a clap usage error into the prompt, and once the quote
+  parity was off cmd.exe treated the rest of the buffer as a
+  pipeline and ran it. The buffer now travels as `--line-hex <hex of
+  the UTF-8 bytes>`, an alphabet cmd.exe passes through untouched.
+  The old `%` / `!` rejection gate is gone for the same reason, so
+  buffers containing those characters now expand too. The template
+  gives up (literal space) above 8000 assembled characters — cmd.exe
+  runs at most 8158 after `cmd /c`, measured — and does not spawn for
+  an empty buffer. Pre-0.1.21 `runex init clink` output must be
+  regenerated (`runex doctor` reports it). Decision recorded in ADR
+  0003.
 
 ## [0.1.20] - 2026-07-09
 
