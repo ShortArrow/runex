@@ -12,10 +12,10 @@
 //! Unix only — expectrl 0.7's Windows ConPTY backend is unstable
 //! (per the dev-dep declaration in `runex/Cargo.toml`).
 
+use std::io::Write;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use expectrl::Regex;
 use expectrl::session::Session;
 
 /// The sentinel prompt every PTY session installs. Chosen to be
@@ -24,11 +24,30 @@ use expectrl::session::Session;
 /// banners.
 pub const SENTINEL_PROMPT: &str = "__RUNEX_PROMPT__> ";
 
-/// Default per-`expect` timeout. CI runners with slow IO need
-/// generous headroom; production keystroke latency is microseconds,
-/// so 5 seconds is "definitely broken if we hit it" rather than
-/// "might be slow".
+/// Default wait deadline. CI runners with slow IO need generous
+/// headroom; production keystroke latency is microseconds, so 5
+/// seconds is "definitely broken if we hit it" rather than "might be
+/// slow".
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A Device Status Report (cursor position) query. reedline (nu) and
+/// PSReadLine (pwsh) emit this on startup and after each render and
+/// then **block until the terminal answers**. A real terminal replies
+/// automatically; our PTY does not, so the harness must, or the
+/// shell's line editor never reaches the point where it reads
+/// keystrokes and every wait below times out. bash and zsh's zle do
+/// not query, so answering is a harmless no-op for them.
+const DSR_QUERY: &[u8] = b"\x1b[6n";
+
+/// A plausible cursor-position response (row 1, col 1). The value does
+/// not matter — the line editor only needs *an* answer to unblock.
+const DSR_ANSWER: &[u8] = b"\x1b[1;1R";
+
+/// Carriage return. PSReadLine and reedline treat `\r` (Enter), not
+/// `\n`, as "accept the line"; a bare `\n` is read as a literal
+/// newline inside the buffer and the command never runs. expectrl's
+/// `send_line` sends `\n` on Unix, so the harness sends CR itself.
+const ENTER: &[u8] = b"\r";
 
 /// Which shell to launch under the PTY. Each variant carries the
 /// per-shell launch flags / prompt-setup syntax in `bootstrap`
@@ -49,6 +68,17 @@ pub enum PtyShell {
 /// `Session` does on its own, so explicit `quit()` is optional.
 pub struct PtySession {
     inner: Session,
+    /// Everything read from the child so far. `read_until` appends to
+    /// it and scans it, so a match survives output that arrived before
+    /// the corresponding `expect` call.
+    seen: String,
+    /// Monotonic counter for the per-line sync token in
+    /// [`Self::send_line_synced`].
+    sync_counter: u64,
+    /// The last `DSR_QUERY.len() - 1` bytes read, carried across
+    /// `try_read` calls so a query split over two reads is still
+    /// recognised and answered.
+    dsr_carry: Vec<u8>,
 }
 
 impl PtySession {
@@ -58,51 +88,191 @@ impl PtySession {
     /// source prompt has settled.
     ///
     /// Returns `None` if the shell can't be launched or any of the
-    /// setup steps don't complete within [`DEFAULT_TIMEOUT`]. This
-    /// is intentionally permissive — tests use `let Some(s) = … else
-    /// { return; };` as a runtime skip when the shell isn't
-    /// installed.
+    /// setup steps don't complete within [`DEFAULT_TIMEOUT`]. Tests
+    /// check that the shell is installed *before* calling this, so they
+    /// treat `None` as a failure (`.expect(..)`), never as a skip: a
+    /// harness that quietly stops bootstrapping must turn the suite
+    /// red, not green.
     pub fn spawn(shell: PtyShell, runex_bin: &str, config: &Path) -> Option<Self> {
         let launch = launch_command(shell, runex_bin);
         let mut session = expectrl::spawn(&launch).ok()?;
-        session.set_expect_timeout(Some(DEFAULT_TIMEOUT));
-        bootstrap(&mut session, shell, runex_bin, config)?;
-        Some(Self { inner: session })
+        // A wide, tall window so a wrapped line doesn't derail the
+        // editor's cursor tracking during a keystroke test. The PTY
+        // otherwise defaults to a small size. Best-effort.
+        let _ = session.get_process_mut().set_window_size(240, 60);
+        let mut this = Self {
+            inner: session,
+            seen: String::new(),
+            sync_counter: 0,
+            dsr_carry: Vec::new(),
+        };
+        // Let the shell reach its first interactive prompt before
+        // sending anything: reedline / PSReadLine emit a DSR query on
+        // startup and block until it is answered, and the first
+        // bootstrap line would otherwise race the editor's init.
+        this.settle_startup(shell)?;
+        bootstrap(&mut this, shell, runex_bin, config)?;
+        // Drop the bootstrap chatter so a test's first `expect` matches
+        // only what its own keystrokes produce.
+        this.seen.clear();
+        Some(this)
     }
 
-    /// Send `s` followed by an Enter keystroke. Mirrors expectrl's
-    /// `send_line`; surfaced here so callers don't have to reach
-    /// into `inner`.
+    /// Send `s` followed by Enter (CR), the way a user pressing Return
+    /// drives the line editor. Unlike expectrl's `send_line` (which
+    /// sends `\n`), this sends `\r` so PSReadLine and reedline accept
+    /// the line instead of treating it as a multi-line continuation.
     pub fn send_line(&mut self, s: &str) -> Option<()> {
-        self.inner.send_line(s).ok()
+        self.inner.write_all(s.as_bytes()).ok()?;
+        self.inner.write_all(ENTER).ok()?;
+        self.inner.flush().ok()
     }
 
-    /// Send `s` *without* a trailing newline. Used when a test wants
-    /// to type a token and then a *separate* keystroke (e.g. Space)
-    /// to trigger the abbr expansion.
+    /// Send `s` and Enter, then block until the shell has finished
+    /// executing it and returned to a prompt. Proven by printing a
+    /// token that appears **only in the command's output, never in its
+    /// echo**: the line concatenates two halves (`echo <a><b>`) that
+    /// the shell joins at runtime, so the terminal echo shows the two
+    /// literals separately while the executed output shows the joined
+    /// token. Waiting for the joined form therefore fires exactly once,
+    /// when the line has run — regardless of whether the shell echoes
+    /// typed input (pwsh, nu do; bash, zsh do not). Serialising each
+    /// bootstrap line this way stops a line editor from accumulating
+    /// several unexecuted lines into one multi-line buffer.
+    fn send_line_synced(&mut self, s: &str, sep: &str, echo: &str) -> Option<()> {
+        // A fresh token per call so a stale one from an earlier line
+        // can't satisfy the wait.
+        self.sync_counter += 1;
+        let joined = format!("RXSYNC{}DONE", self.sync_counter);
+        let (a, b) = joined.split_at(joined.len() / 2);
+        self.seen.clear();
+        // `'<a>' + '<b>'` (pwsh) / `'<a>' + '<b>'`… differ per shell,
+        // so the caller passes the concatenation form via `echo`. But
+        // every supported shell concatenates two adjacent quoted
+        // string literals inside its echo/print with `+`, except the
+        // POSIX shells which need no operator. Keep it uniform by
+        // interpolating the two halves into the shell's own string
+        // syntax: for all four, `<echo>'<a>' + '<b>'` is wrong for
+        // bash. So build per style below.
+        let printer = if echo.starts_with("echo ") {
+            // POSIX shells: adjacent quoted literals concatenate.
+            format!("{echo}'{a}''{b}'")
+        } else {
+            // pwsh (Write-Host) and nu (print): `+` joins two strings.
+            format!("{echo}('{a}' + '{b}')")
+        };
+        self.send_line(&format!("{s}{sep}{printer}"))?;
+        self.read_until(&joined, DEFAULT_TIMEOUT)
+    }
+
+    /// Send `s` *without* a trailing Enter. Used when a test wants to
+    /// type a token and then a *separate* keystroke (e.g. Space) to
+    /// trigger the abbr expansion.
     pub fn send(&mut self, s: &str) -> Option<()> {
-        self.inner.send(s).ok()
+        self.inner.write_all(s.as_bytes()).ok()?;
+        self.inner.flush().ok()
     }
 
-    /// Block until `pattern` (a regex) matches output from the
-    /// child. Returns `Some(())` on match, `None` on timeout — same
-    /// permissive style as [`Self::spawn`].
-    pub fn expect_regex(&mut self, pattern: &str) -> Option<()> {
-        self.inner.expect(Regex(pattern)).ok().map(|_| ())
+    /// Send a bare Enter (CR) — used after [`Self::send`] typed a
+    /// trigger key, to submit the resulting line.
+    pub fn enter(&mut self) -> Option<()> {
+        self.inner.write_all(ENTER).ok()?;
+        self.inner.flush().ok()
     }
 
-    /// Block until the [`SENTINEL_PROMPT`] appears. The sentinel
-    /// contains no regex metacharacters (`__RUNEX_PROMPT__> ` is
-    /// underscores + caps + `> ` — none are special), so we hand it
-    /// to expectrl as-is.
+    /// Block until `needle` appears in the child's output, answering
+    /// any DSR cursor-position query in the meantime so the shell's
+    /// line editor never blocks on us. Returns `Some(())` on match,
+    /// `None` on the [`DEFAULT_TIMEOUT`] deadline — the permissive
+    /// style [`Self::spawn`] relies on for its runtime skip.
+    ///
+    /// `needle` is matched as a literal substring, not a regex: the
+    /// sentinel and the expansions under test contain no metacharacters
+    /// and a literal match can't be fooled by an unescaped `.`.
+    pub fn expect_regex(&mut self, needle: &str) -> Option<()> {
+        self.read_until(needle, DEFAULT_TIMEOUT)
+    }
+
+    /// Block until the [`SENTINEL_PROMPT`] appears.
     pub fn expect_prompt(&mut self) -> Option<()> {
         self.expect_regex(SENTINEL_PROMPT)
     }
 
-    /// Polite shutdown. Sends an EOF; if the shell ignores it, drop
-    /// will reap the child anyway.
+    /// Read from the child until `needle` is seen or `deadline`
+    /// elapses, answering every [`DSR_QUERY`] as it arrives. All
+    /// output is accumulated in `self.seen` so a later `expect` can
+    /// match text that arrived before it was called (the child is
+    /// faster than the test).
+    fn read_until(&mut self, needle: &str, deadline: Duration) -> Option<()> {
+        let start = Instant::now();
+        let mut buf = [0u8; 4096];
+        // Only the bytes that arrived since the last scan can complete
+        // a match, so scan the tail rather than all of `seen`: with
+        // small reads a full rescan per read is quadratic and can eat
+        // the deadline before a chatty shell has even finished its
+        // banner.
+        let mut scanned: usize = 0;
+        loop {
+            // A match can start no earlier than needle.len()-1 bytes
+            // before the previously scanned end.
+            let from = scanned
+                .saturating_sub(needle.len().saturating_sub(1))
+                .min(self.seen.len());
+            let from = (0..=from).rev().find(|&i| self.seen.is_char_boundary(i)).unwrap_or(0);
+            if self.seen[from..].contains(needle) {
+                return Some(());
+            }
+            scanned = self.seen.len();
+            if start.elapsed() > deadline {
+                return None;
+            }
+            match self.inner.try_read(&mut buf) {
+                Ok(0) => std::thread::sleep(Duration::from_millis(10)),
+                Ok(n) => {
+                    let chunk = &buf[..n];
+                    if dsr_query_completes(&mut self.dsr_carry, chunk) {
+                        let _ = self.inner.write_all(DSR_ANSWER);
+                        let _ = self.inner.flush();
+                    }
+                    self.seen.push_str(&String::from_utf8_lossy(chunk));
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    /// Let the shell's startup output settle before the bootstrap
+    /// lines are sent, answering the DSR cursor-position query that
+    /// reedline / PSReadLine emit on startup and block on. We can't
+    /// wait for a known prompt (each shell's default prompt differs and
+    /// isn't ours yet), so we drain for a short fixed window, replying
+    /// to any DSR query, which is enough for the line editor to reach
+    /// its first interactive prompt. `read_until` on a needle that
+    /// never arrives is exactly this drain-with-DSR loop, bounded by
+    /// the deadline.
+    fn settle_startup(&mut self, _shell: PtyShell) -> Option<()> {
+        // Deliberately wait on a sentinel that never comes so the loop
+        // spends its whole (short) budget draining + answering DSR.
+        let _ = self.read_until("\u{0}__never__\u{0}", Duration::from_millis(600));
+        self.seen.clear();
+        Some(())
+    }
+
+    #[allow(dead_code)]
+    /// Whether `needle` has appeared in the child's output so far.
+    /// The negative-control tests use it to assert that something did
+    /// *not* happen, which `expect_regex` (a positive wait) cannot say.
+    pub fn saw(&self, needle: &str) -> bool {
+        self.seen.contains(needle)
+    }
+
+    /// Polite shutdown. Sends `exit`; if the shell ignores it, drop
+    /// reaps the child anyway.
     pub fn quit(mut self) {
-        let _ = self.inner.send_line("exit");
+        let _ = self.send_line("exit");
     }
 }
 
@@ -129,54 +299,56 @@ fn launch_command(shell: PtyShell, _runex_bin: &str) -> String {
 }
 
 fn bootstrap(
-    session: &mut Session,
+    session: &mut PtySession,
     shell: PtyShell,
     runex_bin: &str,
     config: &Path,
 ) -> Option<()> {
     let cfg = config.display();
+    // Per-shell statement separator and echo command, used by
+    // `send_line_synced` to append a "this line finished" token to
+    // each bootstrap line. Serialising the lines this way is what
+    // stops PSReadLine / reedline from accumulating several unexecuted
+    // lines into a single multi-line buffer.
+    let (sep, echo) = match shell {
+        PtyShell::Bash | PtyShell::Zsh => ("; ", "echo "),
+        PtyShell::Pwsh => ("; ", "Write-Host "),
+        PtyShell::Nu => ("; ", "print "),
+    };
     match shell {
         PtyShell::Bash => {
             // Disable bracketed paste so individual key sends aren't
             // wrapped in ESC[200~ … ESC[201~ by terminals that try
             // to be clever.
-            session
-                .send_line("bind 'set enable-bracketed-paste off' 2>/dev/null")
-                .ok()?;
-            session.send_line(&format!("PS1='{SENTINEL_PROMPT}'")).ok()?;
-            session.send_line(&format!("export RUNEX_CONFIG={cfg}")).ok()?;
-            session
-                .send_line(&format!(
-                    r#"eval "$('{runex_bin}' export bash --bin '{runex_bin}')""#
-                ))
-                .ok()?;
+            session.send_line_synced("bind 'set enable-bracketed-paste off' 2>/dev/null", sep, echo)?;
+            session.send_line_synced(&format!("PS1='{SENTINEL_PROMPT}'"), sep, echo)?;
+            session.send_line_synced(&format!("export RUNEX_CONFIG={cfg}"), sep, echo)?;
+            session.send_line_synced(
+                &format!(r#"eval "$('{runex_bin}' export bash --bin '{runex_bin}')""#),
+                sep,
+                echo,
+            )?;
         }
         PtyShell::Zsh => {
-            session.send_line(&format!("PROMPT='{SENTINEL_PROMPT}'")).ok()?;
-            session.send_line(&format!("export RUNEX_CONFIG={cfg}")).ok()?;
-            session
-                .send_line(&format!(
-                    r#"eval "$('{runex_bin}' export zsh --bin '{runex_bin}')""#
-                ))
-                .ok()?;
+            session.send_line_synced(&format!("PROMPT='{SENTINEL_PROMPT}'"), sep, echo)?;
+            session.send_line_synced(&format!("export RUNEX_CONFIG={cfg}"), sep, echo)?;
+            session.send_line_synced(
+                &format!(r#"eval "$('{runex_bin}' export zsh --bin '{runex_bin}')""#),
+                sep,
+                echo,
+            )?;
         }
         PtyShell::Pwsh => {
             // pwsh `prompt` is a function returning the prompt
             // string. Quoting the sentinel as a single-quoted string
             // keeps PowerShell from interpolating anything inside.
-            session
-                .send_line(&format!(
-                    "function prompt {{ '{SENTINEL_PROMPT}' }}"
-                ))
-                .ok()?;
-            session
-                .send_line(&format!("$env:RUNEX_CONFIG = '{cfg}'"))
-                .ok()?;
-            session
-                .send_line(&format!(
-                    "Invoke-Expression (& '{runex_bin}' export pwsh --bin '{runex_bin}' | Out-String)"
-                ))
-                .ok()?;
+            session.send_line_synced(&format!("function prompt {{ '{SENTINEL_PROMPT}' }}"), sep, echo)?;
+            session.send_line_synced(&format!("$env:RUNEX_CONFIG = '{cfg}'"), sep, echo)?;
+            session.send_line_synced(
+                &format!("Invoke-Expression (& '{runex_bin}' export pwsh --bin '{runex_bin}' | Out-String)"),
+                sep,
+                echo,
+            )?;
         }
         PtyShell::Nu => {
             // nu's `source` resolves paths at parse time, so we cannot
@@ -204,24 +376,62 @@ fn bootstrap(
             // PROMPT_COMMAND is evaluated each render, so a static
             // string is fine. PROMPT_INDICATOR* vars must be cleared
             // so reedline doesn't append `> ` after our sentinel.
-            session
-                .send_line(&format!(
-                    "$env.PROMPT_COMMAND = '{SENTINEL_PROMPT}'; $env.PROMPT_COMMAND_RIGHT = ''; $env.PROMPT_INDICATOR = ''; $env.PROMPT_INDICATOR_VI_INSERT = ''; $env.PROMPT_INDICATOR_VI_NORMAL = ''; $env.PROMPT_MULTILINE_INDICATOR = ''"
-                ))
-                .ok()?;
-            session
-                .send_line(&format!("$env.RUNEX_CONFIG = '{cfg}'"))
-                .ok()?;
-            session
-                .send_line(&format!("source '{}'", nu_path.display()))
-                .ok()?;
+            session.send_line_synced(
+                "$env.PROMPT_COMMAND = '__RUNEX_PROMPT__> '; $env.PROMPT_COMMAND_RIGHT = ''; $env.PROMPT_INDICATOR = ''; $env.PROMPT_INDICATOR_VI_INSERT = ''; $env.PROMPT_INDICATOR_VI_NORMAL = ''; $env.PROMPT_MULTILINE_INDICATOR = ''",
+                sep,
+                echo,
+            )?;
+            session.send_line_synced(&format!("$env.RUNEX_CONFIG = '{cfg}'"), sep, echo)?;
+            session.send_line_synced(&format!("source '{}'", nu_path.display()), sep, echo)?;
         }
     }
-    // Wait for two sentinels: the post-PROMPT one, then the post-
-    // integration-source one. Matching them as a pair guarantees the
-    // integration is in place before any keystroke test fires.
-    // Sentinel has no regex metacharacters so it's literal-safe.
-    let pat = format!(r"{SENTINEL_PROMPT}.*{SENTINEL_PROMPT}");
-    session.expect(Regex(&pat)).ok()?;
     Some(())
+}
+
+/// Whether `chunk`, read after the bytes in `carry`, completes a
+/// [`DSR_QUERY`]. A query can straddle two `try_read` results, so the
+/// scan runs over `carry ++ chunk` and `carry` is left holding the
+/// last `DSR_QUERY.len() - 1` bytes for the next call. Pure so it can
+/// be tested with hand-split sequences.
+fn dsr_query_completes(carry: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    let mut window = std::mem::take(carry);
+    window.extend_from_slice(chunk);
+    let found = window.windows(DSR_QUERY.len()).any(|w| w == DSR_QUERY);
+    let keep = window.len().saturating_sub(DSR_QUERY.len() - 1);
+    *carry = window[keep..].to_vec();
+    found
+}
+
+#[cfg(test)]
+mod dsr_tests {
+    use super::*;
+
+    #[test]
+    fn query_inside_one_chunk_is_found() {
+        let mut carry = Vec::new();
+        assert!(dsr_query_completes(&mut carry, b"prompt> \x1b[6n more"));
+    }
+
+    #[test]
+    fn query_split_across_two_chunks_is_found_on_the_second() {
+        let mut carry = Vec::new();
+        assert!(!dsr_query_completes(&mut carry, b"text\x1b["));
+        assert!(dsr_query_completes(&mut carry, b"6n"));
+    }
+
+    #[test]
+    fn query_split_one_byte_per_chunk_is_found_on_the_last() {
+        let mut carry = Vec::new();
+        for b in [b"\x1b" as &[u8], b"[", b"6"] {
+            assert!(!dsr_query_completes(&mut carry, b));
+        }
+        assert!(dsr_query_completes(&mut carry, b"n"));
+    }
+
+    #[test]
+    fn unrelated_bytes_never_match_and_carry_stays_bounded() {
+        let mut carry = Vec::new();
+        assert!(!dsr_query_completes(&mut carry, b"\x1b[0m\x1b[K some output"));
+        assert!(carry.len() <= DSR_QUERY.len() - 1);
+    }
 }

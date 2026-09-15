@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **PTY integration tests for zsh, nu and pwsh were passing without
+  running.** The shared `expectrl` harness sent `\n` to submit a line
+  and never answered the cursor-position (DSR) query that reedline and
+  PSReadLine emit and block on. So `PtySession::spawn` timed out for
+  every shell except bash, each test hit its `let Some(..) else`
+  runtime-skip, and the suite reported green while exercising nothing
+  (each file finished in exactly the 5 s timeout). The harness now
+  answers DSR, submits with `\r`, serialises each bootstrap line
+  against a runtime-only sync token, and matches expansion output as a
+  literal substring. All four shells' keystroke tests now drive the
+  real integration end to end (verified against a negative control:
+  an empty config produces no expansion). Test-only change.
+
 ## [0.1.20] - 2026-07-09
 
 ### Added

@@ -32,11 +32,8 @@ fn space_triggers_expand_for_known_token() {
         return;
     }
     let config = write_simple_config("gcm", "echo EXPANDED");
-    let Some(mut session) = PtySession::spawn(PtyShell::Bash, runex_bin_str(), config.path())
-    else {
-        eprintln!("skipping: could not spawn bash session");
-        return;
-    };
+    let mut session = PtySession::spawn(PtyShell::Bash, runex_bin_str(), config.path())
+        .expect("the shell is installed, so a PTY session that fails to bootstrap is a real failure, not a skip");
 
     // Type `gcm` then Space. The Space binding should fire
     // __runex_expand, which replaces `gcm` with `echo EXPANDED ` and
@@ -68,11 +65,8 @@ fn space_does_not_expand_after_echo_argument_position() {
         return;
     }
     let config = write_simple_config("gcm", "echo EXPANDED");
-    let Some(mut session) = PtySession::spawn(PtyShell::Bash, runex_bin_str(), config.path())
-    else {
-        eprintln!("skipping: could not spawn bash session");
-        return;
-    };
+    let mut session = PtySession::spawn(PtyShell::Bash, runex_bin_str(), config.path())
+        .expect("the shell is installed, so a PTY session that fails to bootstrap is a real failure, not a skip");
 
     // Type `echo gcm` then Space. `echo ` is not a command position,
     // so the hook must leave the buffer as `echo gcm ` (literal space)

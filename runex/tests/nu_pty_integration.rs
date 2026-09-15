@@ -26,10 +26,8 @@ fn space_triggers_expand_for_known_token() {
         return;
     }
     let config = write_simple_config("gcm", "echo EXPANDED");
-    let Some(mut session) = PtySession::spawn(PtyShell::Nu, runex_bin_str(), config.path()) else {
-        eprintln!("skipping: could not spawn nu session");
-        return;
-    };
+    let mut session = PtySession::spawn(PtyShell::Nu, runex_bin_str(), config.path())
+        .expect("the shell is installed, so a PTY session that fails to bootstrap is a real failure, not a skip");
 
     // Type `gcm` then Space. The keymap binding should fire
     // executehostcommand which calls runex hook, rewrites commandline
