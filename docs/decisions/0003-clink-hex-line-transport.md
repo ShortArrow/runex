@@ -107,7 +107,8 @@ stale template.
   is rewritten. That predates this change (the old gate only rejected
   C0, `%` and `!`) and is left as it is here; a lossless buffer
   literal for lua, like the one pwsh gained for issue #21, would be
-  the fix.
+  the fix. *Amended 2026-09-17: that fix shipped as issue #36;
+  `lua_quote_string` now escapes those characters as `DDD` bytes.*
 - `runex/tests/cli_integration.rs` runs the template's exact command
   string through a real cmd.exe on Windows
   (`hook_clink_cmd_exe_roundtrip_keeps_double_quote_in_buffer`).

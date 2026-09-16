@@ -70,8 +70,9 @@ end
 function runex_expand(rl_buffer, line_state)
     local line = rl_buffer:getbuffer()
     local cursor = rl_buffer:getcursor()
-    -- clink's cursor is 1-based (position, not byte offset); runex's Rust
-    -- side expects a 0-based byte offset into `line`. Subtract 1.
+    -- clink's cursor is 1-based (position, not char offset); runex's Rust
+    -- side expects a 0-based char offset into `line` (app/hook.rs counts
+    -- chars for clink). Subtract 1.
     local result = runex_call_hook(line, cursor - 1)
     if result and result.line ~= line then
         rl_buffer:beginundogroup()
