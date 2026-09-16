@@ -6,6 +6,11 @@ Practical, copy-pasteable `config.toml` snippets. Pick a recipe that
 matches what you want, drop the `[[abbr]]` blocks into your config, and
 hit your trigger key.
 
+A new `[[abbr]]` block works on the next key press, because the hook
+reads the config every time. Recipes that change `[keybind]` (5, 6 and
+6b) need `runex config reload` and a new shell, because the key binding
+is embedded in the shell integration.
+
 Your config file lives at `$XDG_CONFIG_HOME/runex/config.toml`
 (falls back to `~/.config/runex/config.toml`). Override with
 `RUNEX_CONFIG=<path>` or `runex --config <path>`.
@@ -239,8 +244,10 @@ cache (the modern `runex init` layout) fixes this at the source.
 - Every Space press invokes `__runex_expand`, which calls
   `'runex' hook ...`. PATH resolves `runex` to the mise shim,
   which spawns the real `mise` binary, which then `exec`s the
-  actual runex. Result: ~470 ms per keystroke before the hook
-  even runs (measured: 0m0.474s through the shim, 0m0.002s direct).
+  actual runex. One `time runex hook --shell bash --line ls --cursor 2`
+  run on WSL Arch Linux (2026-05-10, recorded in ADR 0001) took
+  0.474 s through the shim and 0.002 s when the binary was called
+  directly.
 
 **Fix:** re-run `runex init <shell>` once.
 
@@ -262,8 +269,8 @@ runex doctor
 # integration:bash:cache: cache up-to-date at ~/.cache/runex/integration.bash
 ```
 
-If you saw `Outdated WARN` instead, that's the legacy cache; the
-re-init above clears it.
+A `WARN` on that row names the command that fixes it, which is the
+re-init above.
 
 **Related minor speedup:** `runex hook` also runs
 `when_command_exists` checks via `which::which`, which walks
