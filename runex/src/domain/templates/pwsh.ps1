@@ -77,13 +77,18 @@ function __runex_register_expand_handler {
             # comes back character for character (a multi-line paste
             # keeps its newline). On any failure we fall back to plain
             # space insertion.
-            # `--line=` is joined to its value on purpose: PowerShell
-            # rewrites a native-command argument that starts with `~` to
-            # $HOME (even when it comes from a variable), which would hand
-            # runex a longer buffer than the cursor was measured against.
+            # The buffer travels as hex of its UTF-8 bytes because neither
+            # host passes raw text through: PowerShell rewrites a leading
+            # `~` in a native-command argument to $HOME even when the
+            # value comes from a variable (#18), and Windows PowerShell
+            # 5.1 re-splits an argument containing `"` (#35). Either hands
+            # runex a buffer the cursor was not measured against. The
+            # value is joined to the option with `=` because 5.1 drops a
+            # separate empty argument, which would leave clap without one.
+            # See docs/decisions/0004-pwsh-hex-line-transport.md.
             $out = $null
             try {
-                $hookArgs = @('hook', '--shell', 'pwsh', "--line=$line", '--cursor', "$cursor")
+                $hookArgs = @('hook', '--shell', 'pwsh', "--line-hex=$([System.BitConverter]::ToString([System.Text.Encoding]::UTF8.GetBytes($line)) -replace '-','')", '--cursor', "$cursor")
                 if ($pastePending) { $hookArgs += '--paste-pending' }
                 $out = & {PWSH_BIN} @hookArgs 2>$null
             } catch {

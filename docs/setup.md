@@ -151,8 +151,6 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 Under `AllSigned`, a newer PSReadLine picked up from `Documents\PowerShell\Modules` prompts "Do you want to run software from this untrusted publisher?" at every start. Choose `[A] Always run` once, or remove that directory from `$env:PSModulePath` so the bundled PSReadLine loads.
 
-**Windows PowerShell 5.1 drops `"` from the buffer it passes to the hook.** Its native-argument passing strips double quotes, so a line containing `"` may be rewritten without them on expansion. PowerShell 7 does not have this limitation.
-
 ### Nushell
 
 ```nu
