@@ -4,7 +4,7 @@ English | [日本語](PRD.ja.md)
 
 ## 1. Overview
 
-runex is a cross-shell tool that expands short inputs (runes) into full commands (casts) in real-time.
+runex is a cross-shell tool that expands short inputs (runes) into full commands (casts) as the user types.
 
 - Input: short token (e.g. `gcm`)
 - Output: expanded command (e.g. `git commit -m`)
@@ -25,14 +25,14 @@ The core concept is **"rune-to-cast expansion"**.
 
 ## 3. Goals
 
-### 3.1 Problems to Solve
+### 3.1 Problems to solve
 
 - Typing long commands is tedious
 - Aliases and functions are scattered across shells
 - Settings cannot be unified across pwsh / bash / nu
 - No fish-abbr-like UX in other shells
 
-### 3.2 Value Proposition
+### 3.2 Value proposition
 
 - Cross-shell shared abbreviation definitions
 - Real-time expansion on a configurable trigger key
@@ -44,7 +44,7 @@ The core concept is **"rune-to-cast expansion"**.
 
 ## 4. Scope
 
-### Supported Shells
+### Supported shells
 
 - bash
 - zsh
@@ -74,9 +74,9 @@ Internal layering since 0.1.14:
 - **`domain/`** — pure logic (model, expand, hook, sanitize,
   timings, shell quoting + templates). No I/O, no env reads.
 - **`app/`** — orchestration / parse / validate / generate
-  (config, doctor, init, precache).
+  (config, doctor, init, shell_export, hook).
 - **`infra/`** — file / registry / env access (env with
-  `HomeDirResolver`, integration_check).
+  `HomeDirResolver`, integration_cache, integration_check).
 - **`cmd/`** — CLI subcommand handlers (one file per `Commands`
   enum variant).
 - **`util/`** — leaf helpers (shell detection, command_exists
@@ -88,9 +88,15 @@ lived in two crates (`runex-core` + `runex`); the split was
 removed in Phase C because the internal `pub` boundary it carried
 served no external consumer.
 
+Each shell adapter is a thin template that reads the live buffer,
+calls `runex hook`, and applies the returned eval text. Every
+per-keystroke decision is made in Rust. The adapter is installed
+as a static cache file recorded in [ADR 0001](decisions/0001-static-integration-cache.md);
+clink's transport is recorded in [ADR 0003](decisions/0003-clink-hex-line-transport.md).
+
 ---
 
-## 6. Functional Requirements
+## 6. Functional requirements
 
 ### 6.1 Core
 
@@ -106,19 +112,21 @@ served no external consumer.
 runex expand --token <token>              expand a token
 runex expand --token <token> --dry-run   simulate expansion, show match trace
 runex list                               list all abbreviations
+runex list <key>                         show only the rule whose key matches exactly
 runex which <token>                      show which rule matches
 runex which <token> --why                show full match trace with skip reasons
 runex doctor                             check config and environment
 runex doctor --no-shell-aliases          skip alias conflict checks (avoids spawning shells)
 runex doctor --strict                    also warn about unknown config fields
+runex doctor --verbose                   show full error details
 runex add <key> <expand>                 add an abbreviation rule to config
 runex add <key> <expand> --when <cmd>    add with when_command_exists condition
 runex remove <key>                       remove an abbreviation rule from config
-runex init                               create config and append shell integration (auto-detect shell)
+runex init                               create config and install shell integration (auto-detect shell)
 runex init <shell>                       target a specific shell (bash/zsh/pwsh/clink/nu)
 runex init -y                            same, skip confirmation prompts
-runex export <shell>                     generate shell integration script
-runex export <shell> --bin <name>        use a custom binary name in the script
+runex export <shell>                     print the shell integration script
+runex export <shell> --bin <name>        use a custom binary name or path in the script
 runex timings <key>                      show per-phase timing breakdown of expand
 runex timings                            time all abbreviation rules
 runex config where                       print the resolved config file path
@@ -136,7 +144,9 @@ Global flags (accepted by every subcommand):
 --json               JSON output (supported by: list, doctor, version, expand, which, timings, config where)
 ```
 
-### 6.3 Config File
+`runex hook` and `runex paste-clipboard` are hidden subcommands called by the shell integration, not by users.
+
+### 6.3 Config file
 
 Default: `$XDG_CONFIG_HOME/runex/config.toml`, falling back to `~/.config/runex/config.toml` on all platforms.
 Override: `RUNEX_CONFIG` env var or `--config` flag.
@@ -166,9 +176,14 @@ See `docs/config-reference.md` for the full field reference.
 
 ---
 
-## 7. Non-Functional Requirements
+## 7. Non-functional requirements
 
-- Fast: expansion path completes in <1 ms
+- Fast: the in-process expansion path (config load, shell resolve,
+  expand) completes in under 1 ms per key press. `runex timings <key>
+  --json` is the instrument. Measured on 2026-09-16 with a release
+  build of 0.1.20 (`b549c9c`) on Windows 11 against a one-rule config:
+  10 runs, total 205–345 µs, median 217 µs. Process spawn and the
+  shell's own key handling are outside this figure.
 - Cross-platform: Windows / Linux / macOS
 - Shell-independent core logic (`runex/src/domain/` modules)
 - Safe: self-loop guard prevents infinite expansion
@@ -189,42 +204,45 @@ See `docs/config-reference.md` for the full field reference.
 ### Done (post-0.1.11)
 
 - Per-keystroke logic centralised in the `runex hook` subcommand;
-  shell templates reduced to thin wrappers (244 lines total across
-  five shells).
-- `runex doctor` now reports environment-level health: Windows
-  `effective_search_path` breakdown and `integration:<shell>` rcfile
-  marker / clink-lua drift detection.
+  shell templates reduced to thin wrappers.
+- Static integration cache for bash / zsh / pwsh / nu, sourced from
+  the rcfile by absolute path (ADR 0001). `runex config reload`
+  regenerates it after a hand edit.
+- `runex doctor` reports environment-level health: Windows
+  `effective_search_path` breakdown, `integration:<shell>` rcfile
+  marker check, `integration:<shell>:cache` header check, and
+  clink lua drift detection.
 - `runex init <shell>` accepts a shell positional and writes the clink
-  lua integration directly (no more manual `runex export clink > …`).
-  Seed config includes a working sample so `init` produces an
-  immediately verifiable setup. Per-shell "Next steps" guidance after
-  init.
+  lua integration directly. The seed config includes a working sample
+  (`gst → git status`). Per-shell "Next steps" guidance after init.
 - crates.io publish moved into CI via OIDC Trusted Publishing — no
   long-lived `CARGO_REGISTRY_TOKEN` anywhere. Test gate added so a
   tag push can never ship binaries from a commit whose tests didn't
   finish.
-- `docs/recipes.md` cookbook with 12 use-case-driven `config.toml`
+- Containerized Linux CI with a digest-pinned image (ADR 0002).
+- Distribution: GitHub Releases for six targets, crates.io, AUR
+  (`runex-bin` and `runex`), Homebrew tap, winget, `mise github:`.
+- clink sends the buffer hex-encoded, so `"`, `%` and `!` in the
+  buffer no longer break expansion (ADR 0003).
+- PTY-driven keystroke tests for bash, zsh, pwsh and nu
+  (`runex/tests/*_pty_integration.rs`), plus rcfile-write property
+  tests for `runex init` (`runex/tests/cli_integration.rs`).
+- `docs/recipes.md` cookbook with use-case-driven `config.toml`
   snippets.
 
 ### Near-term
 
 - Continue refining diagnostics surfaced by `doctor` and `init` as
   new failure modes are observed in the wild.
-- **Strengthen end-to-end test coverage.** Today's CI exercises CLI
-  subcommands and shell-helper functions invoked directly, but does
-  not drive an actual key press through readline / clink / PSReadLine.
-  The 0.1.12 clink regression (silent fallback to literal space when
-  the cmd host's PATH was degraded) would have been caught by a
-  PTY-driven keystroke test. Concrete items:
-  - `runex init` rcfile-write property tests (append-only,
-    `O_NOFOLLOW`, marker-idempotent, size-cap) against a `tempdir`
-    HOME — low cost, codifies the safety guarantees the docs already
-    promise.
-  - PTY-based real-keystroke test using `expectrl` so a Space key
-    press through bash's bind table is asserted to mutate the buffer
-    as expected.
-  - clink and nu integration tests parallel to the existing
-    bash/zsh/pwsh ones (zero coverage today).
+- A clink keystroke test. Today's clink coverage runs the template's
+  cmd.exe command line through a real cmd.exe
+  (`runex/tests/cli_integration.rs`) but does not drive clink itself.
+- A lossless lua buffer literal for clink, so a buffer containing
+  characters that `lua_quote_string` drops (NUL, RLO, BOM, zero-width)
+  is returned unchanged (ADR 0003, consequences).
+- Windows PowerShell 5.1 strips `"` from native-command arguments, so
+  a buffer containing `"` reaches the hook without it. No fix yet;
+  documented in `docs/setup.md`.
 
 ### Later
 
@@ -232,11 +250,11 @@ See `docs/config-reference.md` for the full field reference.
 - Interactive picker
 - History-based learning
 - IDE integration (Neovim, VS Code)
-- Broader distribution channels (GitHub Releases, `cargo-binstall`, `winget`, `mise github:`)
+- `cargo-binstall` metadata in `Cargo.toml`
 
 ---
 
-## 10. Success Criteria
+## 10. Success criteria
 
 - All shells unified under a single config file
 - Perceived reduction in typing time
@@ -244,7 +262,7 @@ See `docs/config-reference.md` for the full field reference.
 
 ---
 
-## 11. Name Definition
+## 11. Name definition
 
 runex =
 
@@ -254,6 +272,6 @@ runex =
 
 ---
 
-## 12. One-Line Definition
+## 12. One-line definition
 
 > runex is a rune-to-cast expansion engine.
