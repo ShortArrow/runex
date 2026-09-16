@@ -193,7 +193,7 @@ enum Commands {
     },
     /// Pre-compute command existence cache for shell startup.
     ///
-    /// Hidden since 0.2.0: shell templates no longer call this subcommand;
+    /// Hidden since 0.1.12: shell templates no longer call this subcommand;
     /// the hook subcommand evaluates `when_command_exists` per keypress
     /// instead. The command is retained for one release for backward
     /// compatibility and may be removed in a future version.
@@ -232,7 +232,7 @@ enum Commands {
         /// Abbreviation key to remove
         key: String,
     },
-    /// Locate and inspect the active config file
+    /// Locate, inspect and reload the active config file
     Config {
         #[command(subcommand)]
         action: ConfigAction,

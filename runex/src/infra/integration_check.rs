@@ -21,7 +21,7 @@
 //!    [`IntegrationCheck::Outdated`].
 //! 3. **Cache file freshness.** [`check_cache_freshness`] verifies
 //!    that the cache file's header points at the current `runex`
-//!    binary and the current schema version (`runex-integration-version: 1`).
+//!    binary and the current schema version (`runex-integration-version: <INTEGRATION_CACHE_VERSION>`).
 //!
 //! Marker detection (`# runex-init`) on its own only tells us "integration
 //! was ever set up" — it does not tell us *what* was set up. The two-axis
