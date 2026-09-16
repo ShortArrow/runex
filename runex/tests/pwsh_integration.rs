@@ -8,6 +8,11 @@ mod pwsh {
         which::which("pwsh").is_ok()
     }
 
+    #[cfg(windows)]
+    fn windows_powershell_available() -> bool {
+        which::which("powershell").is_ok()
+    }
+
     fn write_config() -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();
         write!(
@@ -38,6 +43,20 @@ mod pwsh {
     /// `NOOUT|`, never patched over: the bootstrap's own fallback
     /// (insert a literal space) would make a broken hook look right.
     fn run_helper(config: &NamedTempFile, line: &str, cursor: usize) -> String {
+        run_helper_in_host("pwsh", config, line, cursor)
+    }
+
+    /// Same as `run_helper`, against a named PowerShell host executable.
+    ///
+    /// `powershell` (Windows PowerShell 5.1) and `pwsh` (PowerShell 7)
+    /// parse native-command arguments differently, so the transport the
+    /// template chooses has to be exercised in both.
+    fn run_helper_in_host(
+        host: &str,
+        config: &NamedTempFile,
+        line: &str,
+        cursor: usize,
+    ) -> String {
         let script = r#"
 $line = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:RUNEX_LINE_B64))
 $cursor = [int]$env:RUNEX_CURSOR
@@ -56,8 +75,16 @@ if ($null -ne $__RUNEX_LINE -and $null -ne $__RUNEX_CURSOR) {
 }
 "#;
 
-        let output = Command::new("pwsh")
-            .args(["-NoLogo", "-NoProfile", "-Command", script])
+        let output = Command::new(host)
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
             .env("RUNEX_BIN", bin_path())
             .env("RUNEX_CONFIG", config.path())
             .env(
@@ -70,7 +97,7 @@ if ($null -ne $__RUNEX_LINE -and $null -ne $__RUNEX_CURSOR) {
 
         assert!(
             output.status.success(),
-            "pwsh helper should succeed\nstdout:\n{}\nstderr:\n{}",
+            "{host} helper should succeed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
@@ -183,6 +210,35 @@ if ($null -ne $__RUNEX_LINE -and $null -ne $__RUNEX_CURSOR) {
         assert_eq!(
             run_helper(&config, "scp -r \"\\\\srv\\帳票（レポート\n）\\x\"", 26),
             "scp -r \"\\\\srv\\帳票（レポート\n）\\x\" |27"
+        );
+    }
+
+    /// A buffer containing `"` reaches the hook intact under PowerShell 7.
+    /// Characterisation: this already held before the hex transport and
+    /// must keep holding after it, so the fix for 5.1 (issue #35) cannot
+    /// be paid for with a regression on 7.
+    #[test]
+    fn double_quoted_argument_round_trips() {
+        if !pwsh_available() { return; }
+        let config = write_config();
+        assert_eq!(
+            run_helper(&config, "echo \"a b\" c", 12),
+            "echo \"a b\" c |13"
+        );
+    }
+
+    /// Windows PowerShell 5.1 re-splits a native-command argument that
+    /// contains `"`, so `--line=echo "a b" c` arrived at runex as two
+    /// arguments and clap rejected the second (issue #35). The buffer
+    /// must round-trip there exactly as it does under PowerShell 7.
+    #[cfg(windows)]
+    #[test]
+    fn double_quoted_argument_round_trips_under_windows_powershell_51() {
+        if !windows_powershell_available() { return; }
+        let config = write_config();
+        assert_eq!(
+            run_helper_in_host("powershell", &config, "echo \"a b\" c", 12),
+            "echo \"a b\" c |13"
         );
     }
 }

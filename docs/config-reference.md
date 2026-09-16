@@ -149,9 +149,12 @@ arguments:
 runex hook --shell <shell> --line "<buffer>" --cursor <byte_offset>
 ```
 
-clink passes the buffer as `--line-hex <hex of the UTF-8 bytes>` instead of
-`--line`: its only path to runex is a cmd.exe command line, which cannot
-carry `"`, `%` or `!` inside an argument (see `docs/decisions/0003`).
+clink and pwsh pass the buffer as `--line-hex=<hex of the UTF-8 bytes>`
+instead of `--line`, because both reach runex through a layer that rewrites
+argument text: clink's only path is a cmd.exe command line, which cannot
+carry `"`, `%` or `!` inside an argument, and PowerShell rewrites a leading
+`~` while Windows PowerShell 5.1 re-splits an argument containing `"`
+(see `docs/decisions/0003`, `docs/decisions/0004`).
 
 The Rust core decides whether to expand (command-position detection,
 known-token check, `when_command_exists`, cursor-placeholder handling) and

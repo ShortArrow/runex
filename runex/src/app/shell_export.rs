@@ -417,18 +417,22 @@ mod tests {
         assert!(!s.contains("{PWSH_REGISTER_LINES}"), "pwsh script must resolve register lines");
     }
 
-    /// PowerShell expands a leading `~` in any native-command argument
-    /// to `$HOME` — even when the argument comes from a variable or a
-    /// splatted array — so `'--line', $line` hands runex a rewritten
-    /// buffer while `--cursor` still counts the original (issue #18).
-    /// Joining the option and value into one `--line=...` token keeps
-    /// the first character of the argument from being `~`.
+    /// Neither PowerShell host passes a raw buffer through untouched:
+    /// PowerShell rewrites a leading `~` in a native-command argument to
+    /// `$HOME` (issue #18) and Windows PowerShell 5.1 re-splits an
+    /// argument containing `"` (issue #35). The buffer therefore travels
+    /// as hex of its UTF-8 bytes, joined to the option with `=` because
+    /// 5.1 drops a separate empty argument (ADR 0004).
     #[test]
-    fn pwsh_script_joins_line_option_and_value_into_one_argument() {
+    fn pwsh_script_passes_buffer_as_joined_line_hex_token() {
         let s = export_script(Shell::Pwsh, "runex", None);
         assert!(
-            s.contains("\"--line=$line\""),
-            "pwsh bootstrap must pass the buffer as a single --line=<value> token: {s}"
+            s.contains("\"--line-hex=$("),
+            "pwsh bootstrap must pass the buffer as a joined --line-hex=<hex> token: {s}"
+        );
+        assert!(
+            !s.contains("\"--line=$line\""),
+            "pwsh bootstrap must not pass the buffer as raw text (5.1 re-splits it): {s}"
         );
         assert!(
             !s.contains("'--line', $line"),

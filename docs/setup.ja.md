@@ -151,8 +151,6 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 `AllSigned` の環境で `Documents\PowerShell\Modules` にある新しい PSReadLine が読み込まれると、起動のたびに「信頼されていない発行元のソフトウェアを実行しますか」と聞かれます。一度 `[A] Always run` を選ぶか、そのディレクトリを `$env:PSModulePath` から外して同梱の PSReadLine を読み込ませてください。
 
-**Windows PowerShell 5.1 は、フックに渡すバッファから `"` を落とします。** ネイティブコマンドへの引数渡しで二重引用符が剥がれるためです。`"` を含む行は、展開時に `"` を失った形に書き換わることがあります。PowerShell 7 にはこの制限はありません。
-
 ### Nushell
 
 ```nu

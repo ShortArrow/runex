@@ -266,9 +266,12 @@ enum Commands {
         #[arg(long, group = "buffer")]
         line: Option<String>,
         /// Current buffer contents as uppercase or lowercase hex of the
-        /// UTF-8 bytes. clink uses this form because its only path to
-        /// runex is a cmd.exe command line, which cannot carry `"`, `%`
-        /// or `!` inside an argument (see ADR 0003).
+        /// UTF-8 bytes. clink and pwsh use this form because both reach
+        /// runex through a layer that rewrites argument text: clink's
+        /// only path is a cmd.exe command line, which cannot carry `"`,
+        /// `%` or `!` inside an argument, and PowerShell rewrites a
+        /// leading `~` while Windows PowerShell 5.1 re-splits an
+        /// argument containing `"` (see ADR 0003, ADR 0004).
         #[arg(long, value_name = "HEX", group = "buffer")]
         line_hex: Option<String>,
         /// Current cursor position. Shells pass this in their own native
