@@ -206,10 +206,10 @@ See `docs/config-reference.md` for the full field reference.
 - Per-keystroke logic centralised in the `runex hook` subcommand;
   shell templates reduced to thin wrappers.
 - Static integration cache for bash / zsh / pwsh / nu, sourced from
-  the rcfile by absolute path (ADR 0001). `runex config reload`
+  the rc file by absolute path (ADR 0001). `runex config reload`
   regenerates it after a hand edit.
 - `runex doctor` reports environment-level health: Windows
-  `effective_search_path` breakdown, `integration:<shell>` rcfile
+  `effective_search_path` breakdown, `integration:<shell>` rc file
   marker check, `integration:<shell>:cache` header check, and
   clink lua drift detection.
 - `runex init <shell>` accepts a shell positional and writes the clink
@@ -225,7 +225,7 @@ See `docs/config-reference.md` for the full field reference.
 - clink sends the buffer hex-encoded, so `"`, `%` and `!` in the
   buffer no longer break expansion (ADR 0003).
 - PTY-driven keystroke tests for bash, zsh, pwsh and nu
-  (`runex/tests/*_pty_integration.rs`), plus rcfile-write property
+  (`runex/tests/*_pty_integration.rs`), plus rc-file-write property
   tests for `runex init` (`runex/tests/cli_integration.rs`).
 - `docs/recipes.md` cookbook with use-case-driven `config.toml`
   snippets.
