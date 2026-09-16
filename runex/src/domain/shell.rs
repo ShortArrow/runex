@@ -202,32 +202,45 @@ pub(crate) fn nu_quote_string_embedded(value: &str) -> String {
     out
 }
 
-/// Quote `value` as a Lua double-quoted string.
+/// Quote `value` as a Lua double-quoted string that evaluates back to
+/// exactly `value`.
+///
+/// This is the literal for *buffer text* (`return { line = ... }`), and
+/// the cursor the hook returns alongside it is a char count measured on
+/// the buffer runex was given. Dropping a character would therefore
+/// shorten the line and leave the cursor past the position it names
+/// (issue #36, the clink counterpart of #21). Nothing is dropped:
 ///
 /// - `\`, `"` → `\\`, `\"`
 /// - `\n`, `\r`, `\t` → two-character escape sequences
-/// - NUL is dropped (Lua uses C strings; NUL truncates them)
-/// - Unicode line/paragraph separators are dropped
-/// - **Deceptive Unicode (RLO, BOM, ZWSP, etc.) is dropped** so a
-///   crafted clink lua install path or cache path cannot produce a
-///   visually-deceiving comment that misrepresents what's being
-///   sourced (Phase G alignment with `is_nu_drop_char` policy).
-/// - Remaining ASCII control characters use three-digit decimal
-///   `\DDD` escapes. Zero-padding is required: without it `\1`
-///   followed by `0` would be read as `\10` (LF) rather than SOH
-///   followed by `"0"`.
+/// - every character `is_unsafe_for_display` rejects — NUL and the
+///   other ASCII controls, the Unicode line/paragraph separators
+///   (U+0085, U+2028, U+2029), and the deceptive-Unicode set (RLO,
+///   BOM, ZWSP and friends) — is emitted as its UTF-8 bytes in
+///   three-digit decimal `\DDD` escapes.
+///
+/// Escaping rather than dropping also keeps the visual-deception
+/// guarantee that dropping was there for: an escaped byte sequence is
+/// plainly visible in the emitted text, so a crafted buffer cannot
+/// produce a literal that reads as something other than what Lua will
+/// build from it.
+///
+/// `\DDD` and not `\u{...}`: clink embeds Lua 5.2, which accepts `\ddd`
+/// and `\xXX` but rejects `\u{...}` — the whole chunk would fail to
+/// load and clink would fall back to inserting a bare space. Zero-
+/// padding is required for the same reason it always was: without it
+/// `\1` followed by `0` reads as `\10` (LF) rather than SOH followed by
+/// `"0"`.
 pub(crate) fn lua_quote_string(value: &str) -> String {
     let mut out = String::from("\"");
+    let mut buf = [0u8; 4];
     for ch in value.chars() {
         if let Some(esc) = double_quote_escape(ch) {
             out.push_str(esc);
-        } else if ch == '\0' || is_unsafe_for_display(ch) && !ch.is_ascii_control() {
-            // Drop deceptive Unicode (RLO/BOM/ZWSP) and Unicode
-            // line separators silently. ASCII controls fall through
-            // to the `\DDD` branch below so non-printables stay
-            // representable rather than disappear.
-        } else if ch.is_ascii_control() {
-            out.push_str(&format!("\\{:03}", ch as u8));
+        } else if is_unsafe_for_display(ch) {
+            for byte in ch.encode_utf8(&mut buf).as_bytes() {
+                out.push_str(&format!("\\{byte:03}"));
+            }
         } else {
             out.push(ch);
         }
@@ -525,13 +538,33 @@ mod tests {
         assert!(!s.contains('\x7f'), "lua_quote_string must drop DEL: {s:?}");
     }
 
+    /// The clink cursor is a char count measured on the buffer runex
+    /// received, so a renderer that drops a character moves the cursor
+    /// (issue #36, mirroring #21). Separators are escaped as their
+    /// UTF-8 bytes in decimal, never dropped.
     #[test]
-    fn lua_quote_string_drops_unicode_line_separators() {
-        for ch in ['\u{0085}', '\u{2028}', '\u{2029}'] {
-            let input = format!("run{ch}ex");
-            let s = lua_quote_string(&input);
-            assert!(!s.contains(ch), "lua_quote_string must drop U+{:04X}: {s:?}", ch as u32);
-        }
+    fn lua_quote_string_escapes_unicode_line_separators() {
+        assert_eq!(lua_quote_string("run\u{0085}ex"), "\"run\\194\\133ex\"");
+        assert_eq!(lua_quote_string("run\u{2028}ex"), "\"run\\226\\128\\168ex\"");
+        assert_eq!(lua_quote_string("run\u{2029}ex"), "\"run\\226\\128\\169ex\"");
+    }
+
+    /// A zero-width space must survive the literal: dropping it both
+    /// shortens the line and leaves the cursor past its end (#36).
+    #[test]
+    fn lua_quote_string_escapes_zero_width_space_as_utf8_decimal_bytes() {
+        assert_eq!(lua_quote_string("ab\u{200B}c"), "\"ab\\226\\128\\139c\"");
+    }
+
+    #[test]
+    fn lua_quote_string_escapes_rlo_and_bom_as_utf8_decimal_bytes() {
+        assert_eq!(lua_quote_string("\u{202E}x"), "\"\\226\\128\\174x\"");
+        assert_eq!(lua_quote_string("\u{FEFF}x"), "\"\\239\\187\\191x\"");
+    }
+
+    #[test]
+    fn lua_quote_string_escapes_nul_as_three_digit_zero() {
+        assert_eq!(lua_quote_string("a\0b"), "\"a\\000b\"");
     }
 
     /// Naive `format!("\\{}", 1)` produces `"\1"` which Lua reads as `"\10"` (LF) when
