@@ -9,7 +9,7 @@ English | [日本語](docs/README.ja.md)
 
 > Turn runes into commands.
 
-runex is a cross-shell abbreviation engine that expands short tokens into full commands in real-time.
+runex expands a short token into a full command as you type, in bash, zsh, PowerShell, cmd (via Clink) and Nushell, from one config file.
 
 ![runex demo](https://raw.githubusercontent.com/ShortArrow/runex/main/docs/vhs/demo.gif)
 
@@ -17,27 +17,30 @@ runex is a cross-shell abbreviation engine that expands short tokens into full c
 
 | Goal | Read |
 |------|------|
-| Just install and try it | This README → [Install](docs/install.md) → [Setup](docs/setup.md) |
-| Find a config snippet for X | [docs/recipes.md](docs/recipes.md) |
+| Install and try it | This README, then [Install](docs/install.md) and [Setup](docs/setup.md) |
+| Find a config snippet for a scenario | [docs/recipes.md](docs/recipes.md) |
 | Look up a field's exact meaning | [docs/config-reference.md](docs/config-reference.md) |
-| Diagnose "I configured it but nothing happens" | [docs/setup.md#troubleshooting](docs/setup.md#troubleshooting) |
-
-## Features
-
-- Cross-shell support (bash / zsh / pwsh / cmd / nushell)
-- Real-time expansion (customizable trigger key)
-- Single config file shared across shells
-- Conditional rules (`when_command_exists`) — only expand when the listed commands resolve in the current shell
-- Fast and lightweight (Rust core)
+| Diagnose "I configured it but nothing happens" | [docs/setup.md, Troubleshooting](docs/setup.md#troubleshooting) |
+| Contribute or cut a release | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Concept
 
-runex treats short inputs as **runes**, and expands them into full **casts**.
+runex treats a short input as a **rune** and expands it into the full **cast** when you press the trigger key.
 
 ```
 gcm␣ → git commit -m
 ls␣  → lsd
 ```
+
+The expansion happens in the line editor before the command runs, so you see and can edit the full command.
+
+## Features
+
+- One `config.toml` drives bash, zsh, pwsh, clink and nu.
+- Expansion happens on a trigger key you choose (Space by default).
+- A rule can require commands to exist (`when_command_exists`), so `ls` becomes `lsd` only on machines that have `lsd`.
+- Rules with the same key form a fallback chain, evaluated in order.
+- `runex which <token> --why` explains why a token did or did not expand.
 
 ## First expand in 5 minutes
 
@@ -49,10 +52,7 @@ exec $SHELL                        # 3. fresh shell so the integration loads
 gst<Space>                         # 4. expands to: git status
 ```
 
-The config seeded by `runex init` includes a `gst → git status` sample
-so you can verify expansion works immediately. From there, swap in your
-own abbreviations — see [docs/recipes.md](docs/recipes.md) for
-copy-pasteable patterns.
+The config written by `runex init` contains one sample rule, `gst` to `git status`. Replace it with your own rules; [docs/recipes.md](docs/recipes.md) has copy-pasteable patterns.
 
 ## Install
 
@@ -63,34 +63,26 @@ paru -S runex-bin                         # Arch Linux (AUR)
 winget install ShortArrow.runex           # Windows
 ```
 
-Other options (mise, pre-built binaries, platform notes): see [docs/install.md](docs/install.md).
+mise, release archives and the full target list are in [docs/install.md](docs/install.md).
 
 ## Setup
 
-`runex init` is **append-only and asks before each write** — your
-existing rcfile is never modified except for one new block at the end.
-See [What `runex init` will and won't do](docs/setup.md#what-runex-init-will-and-wont-do)
-for the full guarantees.
-
-It creates the config and appends the shell integration line to your rc file, with a confirmation prompt at each step:
+`runex init` creates the config, writes a shell integration file under your cache directory, and appends one `source` line to your rc file. It asks before each write:
 
 ```
 $ runex init
 Create config at ~/.config/runex/config.toml? [y/N] y
 Created: ~/.config/runex/config.toml
-Append shell integration to ~/.bashrc? [y/N] y
-Appended integration to ~/.bashrc
+Install shell integration (cache at ~/.cache/runex/integration.bash, source line in ~/.bashrc)? [y/N] y
+Wrote integration cache to ~/.cache/runex/integration.bash
+Appended source line to ~/.bashrc
 ```
 
-Pass `-y` to skip all prompts. Per-shell manual setup (bash / zsh / pwsh / nu / clink) is documented in [docs/setup.md](docs/setup.md).
+Existing lines in the rc file are never modified. Pass `-y` to skip the prompts, or name a shell (`runex init pwsh`) to skip detection. The guarantees and the per-shell details are in [docs/setup.md](docs/setup.md).
 
 ## Config
 
-Default path: `$XDG_CONFIG_HOME/runex/config.toml`, falling back to `~/.config/runex/config.toml` on all platforms.
-
-Override with the `RUNEX_CONFIG` environment variable or the `--config` flag.
-
-No keybindings are active until you configure them.
+The config lives at `$XDG_CONFIG_HOME/runex/config.toml`, or `~/.config/runex/config.toml` when that variable is unset, on every platform. `RUNEX_CONFIG` or `--config <path>` overrides it.
 
 ```toml
 version = 1
@@ -112,40 +104,35 @@ key    = "gcam"
 expand = "git commit -am '{}'"   # {} = cursor stays here after expansion
 ```
 
-See [docs/config-reference.md](docs/config-reference.md) for the full reference, including evaluation order, fallback chains, and all accepted fields. For copy-pasteable scenarios (Git shortcuts, per-shell commands, fallback chains, …) see [docs/recipes.md](docs/recipes.md).
+Without a `[keybind]` table no key is bound. The config seeded by `runex init` binds Space.
+
+`runex add` and `runex remove` edit the file and refresh the shell integration. After editing the file by hand, run `runex config reload` so the integration picks up the change.
+
+The field reference, evaluation order and limits are in [docs/config-reference.md](docs/config-reference.md). Scenario-based snippets are in [docs/recipes.md](docs/recipes.md).
 
 ## Commands
 
-The five you'll reach for daily:
+The subcommands you will reach for daily:
 
 ```
-runex init                       Set up config + shell integration (asks before each write)
-runex doctor                     Verify everything is wired up
-runex add <key> <expand>         Add an abbreviation rule to the config file
-runex which <token> --why        Explain whether a token would expand and why
-runex export <shell>             Print the shell integration script (sourced via init)
+runex init [shell]               Create config + install shell integration (asks before each write)
+runex doctor                     Check config, command resolution and shell integration
+runex add <key> <expand>         Add a rule to the config file
+runex remove <key>               Remove a rule from the config file
+runex which <token> --why        Explain whether a token expands and why
+runex config reload              Regenerate the shell integration after editing config.toml by hand
 ```
 
-Full CLI reference: `runex --help` (or `runex <subcommand> --help` for a
-specific one). Global flags `--config`, `--path-prepend`, and `--json`
-work on every subcommand where they make sense; `--json` is supported by
-`list`, `doctor`, `version`, `expand`, `which`, `timings`, and `config where`.
+`runex --help` lists every subcommand, and `runex <subcommand> --help` its flags. The global flags `--config`, `--path-prepend` and `--json` are accepted everywhere. `--json` produces structured output for `list`, `doctor`, `version`, `expand`, `which`, `timings` and `config where`.
 
-`runex doctor` reports environment-level checks alongside config
-validation: `effective_search_path` (Windows-only PATH augmentation
-summary) and `integration:<shell>` (rcfile-marker presence and clink lua
-drift detection). The semantics for each row are spelled out in
-[`docs/config-reference.md`](docs/config-reference.md#runex-doctor--environment--integration-health),
-and [`docs/setup.md`](docs/setup.md) shows an annotated example.
+## Avoiding expansion
 
-## Avoiding Expansion
+With `trigger = "space"`, a token in command position expands on every Space. Ways around it:
 
-If you use `trigger = "space"`, there are a few practical ways to avoid expansion:
+- In bash and zsh, prefix the token with `\` (`\ls`) or use `command ls`.
+- In PowerShell, `\ls` is a different token, so it does not expand. For a built-in alias, type the full command name (`Get-ChildItem`).
 
-- In bash, prefix the token with `\` — e.g. `\ls` — or use `command ls`.
-- In PowerShell, `\ls` is just a different token. For built-in aliases, prefer the full command name (e.g. `Get-ChildItem`).
-
-You can also bind a key to plain-space insertion using `self_insert`:
+A second key can insert a plain space without expanding:
 
 ```toml
 [keybind.trigger]
@@ -169,24 +156,11 @@ default = "shift-space"   # pwsh/nu: Shift+Space inserts a space without expandi
 | Real-time expand  | No    | Yes   |
 | Conditional rules | No    | Yes   |
 
-## Philosophy
-
-- One config, all shells
-- Minimal typing, maximal power
-- Runes over repetition
+An alias substitutes at execution time, so the history keeps the short form and the expansion differs per shell. runex rewrites the line before it runs, so the history keeps the full command and one config serves every shell.
 
 ## Roadmap
 
-Near-term:
-
-- Harden `doctor` and `init` around edge cases and clearer diagnostics
-
-Later:
-
-- Fuzzy suggestions
-- Interactive picker
-- Editor integrations
-- Broader distribution channels (GitHub Releases, `cargo-binstall`, `winget`, `mise github:`)
+The roadmap lives in [docs/PRD.md](docs/PRD.md#9-roadmap). Ideas not yet scheduled: fuzzy suggestions, an interactive picker, editor integrations, and `cargo-binstall` metadata.
 
 ## Name
 
@@ -199,7 +173,7 @@ Later:
 
 ## Acknowledgements
 
-runex is inspired by [fish shell's abbreviation system](https://fishshell.com/docs/current/cmds/abbr.html) and [zsh-abbr](https://github.com/olets/zsh-abbr). The idea of real-time token expansion originated there — runex brings it to every shell with a single config file.
+runex is inspired by [fish shell's abbreviation system](https://fishshell.com/docs/current/cmds/abbr.html) and [zsh-abbr](https://github.com/olets/zsh-abbr). Real-time token expansion originated there; runex brings it to every shell with a single config file.
 
 ## License
 

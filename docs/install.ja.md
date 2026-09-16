@@ -1,76 +1,67 @@
 # インストール
 
-[English](install.md) | [日本語](install.ja.md)
+[English](install.md) | 日本語
 
-runex は複数の経路で配布しています。お使いのプラットフォーム・ツールに合わせて選んでください。
+プラットフォームとパッケージマネージャに合う経路を 1 つ選んでください。どの経路でも同じバイナリが入ります。リリース作業では同じタグから各経路へ配布します。
 
-## Cargo (Rust ツールチェーンがあればどこでも)
+| 経路 | プラットフォーム | コマンド |
+|---|---|---|
+| Cargo | Rust ツールチェーンがある環境 | `cargo install runex` |
+| mise（ソースからビルド） | Rust ツールチェーンがある環境 | `mise use -g cargo:runex` |
+| mise（GitHub リリースのバイナリ） | Linux、macOS、Windows | `mise use -g github:ShortArrow/runex` |
+| Homebrew tap | macOS、Linux | `brew install shortarrow/runex/runex` |
+| AUR | Arch Linux | `paru -S runex-bin` |
+| winget | Windows | `winget install ShortArrow.runex` |
+| GitHub リリースのアーカイブ | 下のターゲット一覧を参照 | 展開して `runex` を `PATH` 上に置く |
 
-```bash
-cargo install runex
-```
+## Homebrew
 
-## mise — ソースからビルド
-
-```bash
-mise use -g cargo:runex
-```
-
-## mise — GitHub リリースのビルド済みバイナリ
-
-Rust ツールチェーン不要。
-
-```bash
-mise use -g github:ShortArrow/runex
-```
-
-## Homebrew (macOS / Linux)
-
-runex はサードパーティの tap ([`shortarrow/homebrew-runex`](https://github.com/ShortArrow/homebrew-runex)) で配布しています。完全修飾名で一行インストール:
+runex はサードパーティ tap の [`shortarrow/homebrew-runex`](https://github.com/ShortArrow/homebrew-runex) から配布しています。完全修飾名なら 1 コマンドで入ります。
 
 ```bash
 brew install shortarrow/runex/runex
 ```
 
-…もしくは tap を追加してから短縮名でインストール:
+先に tap を追加しておくと、以後は短い名前で扱えます。
 
 ```bash
 brew tap shortarrow/runex
 brew install runex
 ```
 
-## AUR (Arch Linux)
+## AUR
 
-ビルド済みバイナリの [`runex-bin`](https://aur.archlinux.org/packages/runex-bin) から:
+[`runex-bin`](https://aur.archlinux.org/packages/runex-bin) はリリースバイナリをそのまま入れるパッケージです。ソースパッケージの `runex` は crates.io からビルドします。両者は競合するので、どちらか一方だけを入れてください。
 
 ```bash
 paru -S runex-bin   # または yay -S runex-bin
 ```
 
-## winget (Windows)
+## GitHub リリースのアーカイブ
 
-```powershell
-winget install ShortArrow.runex
+各 [GitHub リリース](https://github.com/ShortArrow/runex/releases) には、ターゲットごとに 1 つずつアーカイブが添付されています。ターゲットの一覧は `.github/workflows/release.yml` の定義と一致します。
+
+| ターゲット | アーカイブ |
+|---|---|
+| `x86_64-pc-windows-msvc` | zip |
+| `x86_64-unknown-linux-gnu` | tar.gz |
+| `aarch64-unknown-linux-gnu` | tar.gz |
+| `x86_64-apple-darwin` | tar.gz |
+| `aarch64-apple-darwin` | tar.gz |
+| `aarch64-linux-android`（Termux） | tar.gz |
+
+アーカイブから `runex` を取り出し、`PATH` の通ったディレクトリに置いてください。
+
+## インストール後の確認
+
+シェルからバイナリが見えるか確認します。
+
+```bash
+runex version
 ```
 
-## ビルド済みバイナリ (全プラットフォーム)
+`cargo install` の後に見つからない場合は、Cargo の bin ディレクトリが `PATH` に入っていません。Linux と macOS では `~/.cargo/bin`、Windows では `%USERPROFILE%\.cargo\bin` を追加してください。
 
-各 [GitHub リリース](https://github.com/ShortArrow/runex/releases) に以下のバイナリが添付されています:
+runex が生成するシェル連携スクリプトと `config.toml` は、シェル環境の一部として読み込まれます。信頼できるファイルだけを読み込み、他のマシンへ同期する前に内容を確認してください。
 
-- Windows (x86_64)
-- macOS (x86_64 / aarch64)
-- Linux (x86_64 / aarch64)
-- Termux / Android (aarch64)
-
-アーカイブを展開し、`runex` を `PATH` の通ったどこかに配置してください。
-
-## インストール後
-
-`runex` が見つからない場合、Cargo の bin ディレクトリが `PATH` に入っているか確認してください:
-
-- Linux/macOS: `~/.cargo/bin`
-- Windows: `%USERPROFILE%\.cargo\bin`
-
-生成されたシェルスクリプトと `config.toml` はローカルのシェル環境に入ります。信頼できるファイルだけを読み込んでください。
-
-`runex` が `PATH` 上にあることを確認したら、[setup](setup.ja.md) に進んでシェル連携を設定してください。
+次は [セットアップ](setup.ja.md) で、シェルへの連携を設定します。

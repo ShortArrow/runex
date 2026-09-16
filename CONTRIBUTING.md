@@ -162,10 +162,10 @@ The rule: if new code does not need to spawn a process or write to stdout, it be
 
 The `runex hook` migration moved every per-keystroke decision into Rust.
 The shell-side templates in `runex/src/domain/templates/*.{sh,zsh,ps1,lua,nu}`
-are now thin wrappers (244 lines total across five shells) that read
-buffer state, call `runex hook`, and apply the eval-able output. When
-deciding whether new logic belongs in Rust or in a template, ask
-whether the work *requires* state only the live shell process holds:
+are thin wrappers that read buffer state, call `runex hook`, and apply
+the eval-able output. When deciding whether new logic belongs in Rust
+or in a template, ask whether the work *requires* state only the live
+shell process holds:
 
 - **Stays in the shell** — anything that touches the live readline
   buffer (`READLINE_LINE`, `LBUFFER/RBUFFER`, `commandline`, clink's
@@ -188,6 +188,14 @@ of each template (e.g. `templates/pwsh.ps1` explains why paste
 detection lives in pwsh; `templates/clink.lua` explains why the buffer
 is hex-encoded for cmd.exe) and trust the existing rationale unless
 there's a concrete observation suggesting otherwise.
+
+A template change reaches users only when their cache file is
+regenerated. `runex doctor` flags a cache by its header (schema version
+and `runex-bin:` path), not by its body, so a template fix that every
+user must pick up needs a bump of `INTEGRATION_CACHE_VERSION` in
+`runex/src/infra/integration_cache.rs`. Without the bump, only users who
+re-run `runex init <shell>` (or `runex add` / `remove` / `config reload`)
+get the new template. clink is content-compared and needs no bump.
 
 ### Security
 
@@ -587,13 +595,12 @@ Use this template for the release body, filled in from the CHANGELOG:
 ## Upgrade notes
 
 [Conditional: only when shell templates changed]
-- **bash / zsh / pwsh / nu users:** the integration line in your rcfile
-  re-evaluates the export at every shell start; just open a fresh shell.
-- **clink users:** the lua file at `%LOCALAPPDATA%\clink\runex.lua` is
-  a static copy and does not auto-refresh. Run
-  `runex export clink > %LOCALAPPDATA%\clink\runex.lua` (or
-  `runex doctor` to confirm whether refresh is needed) and open a new
-  cmd window.
+- **bash / zsh / pwsh / nu users:** the integration cache under
+  `~/.cache/runex/` (`%LOCALAPPDATA%\runex\` on Windows) was written by
+  the previous version. Run `runex init <shell>` once and open a fresh
+  shell.
+- **clink users:** run `runex init clink` and open a new cmd window.
+  `runex doctor` reports the lua file as outdated until you do.
 
 [Conditional: when CLI surface or config schema changed]
 - **Breaking changes:** [list]

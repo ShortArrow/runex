@@ -2,75 +2,66 @@
 
 [English](install.md) | [日本語](install.ja.md)
 
-runex ships through multiple channels. Pick the one that fits your platform and tooling.
+Pick the channel that matches your platform and package manager. Every channel installs the same binary; the release process publishes them from the same tag.
 
-## Cargo (all platforms with a Rust toolchain)
+| Channel | Platform | Command |
+|---|---|---|
+| Cargo | any with a Rust toolchain | `cargo install runex` |
+| mise (build from source) | any with a Rust toolchain | `mise use -g cargo:runex` |
+| mise (GitHub release binary) | Linux, macOS, Windows | `mise use -g github:ShortArrow/runex` |
+| Homebrew tap | macOS, Linux | `brew install shortarrow/runex/runex` |
+| AUR | Arch Linux | `paru -S runex-bin` |
+| winget | Windows | `winget install ShortArrow.runex` |
+| GitHub release archive | see the target list below | download, extract, put `runex` on `PATH` |
 
-```bash
-cargo install runex
-```
+## Homebrew
 
-## mise — compile from source
-
-```bash
-mise use -g cargo:runex
-```
-
-## mise — pre-built binary from GitHub releases
-
-No Rust toolchain needed.
-
-```bash
-mise use -g github:ShortArrow/runex
-```
-
-## Homebrew (macOS / Linux)
-
-runex lives in a third-party tap ([`shortarrow/homebrew-runex`](https://github.com/ShortArrow/homebrew-runex)). Install it in one line with the fully-qualified name:
+runex is published from a third-party tap, [`shortarrow/homebrew-runex`](https://github.com/ShortArrow/homebrew-runex). The fully qualified name installs in one step:
 
 ```bash
 brew install shortarrow/runex/runex
 ```
 
-…or add the tap first and install with the short name:
+Adding the tap first lets you use the short name afterwards:
 
 ```bash
 brew tap shortarrow/runex
 brew install runex
 ```
 
-## AUR (Arch Linux)
+## AUR
 
-Pre-built binary via [`runex-bin`](https://aur.archlinux.org/packages/runex-bin):
+[`runex-bin`](https://aur.archlinux.org/packages/runex-bin) installs the release binary. The source package `runex` builds from crates.io instead. The two conflict with each other, so install one of them.
 
 ```bash
 paru -S runex-bin   # or: yay -S runex-bin
 ```
 
-## winget (Windows)
+## GitHub release archives
 
-```powershell
-winget install ShortArrow.runex
+Each [GitHub release](https://github.com/ShortArrow/runex/releases) attaches one archive per target. The targets come from `.github/workflows/release.yml`.
+
+| Target | Archive |
+|---|---|
+| `x86_64-pc-windows-msvc` | zip |
+| `x86_64-unknown-linux-gnu` | tar.gz |
+| `aarch64-unknown-linux-gnu` | tar.gz |
+| `x86_64-apple-darwin` | tar.gz |
+| `aarch64-apple-darwin` | tar.gz |
+| `aarch64-linux-android` (Termux) | tar.gz |
+
+Extract `runex` from the archive and place it in a directory on your `PATH`.
+
+## After installing
+
+Check that the shell finds the binary:
+
+```bash
+runex version
 ```
 
-## Pre-built binary (all platforms)
+If the command is not found after `cargo install`, Cargo's bin directory is missing from `PATH`. Add `~/.cargo/bin` on Linux and macOS, or `%USERPROFILE%\.cargo\bin` on Windows.
 
-Each [GitHub release](https://github.com/ShortArrow/runex/releases) ships binaries for:
+The shell integration runex generates and your `config.toml` become part of your shell environment. Load only files you trust, and review them before syncing them across machines.
 
-- Windows (x86_64)
-- macOS (x86_64 / aarch64)
-- Linux (x86_64 / aarch64)
-- Termux / Android (aarch64)
-
-Download the appropriate archive, extract `runex`, and place it somewhere on your `PATH`.
-
-## After install
-
-If `runex` is not found, make sure Cargo's bin directory is on your `PATH`:
-
-- Linux/macOS: `~/.cargo/bin`
-- Windows: `%USERPROFILE%\.cargo\bin`
-
-Generated shell scripts and your `config.toml` are part of your local shell environment. Only load and sync files you trust.
-
-Once runex is on your `PATH`, continue to [setup](setup.md) to wire up shell integration.
+Next: [Setup](setup.md) wires runex into your shell.

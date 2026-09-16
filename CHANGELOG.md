@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Documentation rewritten against the current behaviour.**
+  `docs/setup.md` now describes the static-cache layout that `runex
+  init` actually writes (header version 2, Windows and Unix cache
+  paths, the PowerShell 7 profile path, `runex config reload`, the
+  `integration:<shell>:cache` doctor rows) instead of the pre-0.1.16
+  `eval "$(runex export <shell>)"` form; `docs/config-reference.md`
+  shows the pwsh hook output as the double-quoted literal it became
+  in #21, dates the `[precache]` deprecation to 0.1.12, and lists the
+  `XDG_*` / `RUNEX_CLINK_LUA_PATH` variables; the README and PRD
+  roadmaps drop the distribution channels that have shipped and
+  record the PTY tests as done; the PRD's "<1 ms" claim now carries
+  its measurement. The Japanese pages (`README.ja`, `setup.ja`,
+  `recipes.ja`, `PRD.ja`, `install.ja`) were rewritten from the same
+  facts and now carry the sections they were missing (recipes 6b and
+  6c, badges, the cache layout). `runex config --help` mentions
+  `reload`.
+
 ### Added
 
 - **`runex config reload` (#30).** Regenerates the installed shell

@@ -2,12 +2,11 @@
 
 > Turn runes into commands.
 
-`runex` is a cross-shell abbreviation engine that expands short tokens into full commands in real time.
+`runex` expands a short token into a full command as you type, in bash, zsh, PowerShell, cmd (via Clink) and Nushell, from one config file.
 
 ![runex demo](https://raw.githubusercontent.com/ShortArrow/runex/main/docs/vhs/demo.gif)
 
-This README is intentionally minimal for crates.io.
-Keep detailed user documentation in the repository root README.
+This README is intentionally minimal for crates.io. The user documentation lives in the repository.
 
 ## Install
 
@@ -21,14 +20,20 @@ Or with `mise`:
 mise use -g cargo:runex
 ```
 
-If `runex` is not found after install, make sure Cargo's bin directory is on your `PATH`:
+If `runex` is not found after install, add Cargo's bin directory to your `PATH`: `~/.cargo/bin` on Linux and macOS, `%USERPROFILE%\.cargo\bin` on Windows.
 
-- Unix-like shells: `~/.cargo/bin`
-- Windows: `%USERPROFILE%\.cargo\bin`
+## Set up
+
+```bash
+runex init        # creates the config and installs the shell integration, asking before each write
+exec $SHELL
+gst<Space>        # expands to: git status
+```
 
 ## Documentation
 
-- <https://github.com/ShortArrow/runex#readme>
-- <https://github.com/ShortArrow/runex/blob/main/docs/config-reference.md>
+- README: <https://github.com/ShortArrow/runex#readme>
+- Setup and troubleshooting: <https://github.com/ShortArrow/runex/blob/main/docs/setup.md>
+- Config reference: <https://github.com/ShortArrow/runex/blob/main/docs/config-reference.md>
 
-Generated shell scripts and your `config.toml` become part of your local shell environment. Only load files you trust.
+The generated shell integration and your `config.toml` become part of your shell environment. Load only files you trust.

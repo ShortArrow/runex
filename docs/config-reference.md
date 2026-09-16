@@ -1,4 +1,4 @@
-# Config Reference
+# Config reference
 
 > Looking for working examples first? See [recipes.md](recipes.md) for
 > copy-pasteable `config.toml` snippets organised by use case.
@@ -19,16 +19,14 @@ Override with the `RUNEX_CONFIG` environment variable or the `--config` flag.
 |---|---|---|---|
 | `version` | integer | yes | Schema version. Must be `1`; other values are rejected at load time. |
 | `keybind` | table | no | Trigger key configuration. If omitted, no key is bound. |
-| `precache` | table | no | **Deprecated since 0.2.0.** Retained for backward compatibility but has no run-time effect. See [`[precache]` (deprecated)](#precache-deprecated) below. |
+| `precache` | table | no | **Deprecated since 0.1.12.** Parsed for backward compatibility; has no run-time effect. See [`[precache]` (deprecated)](#precache-deprecated) below. |
 | `abbr` | array of tables | no | Abbreviation rules. Evaluated in order. |
 
 ---
 
 ## `[keybind]`
 
-Controls which key triggers expansion in each shell. Both subtables are optional.
-
-`[keybind]` has three subtables:
+Controls which key triggers expansion in each shell. `[keybind]` has three subtables, all optional:
 
 - `[keybind.trigger]` — the key that triggers abbreviation expansion
 - `[keybind.self_insert]` — a key that inserts a plain space without expanding (optional)
@@ -131,7 +129,7 @@ Each external command has a 500 ms timeout. Maximum clipboard size is 1 MiB. Emp
 ## `[precache]` (deprecated)
 
 > [!IMPORTANT]
-> **Deprecated since 0.2.0.** This section has no run-time effect.
+> **Deprecated since 0.1.12.** This section has no run-time effect.
 > `runex doctor --strict` warns when it is present. Remove the section from your config to silence the warning.
 
 Earlier versions used the shell integration to populate a per-session command-existence cache at rc/profile time. With the move to the [`runex hook`](#how-shell-integration-works) per-keystroke RPC, `when_command_exists` is now evaluated against `which::which` (and the optional `--path-prepend` directory) every time the hook fires; the precache layer is gone and the section's `path_only` field is ignored.
@@ -164,7 +162,7 @@ shells use different output formats but the same flow:
 |---|---|
 | bash | `READLINE_LINE='...'; READLINE_POINT=N` (eval'd) |
 | zsh | `LBUFFER='...'; RBUFFER='...'` (eval'd) |
-| pwsh | `$__RUNEX_LINE = '...'; $__RUNEX_CURSOR = N` (Invoke-Expression'd) |
+| pwsh | `$__RUNEX_LINE = "..."` and `$__RUNEX_CURSOR = N` on two lines (Invoke-Expression'd) |
 | clink | `return { line = "...", cursor = N }` (Lua `load()` in a sandbox) |
 | nu | `{"line": "...", "cursor": N}` (parsed via `from json`) |
 
@@ -178,9 +176,13 @@ cache that has drifted from the installed binary.
 
 Failures (missing config, malformed buffer) are silent: the hook returns
 an `InsertSpace` action so the bootstrap inserts a literal trigger key and
-the user keeps typing. Configuration changes take effect on the next
-keypress because the hook reads the config every time — no shell restart
-required after `runex add` / `runex remove`.
+the user keeps typing.
+
+The hook reads the config on every key press, so an `[[abbr]]` change
+takes effect on the next key press without a shell restart. The
+`[keybind]` table is different: the bootstrap embeds it, so a change
+there needs a regenerated cache (`runex config reload`, or the
+automatic refresh after `runex add` / `runex remove`) and a new shell.
 
 ---
 
@@ -349,6 +351,9 @@ To check a command installed outside your normal PATH, use `--path-prepend` at r
 | Variable | Description |
 |---|---|
 | `RUNEX_CONFIG` | Override config file path. Overridden by `--config`. |
+| `XDG_CONFIG_HOME` | Base directory for the default config path (`<XDG_CONFIG_HOME>/runex/config.toml`). Default `~/.config` on every platform. |
+| `XDG_CACHE_HOME` | Base directory for the shell integration caches (`<XDG_CACHE_HOME>/runex/integration.<ext>`). Default `~/.cache` on Linux and macOS, `%LOCALAPPDATA%` on Windows. |
+| `RUNEX_CLINK_LUA_PATH` | Location of the clink integration file. Default `%LOCALAPPDATA%\clink\runex.lua`, then `~/.local/share/clink/runex.lua`. Used by `runex init clink` and `runex doctor`. |
 
 ---
 
@@ -477,19 +482,24 @@ whether action is required.
 |-------|--------|---------|
 | `effective_search_path` *(Windows-only)* | `OK` | Reports the PATH runex uses when resolving `when_command_exists` entries. The breakdown `entries (process=N, +user=M, +system=K)` shows how many came from the inherited process PATH versus the registry's HKCU and HKLM `Environment\Path`. If `+user` or `+system` is non-zero, the parent process inherited a degraded PATH and runex augmented it from the registry. Useful for diagnosing `command:foo not found` warnings that contradict your shell's PATH. |
 | `effective_search_path` *(Windows-only)* | `WARN` | The process PATH is empty — almost certainly a misconfigured launcher. |
-| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `OK` | The `# runex-init` marker is present in the rcfile (so `eval "$(runex export <shell>)"` is wired up), or the rcfile doesn't exist (treated as "user doesn't run that shell"). |
-| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `WARN` | The rcfile exists but lacks the marker. Run `runex init <shell>` to install the integration line. |
-| `integration:clink` | `OK` | The `runex.lua` on disk matches what `runex export clink` would emit today, or no clink integration is found (treated as "user doesn't run clink"). |
-| `integration:clink` | `WARN` | The on-disk `runex.lua` has drifted from the current export — typical after upgrading runex. Re-run `runex export clink > %LOCALAPPDATA%\clink\runex.lua`. |
+| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `OK` | The rcfile carries the `# runex-init` marker and sources the integration cache, or the rcfile doesn't exist (treated as "user doesn't run that shell"). |
+| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `WARN` | The rcfile exists but lacks the marker (run `runex init <shell>`), or it still runs a pre-0.1.16 `runex export <shell>` line instead of sourcing the cache (delete that line and run `runex init <shell>`). |
+| `integration:<shell>:cache` | `OK` | The cache file's header names the current schema version and a `runex-bin:` path that exists, or no cache exists yet (the detail names the `runex init <shell>` that creates it). |
+| `integration:<shell>:cache` | `WARN` | The header is missing, malformed, from an older schema version, or names a binary that no longer exists. Run `runex init <shell>`. |
+| `integration:clink` | `OK` | The `runex.lua` on disk matches what this binary would write, or no clink integration is found (treated as "user doesn't run clink"). |
+| `integration:clink` | `WARN` | The on-disk `runex.lua` differs from the current output, typically after upgrading runex. Run `runex init clink` and open a new cmd window. |
 
-`integration:clink` is a content comparison rather than a marker check
-because the clink lua file is a static copy with no auto-refresh path.
-bash/zsh/pwsh/nu re-source `runex export <shell>` on every shell start
-so they can't drift.
+`integration:clink` compares file content because clink has no rcfile:
+the lua file is loaded directly from clink's scripts directory. The
+other four shells get a marker check on the rcfile plus a header check
+on the cache. A template change that every user must pick up is shipped
+by bumping the cache schema version, which turns every older cache into
+a `WARN`.
 
-The `RUNEX_CLINK_LUA_PATH` environment variable overrides the search
-location used by the clink check (default candidates: `%LOCALAPPDATA%\clink\runex.lua`,
-then `~/.local/share/clink/runex.lua` for non-Windows clink forks).
+The `RUNEX_CLINK_LUA_PATH` environment variable overrides the location
+used by the clink check and by `runex init clink` (default candidates:
+`%LOCALAPPDATA%\clink\runex.lua`, then `~/.local/share/clink/runex.lua`
+for non-Windows clink forks).
 
 ### `runex doctor --strict`
 
@@ -503,7 +513,7 @@ $ runex doctor --strict
 [WARN]  strict.unknown_field.abbr[1].expad: unknown field 'expad' in abbr[1] (did you mean 'expand'?)
 ```
 
-### `runex add` / `runex remove`
+### `runex add` / `runex remove` / `runex config reload`
 
 Edit abbreviation rules from the command line without opening the config file:
 
@@ -517,5 +527,18 @@ runex add ls lsd --when lsd
 # Remove a rule
 runex remove gcm
 ```
+
+Both commands rewrite the config file in place (through a symlink if the
+path is one) and then regenerate every installed shell integration
+cache. After editing the file by hand, run the regeneration yourself:
+
+```bash
+runex config reload
+# bash: refreshed /home/me/.cache/runex/integration.bash
+# zsh: not installed (run `runex init zsh` to create its cache)
+```
+
+A config that fails to load exits 1 and leaves every cache untouched.
+clink is not part of this list; `runex init clink` rewrites its lua file.
 
 See also: [Commands — doctor](../README.md#commands), [Commands — which](../README.md#commands).
