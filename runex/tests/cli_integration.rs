@@ -765,19 +765,32 @@ fn json_doctor_contract_pins_name_and_status_enum() {
 // ─── init --config ────────────────────────────────────────────────────────────
 
 /// Build a Command for `runex init` with HOME/USERPROFILE/XDG_CONFIG_HOME/
-/// XDG_CACHE_HOME/LOCALAPPDATA/PSModulePath/SHELL all redirected into
-/// `home_dir` so that shell detection, rc-file resolution, and Phase G
-/// integration-cache writes stay entirely inside the temp directory on
-/// every platform.
+/// XDG_CACHE_HOME/LOCALAPPDATA/PSModulePath/SHELL/RUNEX_CLINK_LUA_PATH all
+/// redirected into `home_dir` so that shell detection, clink-lua installs,
+/// and Phase G integration-cache writes stay entirely inside the temp
+/// directory on every platform.
+///
+/// Rc-file resolution is the exception, and it is the rule every caller has
+/// to obey: on Windows the rc file resolves through `dirs::home_dir()`
+/// (Known Folders `FOLDERID_Profile`), which no environment variable
+/// redirects, so a test that lets `init` reach the rc-file path writes to
+/// the real user's `~/.bashrc` (#37). Every test that runs `init` on all
+/// platforms must therefore target `clink` — the only shell branch that
+/// installs a lua file instead of editing an rc file — or be `#[cfg(unix)]`.
 ///
 /// `PSModulePath` is removed to suppress pwsh detection on Windows; `SHELL`
 /// is forced to `/bin/bash` so that `rc_file_for()` resolves to
-/// `$HOME/.bashrc` inside the temp directory.
+/// `$HOME/.bashrc` inside the temp directory on unix.
 ///
 /// XDG_CACHE_HOME / LOCALAPPDATA are pinned so that
 /// `infra::integration_cache::cache_path` resolves into the temp dir.
 /// Without this, parallel tests would share the real `~/.cache` and
 /// race on writes.
+///
+/// `RUNEX_CLINK_LUA_PATH` is pinned for the same reason, so that a
+/// `clink`-targeted `init` installs into the temp dir rather than the real
+/// clink scripts directory. A caller that needs a specific install path
+/// overrides it with a later `.env()` call.
 fn init_cmd_in_dir(home_dir: &std::path::Path) -> Command {
     let mut cmd = Command::new(bin());
     cmd.env("HOME", home_dir)
@@ -786,7 +799,8 @@ fn init_cmd_in_dir(home_dir: &std::path::Path) -> Command {
         .env("XDG_CACHE_HOME", home_dir.join(".cache"))
         .env("LOCALAPPDATA", home_dir.join("AppData").join("Local"))
         .env_remove("PSModulePath")
-        .env("SHELL", "/bin/bash");
+        .env("SHELL", "/bin/bash")
+        .env("RUNEX_CLINK_LUA_PATH", home_dir.join("clink").join("runex.lua"));
     cmd
 }
 
@@ -801,6 +815,7 @@ fn init_config_creates_file_at_given_path() {
             "--config",
             config_path.to_str().unwrap(),
             "init",
+            "clink",
             "--yes",
         ])
         .output()
@@ -814,7 +829,11 @@ fn init_config_creates_file_at_given_path() {
 }
 
 /// init must succeed even when the shell rc file's parent directory does not yet exist.
+///
+/// `#[cfg(unix)]` because this test is about the rc-file path: on Windows
+/// that path is not redirected by `init_cmd_in_dir` (#37).
 #[test]
+#[cfg(unix)]
 fn init_creates_rc_parent_dir_if_missing() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
@@ -845,6 +864,7 @@ fn init_config_already_exists_does_not_overwrite() {
             "--config",
             cfg.path().to_str().unwrap(),
             "init",
+            "clink",
             "--yes",
         ])
         .output()
@@ -1103,8 +1123,10 @@ fn init_does_not_follow_symlink_at_rc_file() {
 // rcfile-write logic itself is platform-agnostic, so the property
 // guarantees still hold on Windows; we just can't exercise them
 // without running against the real user `~/.bashrc`, which we refuse
-// to do in tests. The seed-config and clink-lua tests don't have
-// this limitation and run on all platforms.
+// to do in tests. The seed-config and clink-lua tests run on all
+// platforms because they target `runex init clink`, the one shell
+// branch that installs a lua file at `RUNEX_CLINK_LUA_PATH` and never
+// touches an rc file (#37).
 
 /// Append-only: an existing rcfile keeps its prior content byte-for-byte
 /// after `runex init`, with the integration block strictly past the
@@ -1209,15 +1231,25 @@ fn init_oversize_rcfile_keeps_prior_content_intact() {
 /// both the working `[keybind.trigger] default = "space"` block and the
 /// `gst → git status` sample abbreviation. README and docs/setup
 /// promise these as the "first expand in 5 minutes" demonstration.
+///
+/// Targets `clink` so that the shell step installs a lua file inside the
+/// temp dir instead of editing an rc file that Windows does not redirect
+/// (#37); the config-creation step under test runs before and
+/// independently of the shell step.
 #[test]
 fn init_seed_config_includes_keybind_trigger_and_gst_sample() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
 
-    init_cmd_in_dir(dir.path())
-        .args(["--config", config_path.to_str().unwrap(), "init", "--yes"])
+    let out = init_cmd_in_dir(dir.path())
+        .args(["--config", config_path.to_str().unwrap(), "init", "clink", "--yes"])
         .output()
         .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let body = std::fs::read_to_string(&config_path).unwrap();
     assert!(
@@ -1698,13 +1730,15 @@ fn which_with_oversized_token_exits_nonzero() {
 
 /// `init` must exit promptly even when stdin contains 10 MB of data without a newline.
 /// Without a read limit, read_line() buffers all of stdin before returning.
+///
+/// Targets `clink` so that no rc file is reached on Windows (#37).
 #[test]
 fn init_prompt_confirm_handles_huge_stdin_without_oom() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
 
     let mut child = init_cmd_in_dir(dir.path())
-        .args(["--config", config_path.to_str().unwrap(), "init"])
+        .args(["--config", config_path.to_str().unwrap(), "init", "clink"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1729,13 +1763,15 @@ fn init_prompt_confirm_handles_huge_stdin_without_oom() {
 /// `init` with 2 KB of 'y' (no newline) as stdin must not treat the input as "yes".
 /// After reading MAX_CONFIRM_BYTES, content beyond the limit is discarded;
 /// a blob of raw 'y' bytes without a valid "y\n" response must be treated as "no".
+///
+/// Targets `clink` so that no rc file is reached on Windows (#37).
 #[test]
 fn init_prompt_confirm_huge_stdin_is_treated_as_no() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
 
     let mut child = init_cmd_in_dir(dir.path())
-        .args(["--config", config_path.to_str().unwrap(), "init"])
+        .args(["--config", config_path.to_str().unwrap(), "init", "clink"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2123,6 +2159,47 @@ fn hook_clink_accepts_hex_encoded_line() {
     );
     assert!(ok, "stdout: {stdout}\nstderr: {stderr}");
     assert_eq!(stdout.trim(), r#"return { line = "pwsh -nop -c \"mv ", cursor = 17 }"#);
+}
+
+/// The lua literal is the only place the buffer is written back, and
+/// the cursor clink receives is a char count measured on the buffer
+/// runex was given. A zero-width space used to be dropped from the
+/// literal, which shortened the line by one char and left the cursor
+/// one past its end (issue #36).
+#[test]
+fn hook_clink_keeps_zero_width_space_and_cursor_in_sync_on_expand() {
+    let cfg = write_config(
+        "version = 1\n[[abbr]]\nkey = \"gst\"\nexpand = \"git status\"\n",
+    );
+    let line = "echo ab\u{200B}c && gst";
+    let (stdout, stderr, ok) = run(
+        &["hook", "--shell", "clink", "--line-hex", &hex_of(line), "--cursor", "16"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(
+        stdout.trim(),
+        r#"return { line = "echo ab\226\128\139c && git status ", cursor = 24 }"#
+    );
+}
+
+/// Same invariant on the plain-space fallback, the path a keystroke
+/// takes when nothing expands.
+#[test]
+fn hook_clink_keeps_zero_width_space_and_cursor_in_sync_on_insert_space() {
+    let cfg = write_config("version = 1\n");
+    let line = "echo ab\u{200B}c";
+    let (stdout, stderr, ok) = run(
+        &["hook", "--shell", "clink", "--line-hex", &hex_of(line), "--cursor", "9"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(
+        stdout.trim(),
+        r#"return { line = "echo ab\226\128\139c ", cursor = 10 }"#
+    );
 }
 
 #[test]
