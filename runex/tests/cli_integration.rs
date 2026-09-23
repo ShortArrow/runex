@@ -2161,6 +2161,47 @@ fn hook_clink_accepts_hex_encoded_line() {
     assert_eq!(stdout.trim(), r#"return { line = "pwsh -nop -c \"mv ", cursor = 17 }"#);
 }
 
+/// The lua literal is the only place the buffer is written back, and
+/// the cursor clink receives is a char count measured on the buffer
+/// runex was given. A zero-width space used to be dropped from the
+/// literal, which shortened the line by one char and left the cursor
+/// one past its end (issue #36).
+#[test]
+fn hook_clink_keeps_zero_width_space_and_cursor_in_sync_on_expand() {
+    let cfg = write_config(
+        "version = 1\n[[abbr]]\nkey = \"gst\"\nexpand = \"git status\"\n",
+    );
+    let line = "echo ab\u{200B}c && gst";
+    let (stdout, stderr, ok) = run(
+        &["hook", "--shell", "clink", "--line-hex", &hex_of(line), "--cursor", "16"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(
+        stdout.trim(),
+        r#"return { line = "echo ab\226\128\139c && git status ", cursor = 24 }"#
+    );
+}
+
+/// Same invariant on the plain-space fallback, the path a keystroke
+/// takes when nothing expands.
+#[test]
+fn hook_clink_keeps_zero_width_space_and_cursor_in_sync_on_insert_space() {
+    let cfg = write_config("version = 1\n");
+    let line = "echo ab\u{200B}c";
+    let (stdout, stderr, ok) = run(
+        &["hook", "--shell", "clink", "--line-hex", &hex_of(line), "--cursor", "9"],
+        Some(cfg.path()),
+        None,
+    );
+    assert!(ok, "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(
+        stdout.trim(),
+        r#"return { line = "echo ab\226\128\139c ", cursor = 10 }"#
+    );
+}
+
 #[test]
 fn hook_rejects_malformed_line_hex() {
     let cfg = write_config("version = 1\n");

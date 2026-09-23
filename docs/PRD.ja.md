@@ -202,7 +202,6 @@ expand = "git commit -m"
 
 - 実運用で見つかる新しい failure mode に応じて、`doctor` と `init` の診断を強化する
 - clink のキー押下テスト。現状の clink のテストは、テンプレートが組み立てる cmd.exe のコマンドラインを実際の cmd.exe で実行するもの（`runex/tests/cli_integration.rs`）で、clink 自体は動かしていない
-- clink 向けの無損失なバッファリテラル。`lua_quote_string` が落とす文字（NUL、RLO、BOM、ゼロ幅文字）を含むバッファをそのまま返せるようにする（ADR 0003 の Consequences）
 - Windows PowerShell 5.1 はネイティブコマンドへの引数から `"` を落とすため、`"` を含むバッファは `"` を失った形でフックに届く。修正は未着手で、`docs/setup.md` に記載している
 
 ### 後回し

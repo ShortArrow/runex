@@ -39,6 +39,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **clink: a buffer containing a zero-width or bidi character keeps
+  it, and the cursor stays in place (#36).** `lua_quote_string` dropped
+  NUL, the Unicode line separators (U+0085, U+2028, U+2029) and the
+  deceptive-Unicode set (RLO, BOM, ZWSP and friends) from the lua
+  literal the hook writes the buffer back with. The cursor that travels
+  with it is a char count taken on the buffer runex received, so every
+  dropped character shortened the line while the cursor kept pointing
+  at the old offset — one past the end of a line ending in such a
+  character. The plain-space path was affected as much as an expansion,
+  making any keystroke after a pasted zero-width space move the caret
+  wrong. Those characters are now escaped as their UTF-8 bytes in
+  three-digit decimal `\DDD`, the form the ASCII controls already used
+  and the only one clink's Lua 5.2 accepts.
 - **`runex add` now edits a symlinked config through the link on Linux
   (#34).** With `~/.config/runex/config.toml` a symlink into a dotfiles
   repository, `runex add` failed with `Too many levels of symbolic
