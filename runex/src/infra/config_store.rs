@@ -95,18 +95,29 @@ pub(crate) fn read_config_source(path: &Path) -> Result<String, ConfigError> {
     Ok(content)
 }
 
-/// Open a config file for append/write, rejecting symlinks at the
-/// final path component on Unix. Prevents an attacker who controls the
-/// config directory from redirecting writes to a sensitive file via a
-/// swapped symlink.
+/// Open a config file for append/write. On Unix the path is resolved
+/// first and `O_NOFOLLOW` is applied to the *resolved* path, so a
+/// config that is a symlink into a dotfiles repository (the idiom
+/// [`read_config_source`] and [`atomically_write_config`] already
+/// follow) is appended to *through* the link: the repository copy
+/// grows and the link survives. Applying `O_NOFOLLOW` to the
+/// unresolved path fails with `ELOOP` instead, which is what issue
+/// #34 reports for `runex add` — the same symptom #29 reported for
+/// `runex remove`.
+///
+/// When the path cannot be resolved (it does not exist yet) the given
+/// path is used, so the `create(true)` behaviour for a fresh config is
+/// unchanged. The symlink trade-off is the one already accepted for
+/// reads and for the atomic rewrite.
 #[cfg(unix)]
 fn open_config_for_append_safely(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
+        .open(&resolved)
 }
 
 #[cfg(not(unix))]
@@ -361,6 +372,48 @@ mod tests {
             "the symlink target must have lost the rule: {repo_copy}"
         );
         assert!(repo_copy.contains("key = \"aaa\""), "unrelated rules must survive");
+    }
+
+    /// `add` must follow the same dotfiles idiom as `remove` and the
+    /// reads: append through the link into the repository copy and
+    /// leave the link in place. Applying `O_NOFOLLOW` to the
+    /// unresolved path fails with `ELOOP` instead (issue #34).
+    #[test]
+    fn append_abbr_block_writes_through_symlink_and_keeps_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("dotfiles");
+        std::fs::create_dir_all(&repo).unwrap();
+        let target = repo.join("config.toml");
+        std::fs::write(
+            &target,
+            "version = 1
+
+[[abbr]]
+key = \"aaa\"
+expand = \"echo a\"
+",
+        )
+        .unwrap();
+        let link = dir.path().join("config.toml");
+        let Some(()) = try_symlink_file(&target, &link) else { return; };
+
+        let result = append_abbr_block(&link, "foo", "bar", None);
+
+        assert!(result.is_ok(), "append through symlink must succeed: {result:?}");
+        assert!(
+            std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(),
+            "the config path must still be a symlink after add"
+        );
+        let repo_copy = std::fs::read_to_string(&target).unwrap();
+        assert!(
+            repo_copy.contains("key = \"foo\""),
+            "the symlink target must have gained the rule: {repo_copy}"
+        );
+        assert!(repo_copy.contains("key = \"aaa\""), "unrelated rules must survive");
+        assert!(
+            std::fs::symlink_metadata(&target).unwrap().file_type().is_file(),
+            "the symlink target must still be a regular file"
+        );
     }
 
     /// A named pipe reports `metadata().len() == 0` and

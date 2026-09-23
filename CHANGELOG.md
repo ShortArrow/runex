@@ -52,6 +52,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrong. Those characters are now escaped as their UTF-8 bytes in
   three-digit decimal `\DDD`, the form the ASCII controls already used
   and the only one clink's Lua 5.2 accepts.
+- **`runex add` now edits a symlinked config through the link on Linux
+  (#34).** With `~/.config/runex/config.toml` a symlink into a dotfiles
+  repository, `runex add` failed with `Too many levels of symbolic
+  links` and exit 1, leaving the repository copy untouched. The append
+  path applied `O_NOFOLLOW` to the path as given, while the reads and
+  `runex remove` resolve the path first (the same symptom #29 reported
+  for `remove`). The append now canonicalises the path before opening,
+  falling back to the given path when it does not exist yet so a fresh
+  config is still created.
+
 - **PTY integration tests for zsh, nu and pwsh were passing without
   running.** The shared `expectrl` harness sent `\n` to submit a line
   and never answered the cursor-position (DSR) query that reedline and
