@@ -58,7 +58,7 @@ use crate::infra::env::{xdg_cache_home_with, HomeDirResolver};
 ///   load on the exec path, so the bump exists to push `runex doctor`
 ///   into nudging Git Bash users back to `runex init bash` so they
 ///   pick up the Ctrl+C fix.
-pub(crate) const INTEGRATION_CACHE_VERSION: u32 = 2;
+pub(crate) const INTEGRATION_CACHE_VERSION: u32 = 3;
 
 /// Marker token that appears in the cache header so doctor can
 /// re-identify a runex-managed file even if the user has renamed

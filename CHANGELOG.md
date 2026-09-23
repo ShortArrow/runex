@@ -90,6 +90,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value stays joined with `=` because 5.1 drops a separate empty
   argument. PowerShell 7 behaviour is unchanged and now has a
   regression test of its own. Decision recorded in ADR 0004.
+  The cache schema version is bumped 2 → 3 so `runex doctor` reports
+  every pre-existing cache as outdated and `runex init <shell>` writes
+  the new template; without the bump an upgraded binary keeps running
+  the old pwsh bootstrap from the cache and 5.1 users never get the fix.
 - **pwsh: a multi-line buffer no longer loses its line break and
   cursor on Space (#21).** The eval text sent back to PSReadLine
   dropped every newline from the buffer (a pasted path that wraps, or
