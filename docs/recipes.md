@@ -6,10 +6,12 @@ Practical, copy-pasteable `config.toml` snippets. Pick a recipe that
 matches what you want, drop the `[[abbr]]` blocks into your config, and
 hit your trigger key.
 
-A new `[[abbr]]` block works on the next key press, because the hook
-reads the config every time. Recipes that change `[keybind]` (5, 6 and
-6b) need `runex config reload` and a new shell, because the key binding
-is embedded in the shell integration.
+After pasting, run `runex config reload` and open a new shell. On most
+shells a new `[[abbr]]` block already works on the next key press,
+because the hook reads the config every time; Git Bash embeds the
+abbreviation table in the shell integration, and every shell embeds
+`[keybind]` (recipes 5, 6 and 6b), so the reload is the rule that holds
+everywhere.
 
 Your config file lives at `$XDG_CONFIG_HOME/runex/config.toml`
 (falls back to `~/.config/runex/config.toml`). Override with

@@ -181,11 +181,14 @@ Failures (missing config, malformed buffer) are silent: the hook returns
 an `InsertSpace` action so the bootstrap inserts a literal trigger key and
 the user keeps typing.
 
-The hook reads the config on every key press, so an `[[abbr]]` change
-takes effect on the next key press without a shell restart. The
-`[keybind]` table is different: the bootstrap embeds it, so a change
-there needs a regenerated cache (`runex config reload`, or the
-automatic refresh after `runex add` / `runex remove`) and a new shell.
+The hook reads the config on every key press, so on bash (outside
+Git Bash), zsh, pwsh, clink and nu an `[[abbr]]` change takes effect
+on the next key press without a shell restart. Two things are embedded
+in the cache and need a regenerated cache (`runex config reload`, or
+the automatic refresh after `runex add` / `runex remove`) plus a new
+shell: the `[keybind]` table on every shell, and the abbreviation table
+on bash under MSYS2 or Cygwin, where the cache expands in-shell instead
+of calling the hook.
 
 ---
 
@@ -485,16 +488,16 @@ whether action is required.
 |-------|--------|---------|
 | `effective_search_path` *(Windows-only)* | `OK` | Reports the PATH runex uses when resolving `when_command_exists` entries. The breakdown `entries (process=N, +user=M, +system=K)` shows how many came from the inherited process PATH versus the registry's HKCU and HKLM `Environment\Path`. If `+user` or `+system` is non-zero, the parent process inherited a degraded PATH and runex augmented it from the registry. Useful for diagnosing `command:foo not found` warnings that contradict your shell's PATH. |
 | `effective_search_path` *(Windows-only)* | `WARN` | The process PATH is empty — almost certainly a misconfigured launcher. |
-| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `OK` | The rcfile carries the `# runex-init` marker and sources the integration cache, or the rcfile doesn't exist (treated as "user doesn't run that shell"). |
-| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `WARN` | The rcfile exists but lacks the marker (run `runex init <shell>`), or it still runs a pre-0.1.16 `runex export <shell>` line instead of sourcing the cache (delete that line and run `runex init <shell>`). |
+| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `OK` | The rc file carries the `# runex-init` marker and sources the integration cache, or the rc file doesn't exist (treated as "user doesn't run that shell"). |
+| `integration:bash` / `:zsh` / `:pwsh` / `:nu` | `WARN` | The rc file exists but lacks the marker (run `runex init <shell>`), or it still runs a pre-0.1.16 `runex export <shell>` line instead of sourcing the cache (delete that line and run `runex init <shell>`). |
 | `integration:<shell>:cache` | `OK` | The cache file's header names the current schema version and a `runex-bin:` path that exists, or no cache exists yet (the detail names the `runex init <shell>` that creates it). |
 | `integration:<shell>:cache` | `WARN` | The header is missing, malformed, from an older schema version, or names a binary that no longer exists. Run `runex init <shell>`. |
 | `integration:clink` | `OK` | The `runex.lua` on disk matches what this binary would write, or no clink integration is found (treated as "user doesn't run clink"). |
 | `integration:clink` | `WARN` | The on-disk `runex.lua` differs from the current output, typically after upgrading runex. Run `runex init clink` and open a new cmd window. |
 
-`integration:clink` compares file content because clink has no rcfile:
+`integration:clink` compares file content because clink has no rc file:
 the lua file is loaded directly from clink's scripts directory. The
-other four shells get a marker check on the rcfile plus a header check
+other four shells get a marker check on the rc file plus a header check
 on the cache. A template change that every user must pick up is shipped
 by bumping the cache schema version, which turns every older cache into
 a `WARN`.
