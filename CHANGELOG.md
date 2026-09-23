@@ -97,6 +97,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while `--cursor` still counted `~\.local\bin\claude.exe`, and the
   space landed mid-path. The bootstrap now passes the buffer as one
   `--line=<value>` token, whose first character can never be `~`.
+  Superseded within this release by the hex transport below (#35),
+  which covers the same case.
+- **pwsh: a buffer containing `"` now expands under Windows PowerShell
+  5.1 (#35).** 5.1 re-quotes each native-command argument when it
+  builds the child command line, and an unbalanced `"` inside the
+  value breaks the parity, so the child's CRT split `--line=echo "a b"
+  c` again and clap rejected the leftover `b c`. The hook exited
+  non-zero and the trigger key fell back to inserting a literal space,
+  which silently cost 5.1 users the expansion on most quoted lines; a
+  buffer such as `echo "" c` came back with a quote missing and the
+  cursor off by one. The bootstrap now sends the buffer as
+  `--line-hex=<hex of the UTF-8 bytes>`, the same wire form clink uses
+  (#22, #23), whose `[0-9A-F]` alphabet neither host rewrites. The
+  value stays joined with `=` because 5.1 drops a separate empty
+  argument. PowerShell 7 behaviour is unchanged and now has a
+  regression test of its own. Decision recorded in ADR 0004.
+  The cache schema version is bumped 2 → 3 so `runex doctor` reports
+  every pre-existing cache as outdated and `runex init <shell>` writes
+  the new template; without the bump an upgraded binary keeps running
+  the old pwsh bootstrap from the cache and 5.1 users never get the fix.
 - **pwsh: a multi-line buffer no longer loses its line break and
   cursor on Space (#21).** The eval text sent back to PSReadLine
   dropped every newline from the buffer (a pasted path that wraps, or

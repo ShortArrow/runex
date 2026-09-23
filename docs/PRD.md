@@ -237,9 +237,6 @@ See `docs/config-reference.md` for the full field reference.
 - A clink keystroke test. Today's clink coverage runs the template's
   cmd.exe command line through a real cmd.exe
   (`runex/tests/cli_integration.rs`) but does not drive clink itself.
-- Windows PowerShell 5.1 strips `"` from native-command arguments, so
-  a buffer containing `"` reaches the hook without it. No fix yet;
-  documented in `docs/setup.md`.
 
 ### Later
 
