@@ -188,7 +188,7 @@ jobs:
         # v1.0.4 (2026-03-23) is the first release on Node 24, silencing
         # the "Node.js 20 actions are deprecated" warning. Re-evaluate
         # when v1.1 / v2 ships.
-        uses: rust-lang/crates-io-auth-action@v1.0.4
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
 
       - name: Dry-run publish (sanity check)
         # Catches packaging issues (missing files, dirty workdir,

@@ -334,7 +334,11 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
     short-lived crates.io token at job start, scoped to the
     workflow + repository registered with crates.io.
 
-- [ ] **AUR `runex-bin`.** Use the helper:
+- [ ] **AUR `runex-bin`.** Both AUR helpers need `makepkg`, so run
+  them from an Arch environment (on the Windows workstation that is
+  `wsl -d archlinux`, where the clones live at `~/aur/runex-bin` and
+  `~/aur/runex`); on Windows they stop with "AUR clone not found".
+  Use the helper:
 
   ```bash
   packaging/aur-bin/release.sh X.Y.Z ~/aur/runex-bin
@@ -397,15 +401,18 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
 - [ ] **Homebrew tap.** Use the helper:
 
   ```bash
-  packaging/homebrew/release.sh X.Y.Z /v/homebrew-runex
+  packaging/homebrew/release.sh X.Y.Z /v/github.com/ShortArrow/homebrew-runex
   ```
 
-  The script fetches the macOS arm64/x86_64 and Linux arm64/x86_64
+  The second argument is the tap clone (`git clone
+  https://github.com/ShortArrow/homebrew-runex.git` anywhere; the
+  path above is where it lives on the Windows workstation). The
+  script fetches the macOS arm64/x86_64 and Linux arm64/x86_64
   tarball sha256s, rewrites `Formula/runex.rb`, and stages a commit
   in the tap clone. Push manually:
 
   ```bash
-  cd /v/homebrew-runex
+  cd /v/github.com/ShortArrow/homebrew-runex
   git push origin main
   ```
 
@@ -423,8 +430,11 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
 
 - [ ] **Polish the GitHub release body.** The auto-generated body
   is bare. Fill it in using the template in `### GitHub release body`
-  below — at minimum, a summary, install commands, and an
-  upgrade-notice line for clink users when shell templates changed.
+  below — at minimum, a summary, install commands, and the upgrade
+  notes: the clink line whenever `templates/clink.lua` changed, and
+  the `runex init <shell>` line for the other shells whenever
+  `INTEGRATION_CACHE_VERSION` was bumped (check the CHANGELOG entry
+  that bumped it).
 
 - [ ] **Verify each install channel resolves the new version.**
   Don't trust the publish steps to have succeeded — check:
@@ -668,6 +678,11 @@ Workflow hardening:
 - `actions/checkout` on build jobs uses `persist-credentials: false`
   so the checkout token is not left on disk for malicious build code
   to exfiltrate.
-- All third-party actions are pinned to commit SHAs.
-- Only `GITHUB_TOKEN` is used — no external secrets, no automatic
-  `cargo publish`.
+- All third-party actions are pinned to commit SHAs, including
+  `rust-lang/crates-io-auth-action` in the job that holds
+  `id-token: write`.
+- No long-lived secrets: build and release jobs use `GITHUB_TOKEN`
+  only, and the `publish-crates` job exchanges the workflow's OIDC
+  token for a short-lived crates.io token (see "crates.io (OIDC
+  Trusted Publishing)" above) rather than reading a stored
+  `CARGO_REGISTRY_TOKEN`.
