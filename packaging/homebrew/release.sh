@@ -5,7 +5,7 @@
 #   packaging/homebrew/release.sh <version> [<tap-repo-path>]
 #
 # Example:
-#   packaging/homebrew/release.sh 0.1.12 /v/homebrew-runex
+#   packaging/homebrew/release.sh 0.1.12 /v/github.com/ShortArrow/homebrew-runex
 #
 # What it does:
 #   1. Fetches SHA256 of the macOS/Linux (x86_64/aarch64) release tarballs
@@ -20,7 +20,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 VERSION="$1"
-TAP_REPO="${2:-/v/homebrew-runex}"
+TAP_REPO="${2:-/v/github.com/ShortArrow/homebrew-runex}"
 
 if [[ ! -d "$TAP_REPO/.git" ]]; then
     echo "Tap clone not found: $TAP_REPO" >&2

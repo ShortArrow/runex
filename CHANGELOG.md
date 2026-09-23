@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Documentation rewritten against the current behaviour.**
   `docs/setup.md` now describes the static-cache layout that `runex
-  init` actually writes (header version 2, Windows and Unix cache
+  init` actually writes (the versioned header, Windows and Unix cache
   paths, the PowerShell 7 profile path, `runex config reload`, the
   `integration:<shell>:cache` doctor rows) instead of the pre-0.1.16
   `eval "$(runex export <shell>)"` form; `docs/config-reference.md`
@@ -129,7 +129,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PowerShell 5.1 too, but 5.1's native-argument passing strips a `"`
   from the buffer before `runex hook` receives it, so a buffer
   containing `"` still comes back without it there; that is a
-  pre-existing 5.1 limitation upstream of this fix.
+  pre-existing 5.1 limitation upstream of this fix. Fixed within this
+  release by the hex transport (#35) below.
 - **`runex remove` now edits a symlinked config in place (#29).**
   The atomic rewrite (temp file + rename) renamed over the config
   path itself, so when `~/.config/runex/config.toml` was a symlink
