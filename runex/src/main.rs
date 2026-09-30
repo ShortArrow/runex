@@ -957,10 +957,10 @@ mod tests {
     ///   indefinitely waiting for a writer — process hangs.
     /// - Device files (`/dev/zero`, `/dev/urandom`): report len=0, `read_to_string()`
     ///   fills memory unboundedly.
+    ///
     /// The function must check `metadata().is_file()` before attempting to read.
     #[cfg(unix)]
     mod rc_file_non_regular {
-        use super::*;
 
     #[test]
     fn read_rc_content_rejects_named_pipe() {

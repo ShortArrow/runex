@@ -105,10 +105,10 @@ fn spawn_cyg_bash(rcfile: &std::path::Path, home: &std::path::Path) -> expectrl:
     session.set_expect_timeout(Some(Duration::from_secs(5)));
 
     session
-        .send_line(&format!("export HOME={}", home.display()))
+        .send_line(format!("export HOME={}", home.display()))
         .ok();
     session
-        .send_line(&format!(
+        .send_line(format!(
             "export XDG_CACHE_HOME={} XDG_CONFIG_HOME={}",
             home.join(".cache").display(),
             home.join(".config").display()
@@ -122,7 +122,7 @@ fn spawn_cyg_bash(rcfile: &std::path::Path, home: &std::path::Path) -> expectrl:
     // Source the rcfile *after* OSTYPE is set so the case "${OSTYPE-}"
     // switch routes us to the bake path at source time. The rcfile
     // sources the cache file in turn.
-    session.send_line(&format!("source {}", rcfile.display())).ok();
+    session.send_line(format!("source {}", rcfile.display())).ok();
 
     use expectrl::Regex;
     session.expect(Regex(r"__PTY__\s*$")).ok();

@@ -252,7 +252,7 @@ pub(crate) fn byte_cursor_to_utf16(line: &str, byte_cursor: usize) -> usize {
 /// that are not UTF-8; the caller turns the error into a non-zero exit,
 /// which the template treats as "insert a literal space".
 pub(crate) fn decode_hex_line(hex: &str) -> Result<String, String> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(format!("--line-hex has odd length {}", hex.len()));
     }
     let bytes = hex
