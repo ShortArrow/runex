@@ -142,6 +142,22 @@ expand = "git commit -am '{}'"
 key    = "up{number}"
 expand = "cd {number}"
 number = "../"
+
+[[abbr]]
+key    = "k*"
+match  = "glob"
+expand = "kubectl {*}"
+
+[[abbr]]
+key    = "gs*"
+match  = "glob"
+expand = "WRONG {*}"
+
+[[abbr]]
+key    = "m*"
+match  = "glob"
+expand = "missing {*}"
+when_command_exists = ["runex-no-such-command"]
 "#,
     )
     .unwrap();
@@ -545,6 +561,78 @@ echo "LINE=$READLINE_LINE""#,
             out.contains("LINE=true && git status "),
             "[{label}] bake must expand `gst` after `&&` (issue #9 list \
              command position); got:\n{out}"
+        );
+    });
+}
+
+/// Issue #19: a glob rule expands on the bake path with the `*` capture
+/// substituted into `{*}`.
+#[test]
+fn bake_expands_glob_rule_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_expands_glob_rule", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="kgp"
+READLINE_POINT=3
+__runex_expand
+echo "LINE=[$READLINE_LINE] POINT=$READLINE_POINT""#,
+        );
+        assert!(
+            out.contains("LINE=[kubectl gp ] POINT=11"),
+            "[{label}] bake path must render `kgp` via the glob table to `kubectl gp `; got:\n{out}"
+        );
+    });
+}
+
+/// bash 5.2's `patsub_replacement` turns `&` in a `${var//pat/rep}`
+/// replacement into the matched text; the capture must stay literal.
+#[test]
+fn bake_glob_capture_keeps_ampersand_literal_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_glob_capture_ampersand", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="ka&b"
+READLINE_POINT=4
+__runex_expand
+echo "LINE=[$READLINE_LINE]""#,
+        );
+        assert!(
+            out.contains("LINE=[kubectl a&b ]"),
+            "[{label}] the glob capture must be inserted literally; got:\n{out}"
+        );
+    });
+}
+
+/// A glob rule whose `when_command_exists` fails must not fire on the
+/// bake path, matching the exec path.
+#[test]
+fn bake_glob_rule_respects_when_command_exists_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_glob_rule_when_command_exists", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="mx"
+READLINE_POINT=2
+__runex_expand
+echo "LINE=[$READLINE_LINE]""#,
+        );
+        assert!(
+            out.contains("LINE=[mx ]"),
+            "[{label}] a glob rule with a missing command must insert a plain space; got:\n{out}"
         );
     });
 }

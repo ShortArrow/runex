@@ -99,6 +99,14 @@ pub(crate) enum ConfigError {
     NumberContainsDeceptiveUnicode(usize),
     #[error("abbr rule #{0}: `number` unit exceeds maximum length of {MAX_NUMBER_UNIT_BYTES} bytes")]
     NumberUnitTooLong(usize),
+
+    // match = "glob" (issue #19, ADR 0005)
+    #[error("abbr rule #{0}: glob key has no `*` or `?` (use an exact key instead)")]
+    GlobKeyWithoutWildcard(usize),
+    #[error("abbr rule #{0}: glob key contains more than one `*` (only one is allowed)")]
+    GlobKeyHasMultipleStars(usize),
+    #[error("abbr rule #{0}: glob key contains one of [ ] {{ }} ( ) \\ (only `*` and `?` are special in a glob key)")]
+    GlobKeyHasUnsupportedChar(usize),
 }
 
 /// Reason a validation check failed. Shared across the walker (for doctor
@@ -147,6 +155,11 @@ pub(crate) enum ValidationReason {
     NumberContainsControlChar,
     NumberContainsDeceptiveUnicode,
     NumberUnitTooLong,
+
+    // match = "glob" (issue #19, rule-scope)
+    GlobKeyWithoutWildcard,
+    GlobKeyHasMultipleStars,
+    GlobKeyHasUnsupportedChar,
 }
 
 /// A single validation failure.
@@ -210,6 +223,9 @@ impl ValidationIssue {
             ValidationReason::NumberContainsControlChar => "`number` unit contains an ASCII control character",
             ValidationReason::NumberContainsDeceptiveUnicode => "`number` unit contains a Unicode visual-deception character",
             ValidationReason::NumberUnitTooLong => "`number` unit exceeds the maximum length",
+            ValidationReason::GlobKeyWithoutWildcard => "glob key has no `*` or `?`",
+            ValidationReason::GlobKeyHasMultipleStars => "glob key contains more than one `*`",
+            ValidationReason::GlobKeyHasUnsupportedChar => "glob key contains one of [ ] { } ( ) \\",
         }
     }
 
@@ -252,6 +268,9 @@ impl ValidationIssue {
             ValidationReason::NumberContainsControlChar => ConfigError::NumberContainsControlChar(n),
             ValidationReason::NumberContainsDeceptiveUnicode => ConfigError::NumberContainsDeceptiveUnicode(n),
             ValidationReason::NumberUnitTooLong => ConfigError::NumberUnitTooLong(n),
+            ValidationReason::GlobKeyWithoutWildcard => ConfigError::GlobKeyWithoutWildcard(n),
+            ValidationReason::GlobKeyHasMultipleStars => ConfigError::GlobKeyHasMultipleStars(n),
+            ValidationReason::GlobKeyHasUnsupportedChar => ConfigError::GlobKeyHasUnsupportedChar(n),
         }
     }
 }
@@ -498,11 +517,45 @@ fn visit_validation_issues(
             && walk_cmds_issues(cmds, rule_index, &mut f).is_break() {
                 return;
             }
-        // (b-4) {number} placeholder consistency (issue #1)
+        // (b-4) glob key shape (issue #19); before the {number} walk so a
+        //       brace in a glob key is reported as a glob problem first
+        if walk_glob_key_issues(abbr, rule_index, &mut f).is_break() {
+            return;
+        }
+        // (b-5) {number} placeholder consistency (issue #1)
         if walk_number_placeholder_issues(abbr, rule_index, &mut f).is_break() {
             return;
         }
     }
+}
+
+/// Characters a glob key must not contain. The Git Bash bake dispatcher
+/// hands the key to a bash `case` pattern, where these would take on
+/// meanings the Rust matcher does not share (ADR 0005).
+const GLOB_KEY_FORBIDDEN_CHARS: &[char] = &['[', ']', '{', '}', '(', ')', '\\'];
+
+/// Validate a `match = "glob"` key (issue #19): only `*` and `?` are
+/// special, at most one `*`, and at least one wildcard.
+fn walk_glob_key_issues(
+    abbr: &crate::domain::model::Abbr,
+    rule_index: usize,
+    mut f: impl FnMut(ValidationIssue) -> std::ops::ControlFlow<()>,
+) -> std::ops::ControlFlow<()> {
+    if abbr.match_kind != Some(crate::domain::model::MatchKind::Glob) {
+        return std::ops::ControlFlow::Continue(());
+    }
+    let key = &abbr.key;
+    let mut report = |reason| f(ValidationIssue::Rule { rule_index, field_path: "key".into(), reason });
+    if key.contains(GLOB_KEY_FORBIDDEN_CHARS) {
+        report(ValidationReason::GlobKeyHasUnsupportedChar)?;
+    }
+    if key.matches('*').count() > 1 {
+        report(ValidationReason::GlobKeyHasMultipleStars)?;
+    }
+    if !key.contains(['*', '?']) {
+        report(ValidationReason::GlobKeyWithoutWildcard)?;
+    }
+    std::ops::ControlFlow::Continue(())
 }
 
 /// Validate the cross-field invariants of the `{number}` placeholder
@@ -2001,4 +2054,85 @@ expand = "git commit -m"
             assert!(cfg.abbr[0].number.is_none());
         }
     }
+
+    mod glob_match {
+        //! Validation of `match = "glob"` rules (issue #19, ADR 0005).
+        use super::*;
+
+        fn glob_rule(key: &str) -> String {
+            format!("version = 1\n[[abbr]]\nkey = '{key}'\nmatch = \"glob\"\nexpand = \"x {{*}}\"\n")
+        }
+
+        #[test]
+        fn accepts_a_glob_rule_and_reads_the_match_field() {
+            let cfg = parse_config(&glob_rule("g*")).unwrap();
+            assert_eq!(cfg.abbr[0].match_kind, Some(crate::domain::model::MatchKind::Glob));
+        }
+
+        #[test]
+        fn accepts_question_mark_only_glob() {
+            assert!(parse_config(&glob_rule("k?")).is_ok());
+        }
+
+        #[test]
+        fn rejects_a_glob_key_without_any_wildcard() {
+            let err = parse_config(&glob_rule("gst")).unwrap_err();
+            assert!(matches!(err, ConfigError::GlobKeyWithoutWildcard(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_a_glob_key_with_two_stars() {
+            let err = parse_config(&glob_rule("g*x*")).unwrap_err();
+            assert!(matches!(err, ConfigError::GlobKeyHasMultipleStars(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_characters_that_bash_patterns_would_interpret() {
+            for key in ["g[a]*", "g]*", "g{x}*", "g(*", "g)*", r"g\*"] {
+                let err = parse_config(&glob_rule(key)).unwrap_err();
+                assert!(
+                    matches!(err, ConfigError::GlobKeyHasUnsupportedChar(1)),
+                    "key {key:?}: got {err:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_an_unknown_match_value() {
+            let err = parse_config(
+                "version = 1\n[[abbr]]\nkey = 'g*'\nmatch = \"shellglob\"\nexpand = \"x\"\n",
+            )
+            .unwrap_err();
+            assert!(matches!(err, ConfigError::Parse(_)), "got {err:?}");
+        }
+
+        #[test]
+        fn doctor_walker_reports_every_glob_problem_with_the_key_path() {
+            let glob = |key: &str| crate::domain::model::Abbr {
+                key: key.into(),
+                expand: crate::domain::model::PerShellString::All("x".into()),
+                when_command_exists: None,
+                number: None,
+                match_kind: Some(crate::domain::model::MatchKind::Glob),
+            };
+            let cfg = Config {
+                version: 1,
+                keybind: crate::domain::model::KeybindConfig::default(),
+                precache: crate::domain::model::PrecacheConfig::default(),
+                abbr: vec![glob("g*x*"), glob("plain")],
+            };
+            let issues = collect_validation_issues(&cfg);
+            let reasons: Vec<_> = issues
+                .iter()
+                .filter_map(|i| match i {
+                    ValidationIssue::Rule { rule_index, field_path, reason } => {
+                        Some((*rule_index, field_path.as_str(), reason.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(reasons.contains(&(1, "key", ValidationReason::GlobKeyHasMultipleStars)), "{reasons:?}");
+            assert!(reasons.contains(&(2, "key", ValidationReason::GlobKeyWithoutWildcard)), "{reasons:?}");
+        }
+    } // mod glob_match
 }

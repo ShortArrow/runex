@@ -604,6 +604,46 @@ up4<Space>     # → cd ../../../../
 
 ---
 
+## 15. One rule for a family of tokens with a glob key
+
+**Use case:** `kgp`, `kgs`, `kdp`… should all become `kubectl <rest>`
+without a rule per subcommand.
+
+```toml
+[[abbr]]
+key    = "k*"
+match  = "glob"
+expand = "kubectl {*}"
+```
+
+```
+kgp<Space>     # → kubectl gp
+k<Space>       # → kubectl        (the * matched nothing)
+```
+
+`*` matches any run of characters (including none) and `?` exactly
+one; `{*}` in `expand` receives what the `*` matched. Exact and
+`{number}` rules are tried first, so a hand-written `kga` rule still
+wins over the glob.
+
+A broad prefix claims every token that starts with it, including real
+commands: `k*` would also rewrite `kill` typed at command position.
+Choose a prefix you never type as a command, or use `?` to fix the
+length:
+
+```toml
+[[abbr]]
+key    = "d??"
+match  = "glob"
+expand = "docker"   # dps, dls, dim… but not `diff`
+```
+
+Glob keys accept only `*` and `?` as special characters, at most one
+`*`. See [config-reference.md](config-reference.md#glob-keys-match--glob)
+for the exact rules.
+
+---
+
 ## Next steps
 
 - Full field reference: [config-reference.md](config-reference.md)

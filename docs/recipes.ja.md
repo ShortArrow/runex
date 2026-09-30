@@ -474,6 +474,37 @@ up4<Space>     # → cd ../../../../
 
 ---
 
+## 15. glob の key で似たトークンをまとめて扱う
+
+**用途:** `kgp`、`kgs`、`kdp` などを、サブコマンドごとにルールを書かずに `kubectl <残り>` へ展開する。
+
+```toml
+[[abbr]]
+key    = "k*"
+match  = "glob"
+expand = "kubectl {*}"
+```
+
+```
+kgp<Space>     # → kubectl gp
+k<Space>       # → kubectl        (* は何にも一致していない)
+```
+
+`*` は 0 文字以上の任意の文字列に、`?` はちょうど 1 文字に一致します。`expand` の `{*}` には `*` が一致した部分が入ります。完全一致と `{number}` のルールが先に試されるので、`kga` を個別に書けばそちらが glob より優先されます。
+
+範囲の広い接頭辞は、その文字で始まるトークンをすべて取り込みます。実在のコマンドも例外ではなく、`k*` はコマンド位置で打った `kill` も書き換えます。コマンドとして打たない接頭辞を選ぶか、`?` で長さを固定してください。
+
+```toml
+[[abbr]]
+key    = "d??"
+match  = "glob"
+expand = "docker"   # dps、dls、dim などには一致し、diff には一致しない
+```
+
+glob の key で特別な意味を持つのは `*` と `?` だけで、`*` は 1 つまでです。細かい規則は [config-reference.md](config-reference.md#glob-keys-match--glob)（英語）にあります。
+
+---
+
 ## 次に読む
 
 - フィールドの一覧: [config-reference.md](config-reference.md)（英語。`[keybind]` と `[[abbr]]` の各フィールド、検証規則、`runex doctor` 各行の意味）

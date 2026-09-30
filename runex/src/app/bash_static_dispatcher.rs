@@ -79,7 +79,7 @@ fn bash_double_quote_for_assoc(s: &str) -> String {
 fn exact_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
     for rule in &config.abbr {
-        if rule.key.contains('{') {
+        if rule.key.contains('{') || rule.match_kind.is_some() {
             continue;
         }
         let Some(expand) = rule.expand.for_shell(Shell::Bash) else {
@@ -106,7 +106,7 @@ fn exact_table_lines(config: &Config) -> String {
 fn cond_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
     for rule in &config.abbr {
-        if rule.key.contains('{') {
+        if rule.key.contains('{') || rule.match_kind.is_some() {
             continue;
         }
         let Some(cmds) = rule
@@ -171,6 +171,46 @@ fn pattern_table_lines(config: &Config) -> String {
     lines.join("\n")
 }
 
+/// Build the `__runex_abbr_globs` indexed-array body for `match =
+/// "glob"` rules (issue #19), in config order:
+///
+/// ```text
+///     "pattern"$'\037'"head"$'\037'"tail"$'\037'"template"$'\037'"cmd1:cmd2"
+/// ```
+///
+/// `pattern` is the key, handed unquoted to a bash `case` pattern; the
+/// validator restricts glob keys to `*` and `?` as special characters,
+/// so bash and `domain::expand::match_glob_key` agree on what matches.
+/// `head` / `tail` are the key's parts around its single `*` (the whole
+/// key and `""` when there is none) and strip the capture out of the
+/// token. The last field carries `when_command_exists` for bash, joined
+/// with `:` like [`cond_table_lines`].
+fn glob_table_lines(config: &Config) -> String {
+    let mut lines = Vec::new();
+    for rule in config.abbr.iter().filter(|rule| rule.match_kind.is_some()) {
+        let Some(template) = rule.expand.for_shell(Shell::Bash) else {
+            continue;
+        };
+        let (head, tail) = rule.key.split_once('*').unwrap_or((rule.key.as_str(), ""));
+        let conds = rule
+            .when_command_exists
+            .as_ref()
+            .and_then(|w| w.for_shell(Shell::Bash))
+            .map(|cmds| cmds.join(":"))
+            .unwrap_or_default();
+        let sep = "$'\\037'";
+        lines.push(format!(
+            "    {pattern}{sep}{head}{sep}{tail}{sep}{template}{sep}{conds}",
+            pattern = bash_double_quote_for_assoc(&rule.key),
+            head = bash_double_quote_for_assoc(head),
+            tail = bash_double_quote_for_assoc(tail),
+            template = bash_double_quote_for_assoc(template),
+            conds = bash_double_quote_for_assoc(&conds),
+        ));
+    }
+    lines.join("\n")
+}
+
 /// Generate the full cygwin/msys bake-mode dispatcher block:
 ///
 /// 1. `__runex_cyg_expand` — public entry, called from `__runex_expand`
@@ -193,10 +233,13 @@ pub(crate) fn generate_cygwin_dispatcher(config: &Config) -> String {
     let exact_block = if exact.is_empty() { String::new() } else { format!("\n{exact}\n") };
     let cond_block  = if cond.is_empty()  { String::new() } else { format!("\n{cond}\n") };
     let pattern_block = if patterns.is_empty() { String::new() } else { format!("\n{patterns}\n") };
+    let globs = glob_table_lines(config);
+    let glob_block = if globs.is_empty() { String::new() } else { format!("\n{globs}\n") };
     format!(
         r#"declare -gA __runex_abbr_expand=({exact_block})
 declare -gA __runex_abbr_cond=({cond_block})
 __runex_abbr_patterns=({pattern_block})
+__runex_abbr_globs=({glob_block})
 __runex_cyg_render() {{
     local text="$1" pos
     pos="${{text%%\{{\}}*}}"
@@ -245,6 +288,33 @@ __runex_cyg_pattern_lookup() {{
         rendered="${{template//\{{number\}}/$repeated}}"
         [ "${{#rendered}}" -gt 4096 ] && continue
         __runex_cyg_render "$rendered"
+        return
+    done
+}}
+__runex_cyg_glob_lookup() {{
+    local token="$1" entry pattern head tail template conds rest rendered c missing
+    __runex_out=""
+    __runex_cursor_off=""
+    for entry in "${{__runex_abbr_globs[@]}}"; do
+        IFS=$'\037' read -r pattern head tail template conds <<<"$entry"
+        case "$token" in $pattern) ;; *) continue ;; esac
+        missing=0
+        if [ -n "$conds" ]; then
+            local IFS=':'
+            for c in $conds; do command -v "$c" >/dev/null 2>&1 || missing=1; done
+            IFS=$' \t\n'
+        fi
+        [ "$missing" -eq 1 ] && continue
+        rest="${{token#$head}}"
+        rest="${{rest%$tail}}"
+        rendered="${{template//"{{*}}"/"$rest"}}"
+        [ "${{#rendered}}" -gt 4096 ] && continue
+        __runex_cyg_render "$rendered"
+        if [ "$__runex_out" = "$token" ]; then
+            __runex_out=""
+            __runex_cursor_off=""
+            continue
+        fi
         return
     done
 }}
@@ -310,6 +380,7 @@ __runex_cyg_expand() {{
     fi
     __runex_cyg_lookup "$token"
     if [ -z "$__runex_out" ]; then __runex_cyg_pattern_lookup "$token"; fi
+    if [ -z "$__runex_out" ]; then __runex_cyg_glob_lookup "$token"; fi
     if [ -z "$__runex_out" ]; then
         READLINE_LINE="${{left}} ${{right}}"
         READLINE_POINT=$((READLINE_POINT + 1))
@@ -327,6 +398,7 @@ __runex_cyg_expand() {{
         exact_block = exact_block,
         cond_block = cond_block,
         pattern_block = pattern_block,
+        glob_block = glob_block,
     )
 }
 
@@ -588,6 +660,65 @@ mod tests {
         up.number = Some("../".into());
         let s = cond_table_lines(&cfg(vec![up]));
         assert_eq!(s, "");
+    }
+
+    // ── glob rules (issue #19) ─────────────────────────────────────────
+
+    fn glob_abbr(key: &str, expand: &str) -> Abbr {
+        Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Glob),
+            ..plain_abbr(key, expand)
+        }
+    }
+
+    #[test]
+    fn exact_table_lines_excludes_glob_keys() {
+        let c = cfg(vec![plain_abbr("gst", "git status"), glob_abbr("k*", "kubectl {*}")]);
+        let s = exact_table_lines(&c);
+        assert!(s.contains("[\"gst\"]"), "exact table should keep gst: {s}");
+        assert!(!s.contains("k*"), "a glob key must not be looked up literally: {s}");
+    }
+
+    #[test]
+    fn cond_table_lines_excludes_glob_keys() {
+        let rule = Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Glob),
+            ..abbr_with_when_cmds("k*", "kubectl {*}", vec!["kubectl"])
+        };
+        assert_eq!(cond_table_lines(&cfg(vec![rule])), "");
+    }
+
+    #[test]
+    fn glob_table_lines_emits_pattern_head_tail_template_and_conditions() {
+        let rule = Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Glob),
+            ..abbr_with_when_cmds("d*x", "docker {*}", vec!["docker", "grep"])
+        };
+        let s = glob_table_lines(&cfg(vec![rule]));
+        assert_eq!(
+            s,
+            "    \"d*x\"$'\\037'\"d\"$'\\037'\"x\"$'\\037'\"docker {*}\"$'\\037'\"docker:grep\""
+        );
+    }
+
+    #[test]
+    fn glob_table_lines_uses_the_whole_key_as_head_without_a_star() {
+        let s = glob_table_lines(&cfg(vec![glob_abbr("k?", "kubectl")]));
+        assert_eq!(s, "    \"k?\"$'\\037'\"k?\"$'\\037'\"\"$'\\037'\"kubectl\"$'\\037'\"\"");
+    }
+
+    #[test]
+    fn glob_table_lines_skips_exact_and_number_rules() {
+        let c = cfg(vec![plain_abbr("gst", "git status"), pattern_abbr("up{number}", "cd {number}", "../")]);
+        assert_eq!(glob_table_lines(&c), "");
+    }
+
+    #[test]
+    fn bake_expand_tries_the_glob_table_after_the_number_table() {
+        let s = generate_cygwin_dispatcher(&cfg(vec![glob_abbr("k*", "kubectl {*}")]));
+        let number = s.find("__runex_cyg_pattern_lookup \"$token\"; fi").expect("number lookup call");
+        let glob = s.find("__runex_cyg_glob_lookup \"$token\"; fi").expect("glob lookup call");
+        assert!(number < glob, "glob rules come after {{number}} rules (ADR 0005)");
     }
 
     // ── pattern_table_lines ────────────────────────────────────────────

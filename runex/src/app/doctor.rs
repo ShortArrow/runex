@@ -270,7 +270,7 @@ fn suggest_similar(name: &str, candidates: &[&str]) -> Option<String> {
 const KNOWN_TOP_LEVEL_KEYS: &[&str] = &["version", "keybind", "precache", "abbr"];
 
 /// Known keys inside an `[[abbr]]` table.
-const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists", "number"];
+const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists", "number", "match"];
 
 /// Known keys inside `[keybind]`.
 const KNOWN_KEYBIND_KEYS: &[&str] = &["trigger", "self_insert"];
@@ -963,6 +963,21 @@ expad = "git commit -m"
             checks.iter().any(|c| c.detail.contains("expad") && c.detail.contains("did you mean 'expand'")),
             "must detect 'expad' typo: {:?}", checks
         );
+    }
+
+    /// `match` selects the glob pattern language (issue #19); strict mode
+    /// must not flag it as a typo.
+    #[test]
+    fn check_match_field_is_known() {
+        let toml = r#"
+version = 1
+[[abbr]]
+key = "g*"
+match = "glob"
+expand = "git {*}"
+"#;
+        let checks = check_unknown_fields(toml);
+        assert!(checks.is_empty(), "`match` must be a known abbr field: {checks:?}");
     }
 
     #[test]
