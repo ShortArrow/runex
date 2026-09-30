@@ -334,8 +334,8 @@ expand = "kubectl {*}"
 **Matching:**
 
 - Glob rules are tried after every exact and `{number}` rule, so `gst` as an exact key still wins over a glob `g*` listed earlier.
-- Characters are compared, not bytes: `?` matches one `ä`. On Git Bash the match runs in bash, which compares characters only under a UTF-8 locale; under the C locale `?` matches one byte.
-- A glob rule whose rendered text equals the token is skipped (for example `key = "g*"` with `expand = "g{*}"`).
+- Characters are compared, not bytes: `?` matches one `ä`. On Git Bash the match runs in bash instead: under the C locale `?` matches one byte, and MSYS bash counts a character outside the Basic Multilingual Plane (most emoji) as two.
+- A glob rule whose rendered text equals the token, or is empty, is skipped (for example `key = "g*"` with `expand = "g{*}"`).
 - The capture is inserted as typed. A `{}` inside it stays literal text; only the `{}` written in `expand` places the cursor.
 - `{*}` in a key with no `*` (only `?`) is replaced by nothing.
 - A pattern without a fixed part claims every token no earlier rule claims. `k*` also rewrites `kill` typed at command position; a separator such as `k.*` avoids real commands.

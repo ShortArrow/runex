@@ -56,8 +56,9 @@ silently change existing configs.
    the existing guarantee that an exact rule beats any pattern.
 
 5. **Self-loop guard.** A glob rule whose rendered expansion equals
-   the token is skipped, like an exact rule whose `expand` equals its
-   `key`. `{number}` rules keep their current behaviour.
+   the token, or is empty, is skipped, like an exact rule whose
+   `expand` equals its `key`. `{number}` rules keep their current
+   behaviour.
 
 6. **Order of work.** Glob ships first; it needs no dependency. Regex
    waits for the `regex` crate decision and a measurement of compiling

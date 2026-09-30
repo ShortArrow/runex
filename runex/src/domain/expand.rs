@@ -326,9 +326,12 @@ fn is_exact_self_loop(abbr: &Abbr, template: &str) -> bool {
 }
 
 /// A glob rule whose rendered text equals the token would rewrite the
-/// token to itself and hide later glob rules (ADR 0005).
+/// token to itself and hide later glob rules (ADR 0005). One that
+/// renders to nothing would erase the token; it is skipped too, which
+/// also keeps the Git Bash bake path (where an empty result means "no
+/// match") in step.
 fn is_glob_self_loop(abbr: &Abbr, rendered_text: &str, token: &str) -> bool {
-    phase_of(abbr) == Phase::Glob && rendered_text == token
+    phase_of(abbr) == Phase::Glob && (rendered_text == token || rendered_text.is_empty())
 }
 
 /// Extract cursor placeholder `{}` from expansion text.
@@ -1278,5 +1281,28 @@ mod tests {
         let c = cfg(vec![abbr_glob("k*", &"{*}".repeat(100))]);
         let token = format!("k{}", "x".repeat(50));
         assert_eq!(expand(&c, &token, Shell::Bash, |_| true), ExpandResult::PassThrough(token.clone()));
+    }
+
+    #[test]
+    fn glob_rule_that_renders_to_nothing_is_skipped() {
+        let c = cfg(vec![abbr_glob("e*", "{}{*}")]);
+        assert_eq!(expand(&c, "e", Shell::Bash, |_| true), ExpandResult::PassThrough("e".into()));
+    }
+
+    #[test]
+    fn glob_rule_without_a_condition_for_this_shell_is_skipped() {
+        let rule = Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Glob),
+            when_command_exists: Some(PerShellCmds::ByShell {
+                default: None,
+                bash: None,
+                zsh: None,
+                pwsh: Some(vec!["git".into()]),
+                nu: None,
+            }),
+            ..abbr("p*", "pwshonly {*}")
+        };
+        let c = cfg(vec![rule]);
+        assert_eq!(expand(&c, "px", Shell::Bash, |_| true), ExpandResult::PassThrough("px".into()));
     }
 }

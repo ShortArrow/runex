@@ -192,12 +192,13 @@ fn glob_table_lines(config: &Config) -> String {
             continue;
         };
         let (head, tail) = rule.key.split_once('*').unwrap_or((rule.key.as_str(), ""));
-        let conds = rule
-            .when_command_exists
-            .as_ref()
-            .and_then(|w| w.for_shell(Shell::Bash))
-            .map(|cmds| cmds.join(":"))
-            .unwrap_or_default();
+        let conds = match &rule.when_command_exists {
+            None => String::new(),
+            Some(per_shell) => match per_shell.for_shell(Shell::Bash) {
+                Some(cmds) => cmds.join(":"),
+                None => continue,
+            },
+        };
         let sep = "$'\\037'";
         lines.push(format!(
             "    {pattern}{sep}{head}{sep}{tail}{sep}{template}{sep}{conds}",
@@ -291,7 +292,20 @@ __runex_cyg_pattern_lookup() {{
         return
     done
 }}
+__runex_cyg_byte_len() {{
+    local LC_ALL=C
+    __runex_len="${{#1}}"
+}}
 __runex_cyg_glob_lookup() {{
+    local restore_nocasematch=0
+    if shopt -q nocasematch; then
+        restore_nocasematch=1
+        shopt -u nocasematch
+    fi
+    __runex_cyg_glob_scan "$1"
+    if [ "$restore_nocasematch" -eq 1 ]; then shopt -s nocasematch; fi
+}}
+__runex_cyg_glob_scan() {{
     local token="$1" entry pattern head tail template conds rest left right c missing
     __runex_out=""
     __runex_cursor_off=""
@@ -318,7 +332,8 @@ __runex_cyg_glob_lookup() {{
             __runex_out="${{template//"{{*}}"/"$rest"}}"
             __runex_cursor_off=""
         fi
-        if [ "${{#__runex_out}}" -gt 4096 ]; then
+        __runex_cyg_byte_len "$__runex_out"
+        if [ "$__runex_len" -gt 4096 ]; then
             __runex_out=""
             __runex_cursor_off=""
             continue

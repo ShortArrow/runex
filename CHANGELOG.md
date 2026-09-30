@@ -34,9 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`key = "k.*"`, `expand = "kubectl {*}"` turns `k.gp` into
   `kubectl gp`). Exact and `{number}` rules are still tried first,
   whatever their position. Works on every shell, including the Git
-  Bash bake path, where `?` compares characters only under a UTF-8
-  locale. Glob keys allow at most one `*` and reject `[ ] { } ( ) \`.
-  `match` is now a recognised field: an `[[abbr]]` table that already
+  Bash bake path, where `?` follows bash: one byte under the C locale,
+  and emoji count as two characters. Glob keys allow at most one `*`
+  and reject `[ ] { } ( ) \`. `match` is now a recognised field: an `[[abbr]]` table that already
   carried an unrelated `match = ...` key, silently ignored until now,
   fails to load unless the value is `"glob"`. Decision recorded in
   ADR 0005, which also fixes the syntax for regex keys (#20).

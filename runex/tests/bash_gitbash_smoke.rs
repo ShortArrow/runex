@@ -163,6 +163,22 @@ when_command_exists = ["runex-no-such-command"]
 key    = "c*"
 match  = "glob"
 expand = "echo '{*}{}'"
+
+[[abbr]]
+key    = "p*"
+match  = "glob"
+expand = "pwshonly {*}"
+when_command_exists = { pwsh = ["git"] }
+
+[[abbr]]
+key    = "e*"
+match  = "glob"
+expand = "{}{*}"
+
+[[abbr]]
+key    = "l*"
+match  = "glob"
+expand = "{*}{*}{*}{*}"
 "#,
     )
     .unwrap();
@@ -671,5 +687,38 @@ echo "LINE=[$READLINE_LINE] POINT=$READLINE_POINT""#,
             out.contains("LINE=[kubectl {}x ] POINT=12"),
             "[{label}] a typed {{}} without a template placeholder stays literal; got:\n{out}"
         );
+    });
+}
+
+/// Parity with the exec path found by differential review of #46.
+#[test]
+fn bake_glob_edge_cases_match_the_exec_path_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_glob_edge_cases", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="px"; READLINE_POINT=2; __runex_expand
+echo "PWSH_ONLY=[$READLINE_LINE]"
+shopt -s nocasematch
+READLINE_LINE="Kx"; READLINE_POINT=2; __runex_expand
+echo "NOCASE=[$READLINE_LINE]"
+shopt -q nocasematch && echo "NOCASE_RESTORED=on"
+shopt -u nocasematch
+READLINE_LINE="e"; READLINE_POINT=1; __runex_expand
+echo "EMPTY=[$READLINE_LINE]"
+export LC_ALL=C.UTF-8
+tok="l"; for i in $(seq 1 600); do tok="${tok}ä"; done
+READLINE_LINE="$tok"; READLINE_POINT=${#tok}; __runex_expand
+[ "$READLINE_LINE" = "$tok " ] && echo "BYTECAP=ok""#,
+        );
+        assert!(out.contains("PWSH_ONLY=[px ]"), "[{label}] a rule whose condition has no bash entry is skipped; got:\n{out}");
+        assert!(out.contains("NOCASE=[Kx ]"), "[{label}] glob matching is case-sensitive even under nocasematch; got:\n{out}");
+        assert!(out.contains("NOCASE_RESTORED=on"), "[{label}] the user's nocasematch setting is restored; got:\n{out}");
+        assert!(out.contains("EMPTY=[e ]"), "[{label}] a glob rule that renders to nothing is skipped; got:\n{out}");
+        assert!(out.contains("BYTECAP=ok"), "[{label}] the 4096 cap counts bytes, as the exec path does; got:\n{out}");
     });
 }
