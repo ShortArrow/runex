@@ -402,6 +402,7 @@ mod tests {
             expand: crate::domain::model::PerShellString::All(exp.into()),
             when_command_exists: None,
             number: None,
+            match_kind: None,
         }
     }
 
@@ -413,6 +414,7 @@ mod tests {
                 cmds.into_iter().map(String::from).collect(),
             )),
             number: None,
+            match_kind: None,
         }
     }
 

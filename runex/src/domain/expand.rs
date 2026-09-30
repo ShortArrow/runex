@@ -442,6 +442,7 @@ mod tests {
             expand: PerShellString::All(expand.into()),
             when_command_exists: None,
             number: None,
+            match_kind: None,
         }
     }
 
@@ -453,6 +454,7 @@ mod tests {
                 cmds.into_iter().map(String::from).collect(),
             )),
             number: None,
+            match_kind: None,
         }
     }
 
@@ -462,6 +464,7 @@ mod tests {
             expand,
             when_command_exists: None,
             number: None,
+            match_kind: None,
         }
     }
 
@@ -471,6 +474,7 @@ mod tests {
             expand: PerShellString::All(expand.into()),
             when_command_exists: None,
             number: Some(unit.into()),
+            match_kind: None,
         }
     }
 
@@ -970,6 +974,7 @@ mod tests {
             expand: PerShellString::All("echo '{number}' '{}'".into()),
             when_command_exists: None,
             number: Some("X".into()),
+            match_kind: None,
         };
         let c = cfg(vec![a]);
         // wrap3 → echo 'XXX' '{}' → echo 'XXX' '' with cursor at offset 12

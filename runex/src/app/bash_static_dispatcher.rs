@@ -412,6 +412,7 @@ mod tests {
             expand: PerShellString::All(expand.into()),
             when_command_exists: None,
             number: None,
+            match_kind: None,
         }
     }
 
@@ -462,6 +463,7 @@ mod tests {
             },
             when_command_exists: None,
             number: None,
+            match_kind: None,
         };
         let s = exact_table_lines(&cfg(vec![a]));
         assert!(s.contains("[\"open\"]=\"xdg-open --wait\""), "got: {s}");
@@ -482,6 +484,7 @@ mod tests {
             },
             when_command_exists: None,
             number: None,
+            match_kind: None,
         };
         let s = exact_table_lines(&cfg(vec![a, plain_abbr("gst", "git status")]));
         assert!(!s.contains("winonly"), "got: {s}");
@@ -514,6 +517,7 @@ mod tests {
                 cmds.into_iter().map(String::from).collect(),
             )),
             number: None,
+            match_kind: None,
         }
     }
 
@@ -560,6 +564,7 @@ mod tests {
                 zsh: None, pwsh: None, nu: None,
             }),
             number: None,
+            match_kind: None,
         };
         let s = cond_table_lines(&cfg(vec![a]));
         assert!(s.contains("[\"open\"]=\"xdg-open\""), "got: {s}");
@@ -593,6 +598,7 @@ mod tests {
             expand: PerShellString::All(expand.into()),
             when_command_exists: None,
             number: Some(unit.into()),
+            match_kind: None,
         }
     }
 
@@ -631,6 +637,7 @@ mod tests {
             expand: PerShellString::All("cd {number}".into()),
             when_command_exists: None,
             number: None,
+            match_kind: None,
         };
         let s = pattern_table_lines(&cfg(vec![no_unit]));
         assert_eq!(s, "");
@@ -644,6 +651,7 @@ mod tests {
             expand: PerShellString::All("cd".into()),
             when_command_exists: None,
             number: Some("../".into()),
+            match_kind: None,
         };
         let s = pattern_table_lines(&cfg(vec![weird]));
         assert_eq!(s, "");
@@ -662,6 +670,7 @@ mod tests {
             },
             when_command_exists: None,
             number: Some("../".into()),
+            match_kind: None,
         };
         let s = pattern_table_lines(&cfg(vec![a]));
         assert_eq!(s, "");

@@ -376,6 +376,7 @@ mod tests {
             expand: crate::domain::model::PerShellString::All(format!("expand-{key}")),
             when_command_exists: None,
             number: None,
+            match_kind: None,
         }
     }
 

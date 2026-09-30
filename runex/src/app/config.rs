@@ -1689,6 +1689,7 @@ expand = "git commit -m"
                 expand: PerShellString::All(expand.into()),
                 when_command_exists: None,
                 number: None,
+                match_kind: None,
             }
         }
 
@@ -1740,6 +1741,7 @@ expand = "git commit -m"
                 },
                 when_command_exists: None,
                 number: None,
+                match_kind: None,
             }]);
             let issues = collect_validation_issues(&cfg);
             assert_eq!(issues.len(), 1);
@@ -1763,6 +1765,7 @@ expand = "git commit -m"
                     "bad&inject".into(),  // metachar at list position 2 (1-based)
                 ])),
                 number: None,
+                match_kind: None,
             }]);
             let issues = collect_validation_issues(&cfg);
             assert_eq!(issues.len(), 1);
@@ -1789,6 +1792,7 @@ expand = "git commit -m"
                     nu: None,
                 }),
                 number: None,
+                match_kind: None,
             }]);
             let issues = collect_validation_issues(&cfg);
             assert_eq!(issues.len(), 1);
@@ -1839,6 +1843,7 @@ expand = "git commit -m"
                 expand: PerShellString::All("lsd".into()),
                 when_command_exists: Some(PerShellCmds::All(cmds)),
                 number: None,
+                match_kind: None,
             }]);
             let err = first_validation_error(&cfg).expect("must fail");
             assert!(matches!(err, ConfigError::TooManyCmds(1)), "got {err:?}");
@@ -1858,6 +1863,7 @@ expand = "git commit -m"
                 },
                 when_command_exists: None,
                 number: None,
+                match_kind: None,
             }]);
             let err = first_validation_error(&cfg).expect("must fail");
             assert!(matches!(err, ConfigError::ExpandEmpty(1)), "got {err:?}");
@@ -1878,6 +1884,7 @@ expand = "git commit -m"
                 },
                 when_command_exists: Some(PerShellCmds::All(vec!["bad&entry".into()])),
                 number: None,
+                match_kind: None,
             }]);
             let issues = collect_validation_issues(&cfg);
             assert_eq!(issues.len(), 3);
