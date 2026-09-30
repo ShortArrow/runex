@@ -259,8 +259,7 @@ fn try_provider(provider: (&str, Vec<&str>)) -> Result<String, ClipboardError> {
         if cmd == "wl-paste" {
             return Ok(String::new());
         }
-        return Err(ClipboardError::Io(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(ClipboardError::Io(io::Error::other(
             format!("{cmd} exited with status {}", output.status),
         )));
     }
@@ -275,13 +274,11 @@ fn decode(bytes: &[u8]) -> Result<String, ClipboardError> {
     // pbpaste) is already UTF-8.
     if bytes.starts_with(&[0xFF, 0xFE]) {
         let payload = &bytes[2..];
-        if payload.len() % 2 != 0 {
+        if !payload.len().is_multiple_of(2) {
             return Err(ClipboardError::Decode);
         }
-        let mut units = Vec::with_capacity(payload.len() / 2);
-        for chunk in payload.chunks_exact(2) {
-            units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
-        }
+        let (pairs, _) = payload.as_chunks::<2>();
+        let units: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
         return String::from_utf16(&units).map_err(|_| ClipboardError::Decode);
     }
     String::from_utf8(bytes.to_vec()).map_err(|_| ClipboardError::Decode)

@@ -22,10 +22,7 @@ use crate::domain::shell::{
 };
 
 fn trigger_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> {
-    let keybind = match config {
-        Some(config) => &config.keybind,
-        None => return None,
-    };
+    let keybind = &config?.keybind;
 
     match shell {
         Shell::Bash => keybind.trigger.bash.or(keybind.trigger.default),
@@ -37,10 +34,7 @@ fn trigger_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> {
 }
 
 fn self_insert_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> {
-    let keybind = match config {
-        Some(config) => &config.keybind,
-        None => return None,
-    };
+    let keybind = &config?.keybind;
 
     match shell {
         Shell::Bash => keybind.self_insert.bash.or(keybind.self_insert.default),
@@ -55,10 +49,7 @@ fn self_insert_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> 
 /// honours this; other shells always return None and `parse_config`
 /// rejects configurations that try to set them.
 fn paste_intercept_for(shell: Shell, config: Option<&Config>) -> Option<TriggerKey> {
-    let keybind = match config {
-        Some(config) => &config.keybind,
-        None => return None,
-    };
+    let keybind = &config?.keybind;
     match shell {
         Shell::Nu => keybind.paste_intercept.nu,
         _ => None,

@@ -432,6 +432,6 @@ mod dsr_tests {
     fn unrelated_bytes_never_match_and_carry_stays_bounded() {
         let mut carry = Vec::new();
         assert!(!dsr_query_completes(&mut carry, b"\x1b[0m\x1b[K some output"));
-        assert!(carry.len() <= DSR_QUERY.len() - 1);
+        assert!(carry.len() < DSR_QUERY.len());
     }
 }

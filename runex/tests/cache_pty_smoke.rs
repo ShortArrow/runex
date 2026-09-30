@@ -108,10 +108,10 @@ fn user_typed_trigger_key_expands_via_static_cache() {
     // contaminate the real user's `~`. expectrl spawns via `sh -c` so
     // we use `export` after the prompt.
     session
-        .send_line(&format!("export HOME={}", home.display()))
+        .send_line(format!("export HOME={}", home.display()))
         .ok();
     session
-        .send_line(&format!(
+        .send_line(format!(
             "export XDG_CACHE_HOME={} XDG_CONFIG_HOME={}",
             home.join(".cache").display(),
             home.join(".config").display()

@@ -56,3 +56,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test --locked
+
+  clippy:
+    name: Clippy (${{ matrix.os }})
+    # Separate from the test jobs so every OS lints with the same
+    # stable clippy (the Linux test image carries an older toolchain,
+    # and lints differ between versions). Each OS compiles a different
+    # set of `cfg` blocks, so all three run.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings

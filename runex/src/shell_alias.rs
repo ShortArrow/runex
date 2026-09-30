@@ -156,11 +156,11 @@ pub(crate) fn run_with_timeout(
             return None;
         }
         let millis = remaining.as_millis().min(i32::MAX as u128) as i32;
-        if poll_readable(fd, millis) {
-            if let DrainResult::Overflow = drain_readable(fd, &mut buf, MAX_SUBPROCESS_OUTPUT_BYTES) {
-                kill_process_group(child.id());
-                return None;
-            }
+        if poll_readable(fd, millis)
+            && let DrainResult::Overflow = drain_readable(fd, &mut buf, MAX_SUBPROCESS_OUTPUT_BYTES)
+        {
+            kill_process_group(child.id());
+            return None;
         }
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -428,13 +428,13 @@ mod tests {
             .args(["--norc", "--noprofile", "-c", "alias"])
             .output();
 
-        if let Ok(out) = output {
-            if out.status.success() {
-                assert!(
-                    !sentinel.exists(),
-                    "bash alias detection must not execute ~/.bashrc (startup files sourced)"
-                );
-            }
+        if let Ok(out) = output
+            && out.status.success()
+        {
+            assert!(
+                !sentinel.exists(),
+                "bash alias detection must not execute ~/.bashrc (startup files sourced)"
+            );
         }
     }
 
