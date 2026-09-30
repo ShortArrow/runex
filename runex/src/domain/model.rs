@@ -187,7 +187,7 @@ pub(crate) struct Abbr {
 }
 
 /// Pattern language selected by an `[[abbr]]` rule's `match` field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum MatchKind {
     /// `*` matches zero or more characters, `?` exactly one.

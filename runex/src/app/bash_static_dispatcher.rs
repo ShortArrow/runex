@@ -292,7 +292,7 @@ __runex_cyg_pattern_lookup() {{
     done
 }}
 __runex_cyg_glob_lookup() {{
-    local token="$1" entry pattern head tail template conds rest rendered c missing
+    local token="$1" entry pattern head tail template conds rest left right c missing
     __runex_out=""
     __runex_cursor_off=""
     for entry in "${{__runex_abbr_globs[@]}}"; do
@@ -307,9 +307,22 @@ __runex_cyg_glob_lookup() {{
         [ "$missing" -eq 1 ] && continue
         rest="${{token#$head}}"
         rest="${{rest%$tail}}"
-        rendered="${{template//"{{*}}"/"$rest"}}"
-        [ "${{#rendered}}" -gt 4096 ] && continue
-        __runex_cyg_render "$rendered"
+        if [[ "$template" == *"{{}}"* ]]; then
+            left="${{template%%"{{}}"*}}"
+            right="${{template#*"{{}}"}}"
+            left="${{left//"{{*}}"/"$rest"}}"
+            right="${{right//"{{*}}"/"$rest"}}"
+            __runex_out="${{left}}${{right}}"
+            __runex_cursor_off="${{#left}}"
+        else
+            __runex_out="${{template//"{{*}}"/"$rest"}}"
+            __runex_cursor_off=""
+        fi
+        if [ "${{#__runex_out}}" -gt 4096 ]; then
+            __runex_out=""
+            __runex_cursor_off=""
+            continue
+        fi
         if [ "$__runex_out" = "$token" ]; then
             __runex_out=""
             __runex_cursor_off=""

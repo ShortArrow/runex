@@ -31,12 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Glob keys: `match = "glob"` (#19).** A rule can read its `key` as
   a pattern where `*` matches zero or more characters and `?` exactly
   one; `{*}` in `expand` receives what the `*` matched
-  (`key = "k*"`, `expand = "kubectl {*}"` turns `kgp` into
+  (`key = "k.*"`, `expand = "kubectl {*}"` turns `k.gp` into
   `kubectl gp`). Exact and `{number}` rules are still tried first,
   whatever their position. Works on every shell, including the Git
-  Bash bake path. Glob keys allow at most one `*` and reject
-  `[ ] { } ( ) \`. Decision recorded in ADR 0005, which also fixes the
-  syntax for regex keys (#20).
+  Bash bake path, where `?` compares characters only under a UTF-8
+  locale. Glob keys allow at most one `*` and reject `[ ] { } ( ) \`.
+  `match` is now a recognised field: an `[[abbr]]` table that already
+  carried an unrelated `match = ...` key, silently ignored until now,
+  fails to load unless the value is `"glob"`. Decision recorded in
+  ADR 0005, which also fixes the syntax for regex keys (#20).
 - **`runex config reload` (#30).** Regenerates the installed shell
   integration caches (`<XDG_CACHE_HOME>/runex/integration.<ext>` for
   bash / zsh / pwsh / nu) from the config file, for the case where

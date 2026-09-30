@@ -480,26 +480,19 @@ up4<Space>     # → cd ../../../../
 
 ```toml
 [[abbr]]
-key    = "k*"
+key    = "k.*"
 match  = "glob"
 expand = "kubectl {*}"
 ```
 
 ```
-kgp<Space>     # → kubectl gp
-k<Space>       # → kubectl        (* は何にも一致していない)
+k.gp<Space>    # → kubectl gp
+kill<Space>    # kill のまま
 ```
 
-`*` は 0 文字以上の任意の文字列に、`?` はちょうど 1 文字に一致します。`expand` の `{*}` には `*` が一致した部分が入ります。完全一致と `{number}` のルールが先に試されるので、`kga` を個別に書けばそちらが glob より優先されます。
+`*` は 0 文字以上の任意の文字列に、`?` はちょうど 1 文字に一致し、`expand` の `{*}` には `*` が一致した部分が入ります。完全一致と `{number}` のルールが先に試されるので、`k.ga` を個別に書けばそちらが glob に勝ちます。
 
-範囲の広い接頭辞は、その文字で始まるトークンをすべて取り込みます。実在のコマンドも例外ではなく、`k*` はコマンド位置で打った `kill` も書き換えます。コマンドとして打たない接頭辞を選ぶか、`?` で長さを固定してください。
-
-```toml
-[[abbr]]
-key    = "d??"
-match  = "glob"
-expand = "docker"   # dps、dls、dim などには一致し、diff には一致しない
-```
+key の `.` は、実在のコマンドと重ならないための区切りです。`k*` だけにすると、他のルールに当たらない `k` 始まりのトークンがすべて対象になり、コマンド位置で打った `kill` は `kubectl ill` に変わってしまいます。
 
 glob の key で特別な意味を持つのは `*` と `?` だけで、`*` は 1 つまでです。細かい規則は [config-reference.md](config-reference.md#glob-keys-match--glob)（英語）にあります。
 

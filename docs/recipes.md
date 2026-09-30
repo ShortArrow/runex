@@ -611,32 +611,24 @@ without a rule per subcommand.
 
 ```toml
 [[abbr]]
-key    = "k*"
+key    = "k.*"
 match  = "glob"
 expand = "kubectl {*}"
 ```
 
 ```
-kgp<Space>     # → kubectl gp
-k<Space>       # → kubectl        (the * matched nothing)
+k.gp<Space>    # → kubectl gp
+kill<Space>    # stays kill
 ```
 
 `*` matches any run of characters (including none) and `?` exactly
 one; `{*}` in `expand` receives what the `*` matched. Exact and
-`{number}` rules are tried first, so a hand-written `kga` rule still
+`{number}` rules are tried first, so a hand-written `k.ga` rule still
 wins over the glob.
 
-A broad prefix claims every token that starts with it, including real
-commands: `k*` would also rewrite `kill` typed at command position.
-Choose a prefix you never type as a command, or use `?` to fix the
-length:
-
-```toml
-[[abbr]]
-key    = "d??"
-match  = "glob"
-expand = "docker"   # dps, dls, dim… but not `diff`
-```
+The `.` in the key keeps the rule away from real commands. A plain
+`k*` would match every token starting with `k` that no other rule
+claims, so `kill` typed at command position would become `kubectl ill`.
 
 Glob keys accept only `*` and `?` as special characters, at most one
 `*`. See [config-reference.md](config-reference.md#glob-keys-match--glob)

@@ -158,6 +158,11 @@ key    = "m*"
 match  = "glob"
 expand = "missing {*}"
 when_command_exists = ["runex-no-such-command"]
+
+[[abbr]]
+key    = "c*"
+match  = "glob"
+expand = "echo '{*}{}'"
 "#,
     )
     .unwrap();
@@ -633,6 +638,38 @@ echo "LINE=[$READLINE_LINE]""#,
         assert!(
             out.contains("LINE=[mx ]"),
             "[{label}] a glob rule with a missing command must insert a plain space; got:\n{out}"
+        );
+    });
+}
+
+/// A `{}` typed inside the glob capture is literal text; only the
+/// template's own `{}` places the cursor (review of #46).
+#[test]
+fn bake_glob_capture_braces_do_not_move_the_cursor_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_glob_capture_braces", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="cA{}B"
+READLINE_POINT=5
+__runex_expand
+echo "LINE=[$READLINE_LINE] POINT=$READLINE_POINT"
+READLINE_LINE="k{}x"
+READLINE_POINT=4
+__runex_expand
+echo "LINE=[$READLINE_LINE] POINT=$READLINE_POINT""#,
+        );
+        assert!(
+            out.contains("LINE=[echo 'A{}B'] POINT=10"),
+            "[{label}] the template's {{}} must place the cursor; got:\n{out}"
+        );
+        assert!(
+            out.contains("LINE=[kubectl {}x ] POINT=12"),
+            "[{label}] a typed {{}} without a template placeholder stays literal; got:\n{out}"
         );
     });
 }

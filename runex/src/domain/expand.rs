@@ -141,8 +141,9 @@ fn split_once_number_placeholder(key: &str) -> Option<(&str, &str)> {
 }
 
 /// Render `abbr.expand` into a final string given the bindings
-/// captured from the token. Returns `None` when the rendered output
-/// would exceed `MAX_RENDERED_EXPAND_BYTES` or when a required
+/// captured from the token, keeping any cursor placeholder `{}` in
+/// place. Used for display (`which`). Returns `None` when the rendered
+/// output would exceed `MAX_RENDERED_EXPAND_BYTES` or when a required
 /// binding has no corresponding unit (the validator catches that
 /// shape at parse time; this is a defensive `None`).
 pub(crate) fn render_expansion(
@@ -150,6 +151,47 @@ pub(crate) fn render_expansion(
     shell: Shell,
     bindings: &Bindings,
 ) -> Option<String> {
+    let base = render_number(abbr, shell, bindings)?;
+    substitute_glob_capture(&base, bindings)
+}
+
+/// Render the text to insert and the cursor offset. The cursor
+/// placeholder is located in the template before the glob capture is
+/// substituted, so a `{}` the user typed inside the capture stays
+/// literal text instead of being taken for the placeholder.
+fn render_with_cursor(abbr: &Abbr, shell: Shell, bindings: &Bindings) -> Option<(String, Option<usize>)> {
+    let base = render_number(abbr, shell, bindings)?;
+    let (text, cursor) = extract_cursor_placeholder(&base);
+    let Some(pos) = cursor else {
+        return Some((substitute_glob_capture(&text, bindings)?, None));
+    };
+    let left = substitute_glob_capture(&text[..pos], bindings)?;
+    let right = substitute_glob_capture(&text[pos..], bindings)?;
+    let cursor = left.len();
+    let joined = left + &right;
+    (joined.len() <= MAX_RENDERED_EXPAND_BYTES).then_some((joined, Some(cursor)))
+}
+
+/// Replace every `{*}` with the glob capture. The final length is
+/// computed first, so a template with many `{*}` and a long token is
+/// refused without building the oversized string.
+fn substitute_glob_capture(text: &str, bindings: &Bindings) -> Option<String> {
+    let Some(captured) = &bindings.glob else {
+        return Some(text.to_string());
+    };
+    let occurrences = text.matches(GLOB_CAPTURE_PLACEHOLDER).count();
+    let final_len = captured
+        .len()
+        .checked_mul(occurrences)?
+        .checked_add(text.len() - occurrences * GLOB_CAPTURE_PLACEHOLDER.len())?;
+    if final_len > MAX_RENDERED_EXPAND_BYTES {
+        return None;
+    }
+    Some(text.replace(GLOB_CAPTURE_PLACEHOLDER, captured))
+}
+
+/// Apply the `{number}` repetition to the template for `shell`.
+fn render_number(abbr: &Abbr, shell: Shell, bindings: &Bindings) -> Option<String> {
     let template = abbr.expand.for_shell(shell)?;
     let rendered = match bindings.number {
         None => template.to_string(),
@@ -169,11 +211,7 @@ pub(crate) fn render_expansion(
             rendered
         }
     };
-    let rendered = match &bindings.glob {
-        None => rendered,
-        Some(captured) => rendered.replace(GLOB_CAPTURE_PLACEHOLDER, captured),
-    };
-    (rendered.len() <= MAX_RENDERED_EXPAND_BYTES).then_some(rendered)
+    Some(rendered)
 }
 
 /// A single skipped rule — part of the `which_abbr` trace.
@@ -269,9 +307,8 @@ where
             return None;
         }
     }
-    let rendered = render_expansion(abbr, shell, bindings)?;
-    let (text, cursor_offset) = extract_cursor_placeholder(&rendered);
-    if text == token {
+    let (text, cursor_offset) = render_with_cursor(abbr, shell, bindings)?;
+    if is_glob_self_loop(abbr, &text, token) {
         return None;
     }
     Some(ExpandResult::Expanded { text, cursor_offset })
@@ -280,10 +317,18 @@ where
 /// An exact rule whose `expand` is its own `key` would rewrite the token
 /// to itself; it is skipped before its conditions are evaluated, so
 /// `which --why` reports it as a self-loop rather than a failed
-/// condition. Pattern rules are checked after rendering instead, since
-/// their raw template never equals the key.
+/// condition. Glob rules are checked after rendering instead
+/// ([`is_glob_self_loop`]), since their raw template never equals the
+/// key. `{number}` rules and exact rules that only add a `{}` keep
+/// expanding, as they always have.
 fn is_exact_self_loop(abbr: &Abbr, template: &str) -> bool {
     phase_of(abbr) == Phase::Exact && abbr.key == template
+}
+
+/// A glob rule whose rendered text equals the token would rewrite the
+/// token to itself and hide later glob rules (ADR 0005).
+fn is_glob_self_loop(abbr: &Abbr, rendered_text: &str, token: &str) -> bool {
+    phase_of(abbr) == Phase::Glob && rendered_text == token
 }
 
 /// Extract cursor placeholder `{}` from expansion text.
@@ -427,7 +472,9 @@ where
         // added later if `which --why` needs to distinguish this case.
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     };
-    if extract_cursor_placeholder(&expansion).0 == token {
+    if let Some((text, _)) = render_with_cursor(abbr, shell, bindings)
+        && is_glob_self_loop(abbr, &text, token)
+    {
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     }
     WhichOutcome::Hit { expansion, satisfied }
@@ -1190,5 +1237,46 @@ mod tests {
             }
             other => panic!("expected AllSkipped, got {other:?}"),
         }
+    }
+
+    // ── regressions found in review of #46 ─────────────────────────────────
+
+    #[test]
+    fn exact_rule_that_only_adds_a_cursor_placeholder_still_expands() {
+        let c = cfg(vec![abbr("ls", "ls{}"), abbr("ls", "lsd")]);
+        assert_eq!(
+            expand(&c, "ls", Shell::Bash, |_| true),
+            ExpandResult::Expanded { text: "ls".into(), cursor_offset: Some(2) }
+        );
+    }
+
+    #[test]
+    fn number_rule_rendering_equal_to_the_token_still_expands() {
+        let c = cfg(vec![abbr_with_number("x{number}", "x{number}", "1"), abbr("x1", "never")]);
+        assert_eq!(expand(&c, "x1", Shell::Bash, |_| true), expanded("never"));
+        let only_number = cfg(vec![abbr_with_number("x{number}", "x{number}", "1")]);
+        assert_eq!(expand(&only_number, "x1", Shell::Bash, |_| true), expanded("x1"));
+    }
+
+    #[test]
+    fn glob_capture_containing_braces_does_not_move_the_cursor_placeholder() {
+        let c = cfg(vec![abbr_glob("m*", "git commit -m '{*}{}'")]);
+        assert_eq!(
+            expand(&c, "mA{}B", Shell::Bash, |_| true),
+            ExpandResult::Expanded { text: "git commit -m 'A{}B'".into(), cursor_offset: Some(19) }
+        );
+    }
+
+    #[test]
+    fn glob_capture_containing_braces_is_inserted_literally_without_a_placeholder() {
+        let c = cfg(vec![abbr_glob("k*", "kubectl {*}")]);
+        assert_eq!(expand(&c, "k{}x", Shell::Bash, |_| true), expanded("kubectl {}x"));
+    }
+
+    #[test]
+    fn glob_render_over_the_cap_passes_through() {
+        let c = cfg(vec![abbr_glob("k*", &"{*}".repeat(100))]);
+        let token = format!("k{}", "x".repeat(50));
+        assert_eq!(expand(&c, &token, Shell::Bash, |_| true), ExpandResult::PassThrough(token.clone()));
     }
 }

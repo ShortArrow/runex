@@ -227,7 +227,7 @@ when_command_exists = { default = ["rm"], pwsh = ["Remove-Item"] }
 Rules are tried in three passes: exact keys first, then `{number}` keys, then glob keys (`match = "glob"`). A rule in an earlier pass always wins, whatever its position in the file. Within a pass, rules are evaluated top-to-bottom. For each rule:
 
 1. If `key` does not match the input token, skip.
-2. If the rule would rewrite the token to itself (self-loop), skip and continue to the next rule.
+2. If the rule would rewrite the token to itself, skip and continue to the next rule. An exact rule is checked before step 3 (`key == expand`); a glob rule after rendering (the rendered text equals the token).
 3. If `when_command_exists` lists a command that is not found, skip and continue to the next rule.
 4. Otherwise, expand and stop.
 
@@ -329,14 +329,16 @@ match  = "glob"
 expand = "kubectl {*}"
 ```
 
-`kgp<Space>` expands to `kubectl gp`, and `k<Space>` to `kubectl ` (the `*` matched nothing).
+`kgp<Space>` expands to `kubectl gp`. The `*` may match nothing, so `k<Space>` expands too.
 
 **Matching:**
 
 - Glob rules are tried after every exact and `{number}` rule, so `gst` as an exact key still wins over a glob `g*` listed earlier.
-- Characters are compared, not bytes: `?` matches one `ä`.
-- A rule whose expansion equals the token is skipped (for example `key = "g*"` with `expand = "g{*}"`).
-- A broad pattern captures every token no earlier rule claims. `g*` also matches `grep` and `git` when you type them at command position; pick a prefix you do not use for real commands.
+- Characters are compared, not bytes: `?` matches one `ä`. On Git Bash the match runs in bash, which compares characters only under a UTF-8 locale; under the C locale `?` matches one byte.
+- A glob rule whose rendered text equals the token is skipped (for example `key = "g*"` with `expand = "g{*}"`).
+- The capture is inserted as typed. A `{}` inside it stays literal text; only the `{}` written in `expand` places the cursor.
+- `{*}` in a key with no `*` (only `?`) is replaced by nothing.
+- A pattern without a fixed part claims every token no earlier rule claims. `k*` also rewrites `kill` typed at command position; a separator such as `k.*` avoids real commands.
 
 **Limits and rejections (enforced at config-load time):**
 
