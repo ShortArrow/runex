@@ -21,7 +21,7 @@ pub(crate) const GLOB_CAPTURE_PLACEHOLDER: &str = "{*}";
 /// (32 * 128 = 4096 = MAX_RENDERED_EXPAND_BYTES).
 pub(crate) const MAX_NUMERIC_REPEAT: u32 = 128;
 
-/// Hard ceiling on `render_expansion` output. Matches the static
+/// Hard ceiling on a rendered expansion. Matches the static
 /// `MAX_EXPAND_BYTES = 4096` from config validation so a dynamic
 /// repetition cannot exceed what a hand-written expansion could.
 pub(crate) const MAX_RENDERED_EXPAND_BYTES: usize = 4_096;
@@ -138,21 +138,6 @@ fn split_once_number_placeholder(key: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((prefix, suffix))
-}
-
-/// Render `abbr.expand` into a final string given the bindings
-/// captured from the token, keeping any cursor placeholder `{}` in
-/// place. Used for display (`which`). Returns `None` when the rendered
-/// output would exceed `MAX_RENDERED_EXPAND_BYTES` or when a required
-/// binding has no corresponding unit (the validator catches that
-/// shape at parse time; this is a defensive `None`).
-pub(crate) fn render_expansion(
-    abbr: &Abbr,
-    shell: Shell,
-    bindings: &Bindings,
-) -> Option<String> {
-    let base = render_number(abbr, shell, bindings)?;
-    substitute_glob_capture(&base, bindings)
 }
 
 /// Render the text to insert and the cursor offset. The cursor
@@ -469,18 +454,25 @@ where
     } else {
         Vec::new()
     };
-    let Some(expansion) = render_expansion(abbr, shell, bindings) else {
+    let Some((text, cursor)) = render_with_cursor(abbr, shell, bindings) else {
         // Render-time guard tripped (length cap, missing unit) — treat as
         // SelfLoop-equivalent skip for now. A dedicated SkipReason can be
         // added later if `which --why` needs to distinguish this case.
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     };
-    if let Some((text, _)) = render_with_cursor(abbr, shell, bindings)
-        && is_glob_self_loop(abbr, &text, token)
-    {
+    if is_glob_self_loop(abbr, &text, token) {
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     }
-    WhichOutcome::Hit { expansion, satisfied }
+    WhichOutcome::Hit { expansion: with_cursor_marker(text, cursor), satisfied }
+}
+
+/// Put the cursor placeholder back into rendered text for display, so
+/// `which` shows where the cursor lands.
+fn with_cursor_marker(mut text: String, cursor: Option<usize>) -> String {
+    if let Some(pos) = cursor {
+        text.insert_str(pos, crate::domain::model::CURSOR_PLACEHOLDER);
+    }
+    text
 }
 
 /// List abbreviations as (key, expand) pairs.
@@ -977,7 +969,7 @@ mod tests {
     #[test]
     fn render_expansion_repeats_unit_three_times() {
         let a = abbr_with_number("up{number}", "cd {number}", "../");
-        let out = render_expansion(&a, Shell::Bash, &Bindings { number: Some(3), glob: None });
+        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(3), glob: None });
         assert_eq!(out.as_deref(), Some("cd ../../../"));
     }
 
@@ -985,14 +977,14 @@ mod tests {
     fn render_expansion_rejects_when_total_repeat_exceeds_cap() {
         // unit = 50 bytes, n = 128 → 6400 > 4096
         let a = abbr_with_number("u{number}", "{number}", &"X".repeat(50));
-        let out = render_expansion(&a, Shell::Bash, &Bindings { number: Some(128), glob: None });
+        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(128), glob: None });
         assert_eq!(out, None);
     }
 
     #[test]
     fn render_expansion_without_bindings_returns_template() {
         let a = abbr("gcm", "git commit -m");
-        let out = render_expansion(&a, Shell::Bash, &Bindings::empty());
+        let out = render_number(&a, Shell::Bash, &Bindings::empty());
         assert_eq!(out.as_deref(), Some("git commit -m"));
     }
 
@@ -1002,7 +994,7 @@ mod tests {
         // catch this at parse; the runtime is defensive.
         let mut a = abbr("up{number}", "cd {number}");
         a.number = None;
-        let out = render_expansion(&a, Shell::Bash, &Bindings { number: Some(3), glob: None });
+        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(3), glob: None });
         assert_eq!(out, None);
     }
 
@@ -1304,5 +1296,19 @@ mod tests {
         };
         let c = cfg(vec![rule]);
         assert_eq!(expand(&c, "px", Shell::Bash, |_| true), ExpandResult::PassThrough("px".into()));
+    }
+
+    /// `which` must reach the same verdict as `expand` at the length cap;
+    /// the cursor placeholder is not part of the inserted text.
+    #[test]
+    fn which_agrees_with_expand_at_the_length_cap() {
+        let template = format!("{}{{*}}{{}}", "a".repeat(3073));
+        let c = cfg(vec![abbr_glob("z*", &template)]);
+        let token = format!("z{}", "b".repeat(1023));
+        assert!(matches!(expand(&c, &token, Shell::Bash, |_| true), ExpandResult::Expanded { .. }));
+        assert!(
+            matches!(which_abbr(&c, &token, Shell::Bash, |_| true), WhichResult::Expanded { .. }),
+            "which must not report a rule that expand fires as skipped"
+        );
     }
 }

@@ -180,19 +180,28 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
     checks
 }
 
-/// Whether `template` makes `abbr` rewrite every token it matches to
-/// itself, so the runtime always skips it. For an exact rule that is
-/// `expand == key`. For a glob rule it is the key with its `*` turned
-/// into `{*}` (a `?` would render literally and change the token); a
-/// glob whose `expand` merely equals its key text does expand.
+/// Whether `template` makes the runtime skip `abbr` for every token it
+/// matches. For an exact rule that is `expand == key`. For a glob rule
+/// (ADR 0005) it is a template that, with the cursor placeholder `{}`
+/// removed, is empty, or is the key with its `*` turned into `{*}` (a
+/// `?` would render literally and change the token); a glob whose
+/// `expand` merely equals its key text does expand.
 fn rewrites_token_to_itself(abbr: &crate::domain::model::Abbr, template: &str) -> bool {
     match abbr.match_kind {
         None => template == abbr.key,
         Some(crate::domain::model::MatchKind::Glob) => {
-            !abbr.key.contains('?')
-                && template == abbr.key.replacen('*', crate::domain::expand::GLOB_CAPTURE_PLACEHOLDER, 1)
+            let text = template.replace(crate::domain::model::CURSOR_PLACEHOLDER, "");
+            text.is_empty()
+                || (!abbr.key.contains('?')
+                    && text == abbr.key.replacen('*', crate::domain::expand::GLOB_CAPTURE_PLACEHOLDER, 1))
         }
     }
+}
+
+/// A rule the runtime skips for every shell never matches first, so it
+/// cannot make a later rule unreachable.
+fn is_always_skipped(abbr: &crate::domain::model::Abbr) -> bool {
+    abbr.expand.all_values().iter().all(|v| rewrites_token_to_itself(abbr, v))
 }
 
 fn check_when_command_exists<F>(config: &Config, command_exists: &F) -> Vec<Check>
@@ -516,7 +525,7 @@ pub(crate) fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
                 ),
                 detail_verbose: None,
             });
-        } else if abbr.when_command_exists.is_none() {
+        } else if abbr.when_command_exists.is_none() && !is_always_skipped(abbr) {
             // This is an unconditional rule — record it.
             unconditional_keys.insert(identity, i);
         }
@@ -789,6 +798,23 @@ mod tests {
     #[test]
     fn doctor_warns_self_loop_for_a_glob_that_renders_the_token_back() {
         assert!(self_loop_warned(&test_config(vec![glob("h*", "h{*}")])));
+    }
+
+    #[test]
+    fn doctor_warns_self_loop_for_a_glob_that_renders_the_token_back_with_a_cursor() {
+        assert!(self_loop_warned(&test_config(vec![glob("h*", "h{*}{}")])));
+    }
+
+    #[test]
+    fn doctor_warns_self_loop_for_a_glob_that_always_renders_to_nothing() {
+        assert!(self_loop_warned(&test_config(vec![glob("e*", "{}")])));
+    }
+
+    /// A rule the runtime always skips cannot shadow a later rule.
+    #[test]
+    fn doctor_does_not_report_a_rule_unreachable_behind_an_always_skipped_glob() {
+        let cfg = test_config(vec![glob("g*", "g{*}"), glob("g*", "git {*}")]);
+        assert!(check_unreachable_duplicates(&cfg).is_empty(), "{:?}", check_unreachable_duplicates(&cfg));
     }
 
     #[test]

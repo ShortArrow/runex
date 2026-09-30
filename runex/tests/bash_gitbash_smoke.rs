@@ -176,6 +176,11 @@ match  = "glob"
 expand = "{}{*}"
 
 [[abbr]]
+key    = "e*"
+match  = "glob"
+expand = "E2 {*}"
+
+[[abbr]]
 key    = "l*"
 match  = "glob"
 expand = "{*}{*}{*}{*}"
@@ -718,7 +723,10 @@ READLINE_LINE="$tok"; READLINE_POINT=${#tok}; __runex_expand
         assert!(out.contains("PWSH_ONLY=[px ]"), "[{label}] a rule whose condition has no bash entry is skipped; got:\n{out}");
         assert!(out.contains("NOCASE=[Kx ]"), "[{label}] glob matching is case-sensitive even under nocasematch; got:\n{out}");
         assert!(out.contains("NOCASE_RESTORED=on"), "[{label}] the user's nocasematch setting is restored; got:\n{out}");
-        assert!(out.contains("EMPTY=[e ]"), "[{label}] a glob rule that renders to nothing is skipped; got:\n{out}");
+        assert!(
+            out.contains("EMPTY=[E2  ]"),
+            "[{label}] a glob rule that renders to nothing is skipped and the next glob rule is tried; got:\n{out}"
+        );
         assert!(out.contains("BYTECAP=ok"), "[{label}] the 4096 cap counts bytes, as the exec path does; got:\n{out}");
     });
 }

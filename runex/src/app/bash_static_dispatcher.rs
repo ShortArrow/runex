@@ -338,7 +338,7 @@ __runex_cyg_glob_scan() {{
             __runex_cursor_off=""
             continue
         fi
-        if [ "$__runex_out" = "$token" ]; then
+        if [ -z "$__runex_out" ] || [ "$__runex_out" = "$token" ]; then
             __runex_out=""
             __runex_cursor_off=""
             continue

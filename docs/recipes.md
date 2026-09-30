@@ -606,7 +606,7 @@ up4<Space>     # → cd ../../../../
 
 ## 15. One rule for a family of tokens with a glob key
 
-**Use case:** `kgp`, `kgs`, `kdp`… should all become `kubectl <rest>`
+**Use case:** `k.gp`, `k.gs`, `k.dp`… should all become `kubectl <rest>`
 without a rule per subcommand.
 
 ```toml
