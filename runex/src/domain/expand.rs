@@ -3,12 +3,16 @@ use serde::Serialize;
 use std::cell::RefCell;
 use std::time::Instant;
 
-use crate::domain::model::{Abbr, Config, ExpandResult};
+use crate::domain::model::{Abbr, Config, ExpandResult, MatchKind};
 use crate::domain::shell::Shell;
 use crate::domain::timings::{CommandExistsCall, Timings};
 
 /// `{number}` placeholder marker (issue #1).
 pub(crate) const NUMBER_PLACEHOLDER: &str = "{number}";
+
+/// Placeholder in `expand` for the text a glob key's `*` matched
+/// (ADR 0005).
+pub(crate) const GLOB_CAPTURE_PLACEHOLDER: &str = "{*}";
 
 /// Upper bound on the value captured by `{number}`. Above this the
 /// pattern simply fails to match — the user-visible effect is the
@@ -17,24 +21,83 @@ pub(crate) const NUMBER_PLACEHOLDER: &str = "{number}";
 /// (32 * 128 = 4096 = MAX_RENDERED_EXPAND_BYTES).
 pub(crate) const MAX_NUMERIC_REPEAT: u32 = 128;
 
-/// Hard ceiling on `render_expansion` output. Matches the static
+/// Hard ceiling on a rendered expansion. Matches the static
 /// `MAX_EXPAND_BYTES = 4096` from config validation so a dynamic
 /// repetition cannot exceed what a hand-written expansion could.
 pub(crate) const MAX_RENDERED_EXPAND_BYTES: usize = 4_096;
 
-/// Captures extracted from a token by `match_abbr_key`. Currently
-/// only `{number}` is supported; the struct exists so future
-/// `{string}` / `{path}` placeholders can land without rewiring
-/// every caller.
+/// Captures extracted from a token by [`match_rule`]: the digits of a
+/// `{number}` key, or the text a glob key's `*` matched.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Bindings {
     pub number: Option<u32>,
+    pub glob: Option<String>,
 }
 
 impl Bindings {
     pub(crate) fn empty() -> Self {
-        Self { number: None }
+        Self::default()
     }
+}
+
+/// Matching phase of a rule. Phases run in declaration order and a rule
+/// in an earlier phase always beats one in a later phase, whatever the
+/// config order (ADR 0005).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Exact,
+    Number,
+    Glob,
+}
+
+const PHASES: [Phase; 3] = [Phase::Exact, Phase::Number, Phase::Glob];
+
+fn phase_of(abbr: &Abbr) -> Phase {
+    match abbr.match_kind {
+        Some(MatchKind::Glob) => Phase::Glob,
+        None if abbr.key.contains('{') => Phase::Number,
+        None => Phase::Exact,
+    }
+}
+
+/// Match one rule against a typed `token`, honouring its `match` field.
+pub(crate) fn match_rule(abbr: &Abbr, token: &str) -> Option<Bindings> {
+    match abbr.match_kind {
+        Some(MatchKind::Glob) => {
+            let captured = match_glob_key(&abbr.key, token)?;
+            Some(Bindings { glob: Some(captured), ..Bindings::empty() })
+        }
+        None => match_abbr_key(&abbr.key, token),
+    }
+}
+
+/// Match a glob `key` against `token`, comparing characters rather
+/// than bytes: `*` matches zero or more characters, `?` exactly one,
+/// and validation guarantees at most one `*`. Returns the text the `*`
+/// matched, or `""` when the key has no `*`.
+fn match_glob_key(key: &str, token: &str) -> Option<String> {
+    let token: Vec<char> = token.chars().collect();
+    let (head, tail) = match key.split_once('*') {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (key, None),
+    };
+    let head: Vec<char> = head.chars().collect();
+    let Some(tail) = tail else {
+        return glob_fixed_part_matches(&head, &token).then(String::new);
+    };
+    let tail: Vec<char> = tail.chars().collect();
+    if token.len() < head.len() + tail.len() {
+        return None;
+    }
+    let middle_end = token.len() - tail.len();
+    let matched = glob_fixed_part_matches(&head, &token[..head.len()])
+        && glob_fixed_part_matches(&tail, &token[middle_end..]);
+    matched.then(|| token[head.len()..middle_end].iter().collect())
+}
+
+/// Equal-length comparison where `?` in `pattern` accepts any character.
+fn glob_fixed_part_matches(pattern: &[char], text: &[char]) -> bool {
+    pattern.len() == text.len() && pattern.iter().zip(text).all(|(p, t)| *p == '?' || p == t)
 }
 
 /// Try to match `key` (which may contain `{number}`) against a typed
@@ -60,7 +123,7 @@ pub(crate) fn match_abbr_key(key: &str, token: &str) -> Option<Bindings> {
     if n == 0 || n > MAX_NUMERIC_REPEAT {
         return None;
     }
-    Some(Bindings { number: Some(n) })
+    Some(Bindings { number: Some(n), glob: None })
 }
 
 /// Split `key` at the single `{number}` placeholder. Returns `None`
@@ -77,16 +140,43 @@ fn split_once_number_placeholder(key: &str) -> Option<(&str, &str)> {
     Some((prefix, suffix))
 }
 
-/// Render `abbr.expand` into a final string given the bindings
-/// captured from the token. Returns `None` when the rendered output
-/// would exceed `MAX_RENDERED_EXPAND_BYTES` or when a required
-/// binding has no corresponding unit (the validator catches that
-/// shape at parse time; this is a defensive `None`).
-pub(crate) fn render_expansion(
-    abbr: &Abbr,
-    shell: Shell,
-    bindings: &Bindings,
-) -> Option<String> {
+/// Render the text to insert and the cursor offset. The cursor
+/// placeholder is located in the template before the glob capture is
+/// substituted, so a `{}` the user typed inside the capture stays
+/// literal text instead of being taken for the placeholder.
+fn render_with_cursor(abbr: &Abbr, shell: Shell, bindings: &Bindings) -> Option<(String, Option<usize>)> {
+    let base = render_number(abbr, shell, bindings)?;
+    let (text, cursor) = extract_cursor_placeholder(&base);
+    let Some(pos) = cursor else {
+        return Some((substitute_glob_capture(&text, bindings)?, None));
+    };
+    let left = substitute_glob_capture(&text[..pos], bindings)?;
+    let right = substitute_glob_capture(&text[pos..], bindings)?;
+    let cursor = left.len();
+    let joined = left + &right;
+    (joined.len() <= MAX_RENDERED_EXPAND_BYTES).then_some((joined, Some(cursor)))
+}
+
+/// Replace every `{*}` with the glob capture. The final length is
+/// computed first, so a template with many `{*}` and a long token is
+/// refused without building the oversized string.
+fn substitute_glob_capture(text: &str, bindings: &Bindings) -> Option<String> {
+    let Some(captured) = &bindings.glob else {
+        return Some(text.to_string());
+    };
+    let occurrences = text.matches(GLOB_CAPTURE_PLACEHOLDER).count();
+    let final_len = captured
+        .len()
+        .checked_mul(occurrences)?
+        .checked_add(text.len() - occurrences * GLOB_CAPTURE_PLACEHOLDER.len())?;
+    if final_len > MAX_RENDERED_EXPAND_BYTES {
+        return None;
+    }
+    Some(text.replace(GLOB_CAPTURE_PLACEHOLDER, captured))
+}
+
+/// Apply the `{number}` repetition to the template for `shell`.
+fn render_number(abbr: &Abbr, shell: Shell, bindings: &Bindings) -> Option<String> {
     let template = abbr.expand.for_shell(shell)?;
     let rendered = match bindings.number {
         None => template.to_string(),
@@ -156,34 +246,23 @@ pub(crate) enum WhichResult {
 /// `shell` selects the per-shell expand/when_command_exists entry.
 /// `command_exists` is injected for testability (DI).
 ///
-/// Matching is two-phase (issue #1): exact rules first, then
-/// `{number}`-pattern rules. Within each phase the config's rule
-/// order is preserved (first match wins). This makes exact rules
-/// always beat a pattern that would also accept the token, even
-/// when the pattern rule appears earlier in the config.
+/// Matching runs in phases (issue #1, ADR 0005): exact rules, then
+/// `{number}` rules, then glob rules. Within each phase the config's
+/// rule order is preserved (first match wins), so an exact rule always
+/// beats a pattern that would also accept the token, even when the
+/// pattern rule appears earlier in the config.
 pub(crate) fn expand<F>(config: &Config, token: &str, shell: Shell, command_exists: F) -> ExpandResult
 where
     F: Fn(&str) -> bool,
 {
-    // Phase 1: exact rules.
-    for abbr in &config.abbr {
-        if abbr.key.contains('{') || abbr.key != token {
-            continue;
-        }
-        if let Some(result) = try_expand_rule(abbr, token, shell, &command_exists, &Bindings::empty()) {
-            return result;
-        }
-    }
-    // Phase 2: pattern rules (key contains a `{...}` placeholder).
-    for abbr in &config.abbr {
-        if !abbr.key.contains('{') {
-            continue;
-        }
-        let Some(bindings) = match_abbr_key(&abbr.key, token) else {
-            continue;
-        };
-        if let Some(result) = try_expand_rule(abbr, token, shell, &command_exists, &bindings) {
-            return result;
+    for phase in PHASES {
+        for abbr in config.abbr.iter().filter(|abbr| phase_of(abbr) == phase) {
+            let Some(bindings) = match_rule(abbr, token) else {
+                continue;
+            };
+            if let Some(result) = try_expand_rule(abbr, token, shell, &command_exists, &bindings) {
+                return result;
+            }
         }
     }
     ExpandResult::PassThrough(token.to_string())
@@ -192,7 +271,7 @@ where
 /// Apply one rule with prepared bindings. Returns `Some(Expanded)` when
 /// the rule fires, `None` to skip and continue scanning. Encapsulates
 /// the shell-entry / self-loop / `when_command_exists` / render guard
-/// chain shared by both phases.
+/// chain shared by every phase.
 fn try_expand_rule<F>(
     abbr: &Abbr,
     token: &str,
@@ -203,14 +282,8 @@ fn try_expand_rule<F>(
 where
     F: Fn(&str) -> bool,
 {
-    let _ = token; // reserved for future skip-reason plumbing
-    let _ = abbr.expand.for_shell(shell)?; // no entry for this shell → skip
-    // Self-loop guard: only meaningful for exact rules (`bindings.number`
-    // is `None`). A pattern key like `up{number}` cannot equal its raw
-    // template `cd {number}`, so the check is moot in that path.
-    if bindings.number.is_none()
-        && abbr.key == abbr.expand.for_shell(shell).unwrap_or("")
-    {
+    let template = abbr.expand.for_shell(shell)?;
+    if is_exact_self_loop(abbr, template) {
         return None;
     }
     if let Some(cmds) = &abbr.when_command_exists {
@@ -219,9 +292,31 @@ where
             return None;
         }
     }
-    let rendered = render_expansion(abbr, shell, bindings)?;
-    let (text, cursor_offset) = extract_cursor_placeholder(&rendered);
+    let (text, cursor_offset) = render_with_cursor(abbr, shell, bindings)?;
+    if is_glob_self_loop(abbr, &text, token) {
+        return None;
+    }
     Some(ExpandResult::Expanded { text, cursor_offset })
+}
+
+/// An exact rule whose `expand` is its own `key` would rewrite the token
+/// to itself; it is skipped before its conditions are evaluated, so
+/// `which --why` reports it as a self-loop rather than a failed
+/// condition. Glob rules are checked after rendering instead
+/// ([`is_glob_self_loop`]), since their raw template never equals the
+/// key. `{number}` rules and exact rules that only add a `{}` keep
+/// expanding, as they always have.
+fn is_exact_self_loop(abbr: &Abbr, template: &str) -> bool {
+    phase_of(abbr) == Phase::Exact && abbr.key == template
+}
+
+/// A glob rule whose rendered text equals the token would rewrite the
+/// token to itself and hide later glob rules (ADR 0005). One that
+/// renders to nothing would erase the token; it is skipped too, which
+/// also keeps the Git Bash bake path (where an empty result means "no
+/// match") in step.
+fn is_glob_self_loop(abbr: &Abbr, rendered_text: &str, token: &str) -> bool {
+    phase_of(abbr) == Phase::Glob && (rendered_text == token || rendered_text.is_empty())
 }
 
 /// Extract cursor placeholder `{}` from expansion text.
@@ -281,9 +376,9 @@ where
 
 /// Look up a token and return why it expands (or doesn't).
 ///
-/// Scans rules in the same two-phase order as `expand()` (exact rules
-/// first, then `{number}`-pattern rules) so `which_abbr` always agrees
-/// with the final outcome of `expand`, even when multiple rules match.
+/// Scans rules in the same phase order as `expand()` (exact, then
+/// `{number}`, then glob) so `which_abbr` always agrees with the final
+/// outcome of `expand`, even when multiple rules match.
 pub(crate) fn which_abbr<F>(config: &Config, token: &str, shell: Shell, command_exists: F) -> WhichResult
 where
     F: Fn(&str) -> bool,
@@ -291,48 +386,25 @@ where
     let mut skipped: Vec<(usize, SkipReason)> = Vec::new();
     let mut any_key_matched = false;
 
-    // Phase 1: exact rules.
-    for (i, abbr) in config.abbr.iter().enumerate() {
-        if abbr.key.contains('{') {
-            continue;
-        }
-        if abbr.key != token {
-            continue;
-        }
-        any_key_matched = true;
-        match try_which_rule(abbr, shell, &command_exists, &Bindings::empty()) {
-            WhichOutcome::Hit { expansion, satisfied } => {
-                return WhichResult::Expanded {
-                    key: abbr.key.clone(),
-                    expansion,
-                    rule_index: i,
-                    satisfied_conditions: satisfied,
-                    skipped,
-                };
+    for phase in PHASES {
+        let rules = config.abbr.iter().enumerate().filter(|(_, abbr)| phase_of(abbr) == phase);
+        for (i, abbr) in rules {
+            let Some(bindings) = match_rule(abbr, token) else {
+                continue;
+            };
+            any_key_matched = true;
+            match try_which_rule(abbr, token, shell, &command_exists, &bindings) {
+                WhichOutcome::Hit { expansion, satisfied } => {
+                    return WhichResult::Expanded {
+                        key: abbr.key.clone(),
+                        expansion,
+                        rule_index: i,
+                        satisfied_conditions: satisfied,
+                        skipped,
+                    };
+                }
+                WhichOutcome::Skip(reason) => skipped.push((i, reason)),
             }
-            WhichOutcome::Skip(reason) => skipped.push((i, reason)),
-        }
-    }
-    // Phase 2: pattern rules.
-    for (i, abbr) in config.abbr.iter().enumerate() {
-        if !abbr.key.contains('{') {
-            continue;
-        }
-        let Some(bindings) = match_abbr_key(&abbr.key, token) else {
-            continue;
-        };
-        any_key_matched = true;
-        match try_which_rule(abbr, shell, &command_exists, &bindings) {
-            WhichOutcome::Hit { expansion, satisfied } => {
-                return WhichResult::Expanded {
-                    key: abbr.key.clone(),
-                    expansion,
-                    rule_index: i,
-                    satisfied_conditions: satisfied,
-                    skipped,
-                };
-            }
-            WhichOutcome::Skip(reason) => skipped.push((i, reason)),
         }
     }
 
@@ -350,6 +422,7 @@ enum WhichOutcome {
 
 fn try_which_rule<F>(
     abbr: &Abbr,
+    token: &str,
     shell: Shell,
     command_exists: &F,
     bindings: &Bindings,
@@ -360,7 +433,7 @@ where
     let Some(template) = abbr.expand.for_shell(shell) else {
         return WhichOutcome::Skip(SkipReason::NoShellEntry);
     };
-    if bindings.number.is_none() && abbr.key == template {
+    if is_exact_self_loop(abbr, template) {
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     }
     let satisfied = if let Some(cmds) = &abbr.when_command_exists {
@@ -381,13 +454,25 @@ where
     } else {
         Vec::new()
     };
-    let Some(expansion) = render_expansion(abbr, shell, bindings) else {
+    let Some((text, cursor)) = render_with_cursor(abbr, shell, bindings) else {
         // Render-time guard tripped (length cap, missing unit) — treat as
         // SelfLoop-equivalent skip for now. A dedicated SkipReason can be
         // added later if `which --why` needs to distinguish this case.
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     };
-    WhichOutcome::Hit { expansion, satisfied }
+    if is_glob_self_loop(abbr, &text, token) {
+        return WhichOutcome::Skip(SkipReason::SelfLoop);
+    }
+    WhichOutcome::Hit { expansion: with_cursor_marker(text, cursor), satisfied }
+}
+
+/// Put the cursor placeholder back into rendered text for display, so
+/// `which` shows where the cursor lands.
+fn with_cursor_marker(mut text: String, cursor: Option<usize>) -> String {
+    if let Some(pos) = cursor {
+        text.insert_str(pos, crate::domain::model::CURSOR_PLACEHOLDER);
+    }
+    text
 }
 
 /// List abbreviations as (key, expand) pairs.
@@ -442,6 +527,7 @@ mod tests {
             expand: PerShellString::All(expand.into()),
             when_command_exists: None,
             number: None,
+            match_kind: None,
         }
     }
 
@@ -453,6 +539,7 @@ mod tests {
                 cmds.into_iter().map(String::from).collect(),
             )),
             number: None,
+            match_kind: None,
         }
     }
 
@@ -462,6 +549,7 @@ mod tests {
             expand,
             when_command_exists: None,
             number: None,
+            match_kind: None,
         }
     }
 
@@ -471,6 +559,7 @@ mod tests {
             expand: PerShellString::All(expand.into()),
             when_command_exists: None,
             number: Some(unit.into()),
+            match_kind: None,
         }
     }
 
@@ -808,7 +897,7 @@ mod tests {
     fn match_abbr_key_pattern_captures_3() {
         assert_eq!(
             match_abbr_key("up{number}", "up3"),
-            Some(Bindings { number: Some(3) })
+            Some(Bindings { number: Some(3), glob: None })
         );
     }
 
@@ -816,7 +905,7 @@ mod tests {
     fn match_abbr_key_pattern_captures_10() {
         assert_eq!(
             match_abbr_key("up{number}", "up10"),
-            Some(Bindings { number: Some(10) })
+            Some(Bindings { number: Some(10), glob: None })
         );
     }
 
@@ -838,7 +927,7 @@ mod tests {
         // 128 still matches.
         assert_eq!(
             match_abbr_key("up{number}", "up128"),
-            Some(Bindings { number: Some(128) })
+            Some(Bindings { number: Some(128), glob: None })
         );
     }
 
@@ -846,7 +935,7 @@ mod tests {
     fn match_abbr_key_pattern_with_suffix() {
         assert_eq!(
             match_abbr_key("x{number}y", "x3y"),
-            Some(Bindings { number: Some(3) })
+            Some(Bindings { number: Some(3), glob: None })
         );
         assert_eq!(match_abbr_key("x{number}y", "x3z"), None);
         assert_eq!(match_abbr_key("x{number}y", "x3"), None);
@@ -880,7 +969,7 @@ mod tests {
     #[test]
     fn render_expansion_repeats_unit_three_times() {
         let a = abbr_with_number("up{number}", "cd {number}", "../");
-        let out = render_expansion(&a, Shell::Bash, &Bindings { number: Some(3) });
+        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(3), glob: None });
         assert_eq!(out.as_deref(), Some("cd ../../../"));
     }
 
@@ -888,14 +977,14 @@ mod tests {
     fn render_expansion_rejects_when_total_repeat_exceeds_cap() {
         // unit = 50 bytes, n = 128 → 6400 > 4096
         let a = abbr_with_number("u{number}", "{number}", &"X".repeat(50));
-        let out = render_expansion(&a, Shell::Bash, &Bindings { number: Some(128) });
+        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(128), glob: None });
         assert_eq!(out, None);
     }
 
     #[test]
     fn render_expansion_without_bindings_returns_template() {
         let a = abbr("gcm", "git commit -m");
-        let out = render_expansion(&a, Shell::Bash, &Bindings::empty());
+        let out = render_number(&a, Shell::Bash, &Bindings::empty());
         assert_eq!(out.as_deref(), Some("git commit -m"));
     }
 
@@ -905,7 +994,7 @@ mod tests {
         // catch this at parse; the runtime is defensive.
         let mut a = abbr("up{number}", "cd {number}");
         a.number = None;
-        let out = render_expansion(&a, Shell::Bash, &Bindings { number: Some(3) });
+        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(3), glob: None });
         assert_eq!(out, None);
     }
 
@@ -970,6 +1059,7 @@ mod tests {
             expand: PerShellString::All("echo '{number}' '{}'".into()),
             when_command_exists: None,
             number: Some("X".into()),
+            match_kind: None,
         };
         let c = cfg(vec![a]);
         // wrap3 → echo 'XXX' '{}' → echo 'XXX' '' with cursor at offset 12
@@ -1009,5 +1099,216 @@ mod tests {
             }
             other => panic!("expected Expanded, got {other:?}"),
         }
+    }
+
+    // ── match = "glob" (issue #19, ADR 0005) ───────────────────────────────
+
+    fn abbr_glob(key: &str, expand: &str) -> Abbr {
+        Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Glob),
+            ..abbr(key, expand)
+        }
+    }
+
+    fn expanded(text: &str) -> ExpandResult {
+        ExpandResult::Expanded { text: text.into(), cursor_offset: None }
+    }
+
+    #[test]
+    fn glob_star_captures_the_rest_of_the_token_into_expand() {
+        let c = cfg(vec![abbr_glob("g*", "git {*}")]);
+        assert_eq!(expand(&c, "gco", Shell::Bash, |_| true), expanded("git co"));
+    }
+
+    #[test]
+    fn glob_star_matches_zero_characters() {
+        let c = cfg(vec![abbr_glob("k*", "kubectl{*}")]);
+        assert_eq!(expand(&c, "k", Shell::Bash, |_| true), expanded("kubectl"));
+    }
+
+    #[test]
+    fn glob_star_in_the_middle_captures_between_prefix_and_suffix() {
+        let c = cfg(vec![abbr_glob("d*x", "docker {*}")]);
+        assert_eq!(expand(&c, "dpsx", Shell::Bash, |_| true), expanded("docker ps"));
+        assert_eq!(
+            expand(&c, "dps", Shell::Bash, |_| true),
+            ExpandResult::PassThrough("dps".into())
+        );
+    }
+
+    #[test]
+    fn glob_question_mark_matches_exactly_one_character() {
+        let c = cfg(vec![abbr_glob("k?", "kubectl")]);
+        assert_eq!(expand(&c, "kg", Shell::Bash, |_| true), expanded("kubectl"));
+        assert_eq!(expand(&c, "k", Shell::Bash, |_| true), ExpandResult::PassThrough("k".into()));
+        assert_eq!(expand(&c, "kgp", Shell::Bash, |_| true), ExpandResult::PassThrough("kgp".into()));
+    }
+
+    #[test]
+    fn glob_question_mark_counts_characters_not_bytes() {
+        let c = cfg(vec![abbr_glob("?x", "matched")]);
+        assert_eq!(expand(&c, "äx", Shell::Bash, |_| true), expanded("matched"));
+    }
+
+    #[test]
+    fn glob_star_capture_keeps_multibyte_characters_whole() {
+        let c = cfg(vec![abbr_glob("ä*", "[{*}]")]);
+        assert_eq!(expand(&c, "äöü", Shell::Bash, |_| true), expanded("[öü]"));
+    }
+
+    #[test]
+    fn key_with_star_but_no_match_field_stays_literal() {
+        let c = cfg(vec![abbr("g*", "git")]);
+        assert_eq!(expand(&c, "gco", Shell::Bash, |_| true), ExpandResult::PassThrough("gco".into()));
+        assert_eq!(expand(&c, "g*", Shell::Bash, |_| true), expanded("git"));
+    }
+
+    #[test]
+    fn exact_rule_beats_an_earlier_glob_rule() {
+        let c = cfg(vec![abbr_glob("g*", "git {*}"), abbr("gst", "git status")]);
+        assert_eq!(expand(&c, "gst", Shell::Bash, |_| true), expanded("git status"));
+    }
+
+    #[test]
+    fn number_rule_beats_an_earlier_glob_rule() {
+        let c = cfg(vec![
+            abbr_glob("u*", "glob {*}"),
+            abbr_with_number("up{number}", "cd {number}", "../"),
+        ]);
+        assert_eq!(expand(&c, "up2", Shell::Bash, |_| true), expanded("cd ../../"));
+    }
+
+    #[test]
+    fn first_glob_rule_in_config_order_wins_among_globs() {
+        let c = cfg(vec![abbr_glob("g*", "first {*}"), abbr_glob("gi*", "second {*}")]);
+        assert_eq!(expand(&c, "git", Shell::Bash, |_| true), expanded("first it"));
+    }
+
+    #[test]
+    fn glob_rule_whose_expansion_equals_the_token_is_skipped() {
+        let c = cfg(vec![abbr_glob("g*", "g{*}"), abbr_glob("?x", "fallback")]);
+        assert_eq!(expand(&c, "gx", Shell::Bash, |_| true), expanded("fallback"));
+    }
+
+    #[test]
+    fn glob_rule_respects_when_command_exists() {
+        let c = cfg(vec![Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Glob),
+            ..abbr_when("g*", "git {*}", vec!["git"])
+        }]);
+        assert_eq!(expand(&c, "gco", Shell::Bash, |_| false), ExpandResult::PassThrough("gco".into()));
+        assert_eq!(expand(&c, "gco", Shell::Bash, |_| true), expanded("git co"));
+    }
+
+    #[test]
+    fn glob_capture_combines_with_the_cursor_placeholder() {
+        let c = cfg(vec![abbr_glob("m*", "git commit -m '{*}{}'")]);
+        assert_eq!(
+            expand(&c, "mfix", Shell::Bash, |_| true),
+            ExpandResult::Expanded { text: "git commit -m 'fix'".into(), cursor_offset: Some(18) }
+        );
+    }
+
+    #[test]
+    fn which_reports_the_glob_rule_and_its_rendered_expansion() {
+        let c = cfg(vec![abbr("x", "y"), abbr_glob("g*", "git {*}")]);
+        match which_abbr(&c, "gco", Shell::Bash, |_| true) {
+            WhichResult::Expanded { key, expansion, rule_index, .. } => {
+                assert_eq!(key, "g*");
+                assert_eq!(expansion, "git co");
+                assert_eq!(rule_index, 1);
+            }
+            other => panic!("expected Expanded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn which_reports_a_self_looping_glob_rule_as_skipped() {
+        let c = cfg(vec![abbr_glob("g*", "g{*}")]);
+        match which_abbr(&c, "gx", Shell::Bash, |_| true) {
+            WhichResult::AllSkipped { skipped, .. } => {
+                assert_eq!(skipped.len(), 1);
+                assert!(matches!(skipped[0].1, SkipReason::SelfLoop));
+            }
+            other => panic!("expected AllSkipped, got {other:?}"),
+        }
+    }
+
+    // ── regressions found in review of #46 ─────────────────────────────────
+
+    #[test]
+    fn exact_rule_that_only_adds_a_cursor_placeholder_still_expands() {
+        let c = cfg(vec![abbr("ls", "ls{}"), abbr("ls", "lsd")]);
+        assert_eq!(
+            expand(&c, "ls", Shell::Bash, |_| true),
+            ExpandResult::Expanded { text: "ls".into(), cursor_offset: Some(2) }
+        );
+    }
+
+    #[test]
+    fn number_rule_rendering_equal_to_the_token_still_expands() {
+        let c = cfg(vec![abbr_with_number("x{number}", "x{number}", "1"), abbr("x1", "never")]);
+        assert_eq!(expand(&c, "x1", Shell::Bash, |_| true), expanded("never"));
+        let only_number = cfg(vec![abbr_with_number("x{number}", "x{number}", "1")]);
+        assert_eq!(expand(&only_number, "x1", Shell::Bash, |_| true), expanded("x1"));
+    }
+
+    #[test]
+    fn glob_capture_containing_braces_does_not_move_the_cursor_placeholder() {
+        let c = cfg(vec![abbr_glob("m*", "git commit -m '{*}{}'")]);
+        assert_eq!(
+            expand(&c, "mA{}B", Shell::Bash, |_| true),
+            ExpandResult::Expanded { text: "git commit -m 'A{}B'".into(), cursor_offset: Some(19) }
+        );
+    }
+
+    #[test]
+    fn glob_capture_containing_braces_is_inserted_literally_without_a_placeholder() {
+        let c = cfg(vec![abbr_glob("k*", "kubectl {*}")]);
+        assert_eq!(expand(&c, "k{}x", Shell::Bash, |_| true), expanded("kubectl {}x"));
+    }
+
+    #[test]
+    fn glob_render_over_the_cap_passes_through() {
+        let c = cfg(vec![abbr_glob("k*", &"{*}".repeat(100))]);
+        let token = format!("k{}", "x".repeat(50));
+        assert_eq!(expand(&c, &token, Shell::Bash, |_| true), ExpandResult::PassThrough(token.clone()));
+    }
+
+    #[test]
+    fn glob_rule_that_renders_to_nothing_is_skipped() {
+        let c = cfg(vec![abbr_glob("e*", "{}{*}")]);
+        assert_eq!(expand(&c, "e", Shell::Bash, |_| true), ExpandResult::PassThrough("e".into()));
+    }
+
+    #[test]
+    fn glob_rule_without_a_condition_for_this_shell_is_skipped() {
+        let rule = Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Glob),
+            when_command_exists: Some(PerShellCmds::ByShell {
+                default: None,
+                bash: None,
+                zsh: None,
+                pwsh: Some(vec!["git".into()]),
+                nu: None,
+            }),
+            ..abbr("p*", "pwshonly {*}")
+        };
+        let c = cfg(vec![rule]);
+        assert_eq!(expand(&c, "px", Shell::Bash, |_| true), ExpandResult::PassThrough("px".into()));
+    }
+
+    /// `which` must reach the same verdict as `expand` at the length cap;
+    /// the cursor placeholder is not part of the inserted text.
+    #[test]
+    fn which_agrees_with_expand_at_the_length_cap() {
+        let template = format!("{}{{*}}{{}}", "a".repeat(3073));
+        let c = cfg(vec![abbr_glob("z*", &template)]);
+        let token = format!("z{}", "b".repeat(1023));
+        assert!(matches!(expand(&c, &token, Shell::Bash, |_| true), ExpandResult::Expanded { .. }));
+        assert!(
+            matches!(which_abbr(&c, &token, Shell::Bash, |_| true), WhichResult::Expanded { .. }),
+            "which must not report a rule that expand fires as skipped"
+        );
     }
 }

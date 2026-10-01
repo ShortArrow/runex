@@ -142,6 +142,48 @@ expand = "git commit -am '{}'"
 key    = "up{number}"
 expand = "cd {number}"
 number = "../"
+
+[[abbr]]
+key    = "k*"
+match  = "glob"
+expand = "kubectl {*}"
+
+[[abbr]]
+key    = "gs*"
+match  = "glob"
+expand = "WRONG {*}"
+
+[[abbr]]
+key    = "m*"
+match  = "glob"
+expand = "missing {*}"
+when_command_exists = ["runex-no-such-command"]
+
+[[abbr]]
+key    = "c*"
+match  = "glob"
+expand = "echo '{*}{}'"
+
+[[abbr]]
+key    = "p*"
+match  = "glob"
+expand = "pwshonly {*}"
+when_command_exists = { pwsh = ["git"] }
+
+[[abbr]]
+key    = "e*"
+match  = "glob"
+expand = "{}{*}"
+
+[[abbr]]
+key    = "e*"
+match  = "glob"
+expand = "E2 {*}"
+
+[[abbr]]
+key    = "l*"
+match  = "glob"
+expand = "{*}{*}{*}{*}"
 "#,
     )
     .unwrap();
@@ -546,5 +588,145 @@ echo "LINE=$READLINE_LINE""#,
             "[{label}] bake must expand `gst` after `&&` (issue #9 list \
              command position); got:\n{out}"
         );
+    });
+}
+
+/// Issue #19: a glob rule expands on the bake path with the `*` capture
+/// substituted into `{*}`.
+#[test]
+fn bake_expands_glob_rule_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_expands_glob_rule", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="kgp"
+READLINE_POINT=3
+__runex_expand
+echo "LINE=[$READLINE_LINE] POINT=$READLINE_POINT""#,
+        );
+        assert!(
+            out.contains("LINE=[kubectl gp ] POINT=11"),
+            "[{label}] bake path must render `kgp` via the glob table to `kubectl gp `; got:\n{out}"
+        );
+    });
+}
+
+/// bash 5.2's `patsub_replacement` turns `&` in a `${var//pat/rep}`
+/// replacement into the matched text; the capture must stay literal.
+#[test]
+fn bake_glob_capture_keeps_ampersand_literal_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_glob_capture_ampersand", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="ka&b"
+READLINE_POINT=4
+__runex_expand
+echo "LINE=[$READLINE_LINE]""#,
+        );
+        assert!(
+            out.contains("LINE=[kubectl a&b ]"),
+            "[{label}] the glob capture must be inserted literally; got:\n{out}"
+        );
+    });
+}
+
+/// A glob rule whose `when_command_exists` fails must not fire on the
+/// bake path, matching the exec path.
+#[test]
+fn bake_glob_rule_respects_when_command_exists_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_glob_rule_when_command_exists", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="mx"
+READLINE_POINT=2
+__runex_expand
+echo "LINE=[$READLINE_LINE]""#,
+        );
+        assert!(
+            out.contains("LINE=[mx ]"),
+            "[{label}] a glob rule with a missing command must insert a plain space; got:\n{out}"
+        );
+    });
+}
+
+/// A `{}` typed inside the glob capture is literal text; only the
+/// template's own `{}` places the cursor (review of #46).
+#[test]
+fn bake_glob_capture_braces_do_not_move_the_cursor_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_glob_capture_braces", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="cA{}B"
+READLINE_POINT=5
+__runex_expand
+echo "LINE=[$READLINE_LINE] POINT=$READLINE_POINT"
+READLINE_LINE="k{}x"
+READLINE_POINT=4
+__runex_expand
+echo "LINE=[$READLINE_LINE] POINT=$READLINE_POINT""#,
+        );
+        assert!(
+            out.contains("LINE=[echo 'A{}B'] POINT=10"),
+            "[{label}] the template's {{}} must place the cursor; got:\n{out}"
+        );
+        assert!(
+            out.contains("LINE=[kubectl {}x ] POINT=12"),
+            "[{label}] a typed {{}} without a template placeholder stays literal; got:\n{out}"
+        );
+    });
+}
+
+/// Parity with the exec path found by differential review of #46.
+#[test]
+fn bake_glob_edge_cases_match_the_exec_path_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_glob_edge_cases", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="px"; READLINE_POINT=2; __runex_expand
+echo "PWSH_ONLY=[$READLINE_LINE]"
+shopt -s nocasematch
+READLINE_LINE="Kx"; READLINE_POINT=2; __runex_expand
+echo "NOCASE=[$READLINE_LINE]"
+shopt -q nocasematch && echo "NOCASE_RESTORED=on"
+shopt -u nocasematch
+READLINE_LINE="e"; READLINE_POINT=1; __runex_expand
+echo "EMPTY=[$READLINE_LINE]"
+export LC_ALL=C.UTF-8
+tok="l"; for i in $(seq 1 600); do tok="${tok}ä"; done
+READLINE_LINE="$tok"; READLINE_POINT=${#tok}; __runex_expand
+[ "$READLINE_LINE" = "$tok " ] && echo "BYTECAP=ok""#,
+        );
+        assert!(out.contains("PWSH_ONLY=[px ]"), "[{label}] a rule whose condition has no bash entry is skipped; got:\n{out}");
+        assert!(out.contains("NOCASE=[Kx ]"), "[{label}] glob matching is case-sensitive even under nocasematch; got:\n{out}");
+        assert!(out.contains("NOCASE_RESTORED=on"), "[{label}] the user's nocasematch setting is restored; got:\n{out}");
+        assert!(
+            out.contains("EMPTY=[E2  ]"),
+            "[{label}] a glob rule that renders to nothing is skipped and the next glob rule is tried; got:\n{out}"
+        );
+        assert!(out.contains("BYTECAP=ok"), "[{label}] the 4096 cap counts bytes, as the exec path does; got:\n{out}");
     });
 }

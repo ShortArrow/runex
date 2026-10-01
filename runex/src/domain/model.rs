@@ -179,6 +179,19 @@ pub(crate) struct Abbr {
     /// without a `{number}` in the key (and vice versa).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number: Option<String>,
+    /// How `key` is matched against a token (ADR 0005). `None` keeps
+    /// the literal / `{number}` meaning every existing config relies
+    /// on; `Some(Glob)` reads `key` as a `*` / `?` pattern.
+    #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
+    pub match_kind: Option<MatchKind>,
+}
+
+/// Pattern language selected by an `[[abbr]]` rule's `match` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum MatchKind {
+    /// `*` matches zero or more characters, `?` exactly one.
+    Glob,
 }
 
 /// Precache configuration.
@@ -302,6 +315,7 @@ mod tests {
             expand: PerShellString::All("git commit -m".into()),
             when_command_exists: None,
             number: None,
+            match_kind: None,
         };
         assert_eq!(a.key, "gcm");
         assert_eq!(a.expand, PerShellString::All("git commit -m".into()));
@@ -315,6 +329,7 @@ mod tests {
             expand: PerShellString::All("lsd".into()),
             when_command_exists: Some(PerShellCmds::All(vec!["lsd".into()])),
             number: None,
+            match_kind: None,
         };
         match a.when_command_exists.unwrap() {
             PerShellCmds::All(v) => assert_eq!(v, vec!["lsd".to_string()]),

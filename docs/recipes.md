@@ -604,6 +604,38 @@ up4<Space>     # → cd ../../../../
 
 ---
 
+## 15. One rule for a family of tokens with a glob key
+
+**Use case:** `k.gp`, `k.gs`, `k.dp`… should all become `kubectl <rest>`
+without a rule per subcommand.
+
+```toml
+[[abbr]]
+key    = "k.*"
+match  = "glob"
+expand = "kubectl {*}"
+```
+
+```
+k.gp<Space>    # → kubectl gp
+kill<Space>    # stays kill
+```
+
+`*` matches any run of characters (including none) and `?` exactly
+one; `{*}` in `expand` receives what the `*` matched. Exact and
+`{number}` rules are tried first, so a hand-written `k.ga` rule still
+wins over the glob.
+
+The `.` in the key keeps the rule away from real commands. A plain
+`k*` would match every token starting with `k` that no other rule
+claims, so `kill` typed at command position would become `kubectl ill`.
+
+Glob keys accept only `*` and `?` as special characters, at most one
+`*`. See [config-reference.md](config-reference.md#glob-keys-match--glob)
+for the exact rules.
+
+---
+
 ## Next steps
 
 - Full field reference: [config-reference.md](config-reference.md)

@@ -130,7 +130,7 @@ fn is_known_token(config: &Config, token: &str) -> bool {
     config
         .abbr
         .iter()
-        .any(|abbr| crate::domain::expand::match_abbr_key(&abbr.key, token).is_some())
+        .any(|abbr| crate::domain::expand::match_rule(abbr, token).is_some())
 }
 
 /// Render a `HookAction` into a shell-specific eval-able string. The shell
@@ -373,6 +373,33 @@ mod tests {
             action,
             HookAction::Replace { line: "git commit -m ".into(), cursor: 14 }
         );
+    }
+
+    fn glob_config() -> Config {
+        let mut config = sample_config();
+        config.abbr.push(crate::domain::model::Abbr {
+            key: "g*".into(),
+            expand: crate::domain::model::PerShellString::All("git {*}".into()),
+            when_command_exists: None,
+            number: None,
+            match_kind: Some(crate::domain::model::MatchKind::Glob),
+        });
+        config
+    }
+
+    /// The hook must treat a token that only a glob rule matches as
+    /// known; otherwise it inserts a space before `expand` is consulted
+    /// (issue #19).
+    #[test]
+    fn hook_expands_a_token_matched_only_by_a_glob_rule() {
+        let action = hook(&glob_config(), Shell::Bash, "sudo gco", 8, always_exists);
+        assert_eq!(action, HookAction::Replace { line: "sudo git co ".into(), cursor: 12 });
+    }
+
+    #[test]
+    fn hook_prefers_the_exact_rule_over_a_glob_rule() {
+        let action = hook(&glob_config(), Shell::Bash, "gcm", 3, always_exists);
+        assert_eq!(action, HookAction::Replace { line: "git commit -m ".into(), cursor: 14 });
     }
 
     #[test]

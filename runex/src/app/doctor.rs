@@ -163,8 +163,7 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
                 detail_verbose: None,
             });
         }
-        // Self-loop: check all expand variants for key == expand.
-        let self_loop = abbr.expand.all_values().iter().any(|&v| v == abbr.key);
+        let self_loop = abbr.expand.all_values().iter().any(|&v| rewrites_token_to_itself(abbr, v));
         if self_loop {
             checks.push(Check {
                 name: format!("abbr[{i}].self_loop"),
@@ -179,6 +178,30 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
         }
     }
     checks
+}
+
+/// Whether `template` makes the runtime skip `abbr` for every token it
+/// matches. For an exact rule that is `expand == key`. For a glob rule
+/// (ADR 0005) it is a template that, with the cursor placeholder `{}`
+/// removed, is empty, or is the key with its `*` turned into `{*}` (a
+/// `?` would render literally and change the token); a glob whose
+/// `expand` merely equals its key text does expand.
+fn rewrites_token_to_itself(abbr: &crate::domain::model::Abbr, template: &str) -> bool {
+    match abbr.match_kind {
+        None => template == abbr.key,
+        Some(crate::domain::model::MatchKind::Glob) => {
+            let text = template.replace(crate::domain::model::CURSOR_PLACEHOLDER, "");
+            text.is_empty()
+                || (!abbr.key.contains('?')
+                    && text == abbr.key.replacen('*', crate::domain::expand::GLOB_CAPTURE_PLACEHOLDER, 1))
+        }
+    }
+}
+
+/// A rule the runtime skips for every shell never matches first, so it
+/// cannot make a later rule unreachable.
+fn is_always_skipped(abbr: &crate::domain::model::Abbr) -> bool {
+    abbr.expand.all_values().iter().all(|v| rewrites_token_to_itself(abbr, v))
 }
 
 fn check_when_command_exists<F>(config: &Config, command_exists: &F) -> Vec<Check>
@@ -270,7 +293,7 @@ fn suggest_similar(name: &str, candidates: &[&str]) -> Option<String> {
 const KNOWN_TOP_LEVEL_KEYS: &[&str] = &["version", "keybind", "precache", "abbr"];
 
 /// Known keys inside an `[[abbr]]` table.
-const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists", "number"];
+const KNOWN_ABBR_KEYS: &[&str] = &["key", "expand", "when_command_exists", "number", "match"];
 
 /// Known keys inside `[keybind]`.
 const KNOWN_KEYBIND_KEYS: &[&str] = &["trigger", "self_insert"];
@@ -477,16 +500,19 @@ pub(crate) fn check_unknown_fields(config_source: &str) -> Vec<Check> {
 
 /// Check for unreachable duplicate rules (strict mode).
 ///
-/// A rule is unreachable if an earlier rule with the same key has no
-/// `when_command_exists` condition — it will always match first, making
-/// all later rules with that key dead code.
+/// A rule is unreachable if an earlier rule with the same key and the
+/// same `match` kind has no `when_command_exists` condition — it will
+/// always match first, making all later such rules dead code. Rules of
+/// different kinds never shadow each other: an exact `k*` is tried
+/// before any glob `k*` (ADR 0005).
 pub(crate) fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
     let mut checks = Vec::new();
-    // Track keys where an unconditional rule has been seen.
-    let mut unconditional_keys: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut unconditional_keys: std::collections::HashMap<(Option<crate::domain::model::MatchKind>, &str), usize> =
+        std::collections::HashMap::new();
 
     for (i, abbr) in config.abbr.iter().enumerate() {
-        if let Some(&first_rule) = unconditional_keys.get(abbr.key.as_str()) {
+        let identity = (abbr.match_kind, abbr.key.as_str());
+        if let Some(&first_rule) = unconditional_keys.get(&identity) {
             // A previous unconditional rule already matches this key.
             checks.push(Check {
                 name: format!("strict.unreachable.abbr[{}]", i),
@@ -499,9 +525,9 @@ pub(crate) fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
                 ),
                 detail_verbose: None,
             });
-        } else if abbr.when_command_exists.is_none() {
+        } else if abbr.when_command_exists.is_none() && !is_always_skipped(abbr) {
             // This is an unconditional rule — record it.
-            unconditional_keys.insert(&abbr.key, i);
+            unconditional_keys.insert(identity, i);
         }
     }
     checks
@@ -630,6 +656,7 @@ mod tests {
                 cmds.into_iter().map(String::from).collect(),
             )),
             number: None,
+            match_kind: None,
         }
     }
 
@@ -639,6 +666,7 @@ mod tests {
             expand: crate::domain::model::PerShellString::All(exp.into()),
             when_command_exists: None,
             number: None,
+            match_kind: None,
         }
     }
 
@@ -747,6 +775,58 @@ mod tests {
             result.checks.iter().any(|c| c.name.contains("self_loop") && c.status == CheckStatus::Warn),
             "must warn on self-loop: {:?}", result.checks
         );
+    }
+
+    fn glob(key: &str, exp: &str) -> Abbr {
+        Abbr { match_kind: Some(crate::domain::model::MatchKind::Glob), ..abbr(key, exp) }
+    }
+
+    fn self_loop_warned(cfg: &Config) -> bool {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let result = diagnose(&path, Some(cfg), None, &DoctorEnvInfo::default(), |_| true);
+        result.checks.iter().any(|c| c.name.contains("self_loop"))
+    }
+
+    /// `g*` → `g*` turns `gx` into `g*`: it expands, so it is not a
+    /// self-loop even though key and expand are the same string.
+    #[test]
+    fn doctor_does_not_warn_self_loop_for_a_glob_whose_expand_equals_its_key() {
+        assert!(!self_loop_warned(&test_config(vec![glob("g*", "g*")])));
+    }
+
+    /// `h*` → `h{*}` renders every token back to itself.
+    #[test]
+    fn doctor_warns_self_loop_for_a_glob_that_renders_the_token_back() {
+        assert!(self_loop_warned(&test_config(vec![glob("h*", "h{*}")])));
+    }
+
+    #[test]
+    fn doctor_warns_self_loop_for_a_glob_that_renders_the_token_back_with_a_cursor() {
+        assert!(self_loop_warned(&test_config(vec![glob("h*", "h{*}{}")])));
+    }
+
+    #[test]
+    fn doctor_warns_self_loop_for_a_glob_that_always_renders_to_nothing() {
+        assert!(self_loop_warned(&test_config(vec![glob("e*", "{}")])));
+    }
+
+    /// A rule the runtime always skips cannot shadow a later rule.
+    #[test]
+    fn doctor_does_not_report_a_rule_unreachable_behind_an_always_skipped_glob() {
+        let cfg = test_config(vec![glob("g*", "g{*}"), glob("g*", "git {*}")]);
+        assert!(check_unreachable_duplicates(&cfg).is_empty(), "{:?}", check_unreachable_duplicates(&cfg));
+    }
+
+    #[test]
+    fn doctor_does_not_report_an_exact_rule_unreachable_behind_a_glob_with_the_same_key_text() {
+        let cfg = test_config(vec![glob("k*", "kubectl {*}"), abbr("k*", "literal")]);
+        assert!(check_unreachable_duplicates(&cfg).is_empty(), "{:?}", check_unreachable_duplicates(&cfg));
+    }
+
+    #[test]
+    fn doctor_reports_a_duplicate_glob_rule_unreachable() {
+        let cfg = test_config(vec![glob("k*", "kubectl {*}"), glob("k*", "never")]);
+        assert_eq!(check_unreachable_duplicates(&cfg).len(), 1);
     }
 
     #[test]
@@ -883,6 +963,7 @@ mod tests {
             expand: crate::domain::model::PerShellString::All("lsd".into()),
             when_command_exists: Some(crate::domain::model::PerShellCmds::All(vec!["cmd\x07inject".into()])),
             number: None,
+            match_kind: None,
         }]);
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.contains("command:"));
@@ -918,6 +999,7 @@ mod tests {
             expand: crate::domain::model::PerShellString::All("lsd".into()),
             when_command_exists: Some(crate::domain::model::PerShellCmds::All(vec!["cmd\x1b[2Jevil".into()])),
             number: None,
+            match_kind: None,
         }]);
         let result = diagnose(&path, Some(&cfg), None, &DoctorEnvInfo::default(), |_| false);
         let cmd_check = result.checks.iter().find(|c| c.name.starts_with("command:"));
@@ -959,6 +1041,21 @@ expad = "git commit -m"
             checks.iter().any(|c| c.detail.contains("expad") && c.detail.contains("did you mean 'expand'")),
             "must detect 'expad' typo: {:?}", checks
         );
+    }
+
+    /// `match` selects the glob pattern language (issue #19); strict mode
+    /// must not flag it as a typo.
+    #[test]
+    fn check_match_field_is_known() {
+        let toml = r#"
+version = 1
+[[abbr]]
+key = "g*"
+match = "glob"
+expand = "git {*}"
+"#;
+        let checks = check_unknown_fields(toml);
+        assert!(checks.is_empty(), "`match` must be a known abbr field: {checks:?}");
     }
 
     #[test]

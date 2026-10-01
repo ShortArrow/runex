@@ -202,6 +202,7 @@ Each `[[abbr]]` entry defines one abbreviation rule.
 | `expand` | string or per-shell table | yes | The full text to expand into. See [per-shell form](#per-shell-form) below. |
 | `when_command_exists` | array of strings or per-shell table | no | Only expand if **all** listed commands resolve via `which` at hook time. |
 | `number` | string | no | Repetition unit for the `{number}` placeholder in `key`/`expand`. See [Numeric repetition](#numeric-repetition-number-placeholder). |
+| `match` | string | no | `"glob"` reads `key` as a `*` / `?` pattern. Omit it for an exact or `{number}` key. See [Glob keys](#glob-keys-match--glob). |
 
 #### Per-shell form
 
@@ -223,10 +224,10 @@ when_command_exists = { default = ["rm"], pwsh = ["Remove-Item"] }
 
 ### Evaluation order
 
-Rules are evaluated top-to-bottom. For each rule:
+Rules are tried in three passes: exact keys first, then `{number}` keys, then glob keys (`match = "glob"`). A rule in an earlier pass always wins, whatever its position in the file. Within a pass, rules are evaluated top-to-bottom. For each rule:
 
 1. If `key` does not match the input token, skip.
-2. If `key == expand` (self-loop), skip and continue to the next rule.
+2. If the rule would rewrite the token to itself, skip and continue to the next rule. An exact rule is checked before step 3 (`key == expand`); a glob rule after rendering (the rendered text equals the token).
 3. If `when_command_exists` lists a command that is not found, skip and continue to the next rule.
 4. Otherwise, expand and stop.
 
@@ -316,6 +317,36 @@ number = "../"
 - A `number` field on a rule whose `key` has no `{number}` is rejected.
 - `number` unit is capped at 32 bytes (`MAX_NUMBER_UNIT_BYTES`) — combined with `MAX_NUMERIC_REPEAT = 128` this keeps a rendered expansion inside the existing 4096-byte `expand` cap.
 - Empty / NUL / ASCII control / Unicode-deceptive content in the unit is rejected (same rules as `expand`).
+
+### Glob keys (`match = "glob"`)
+
+With `match = "glob"`, `key` is a pattern. `*` matches zero or more characters and `?` matches exactly one; every other character matches itself. `{*}` in `expand` is replaced by the text the `*` matched.
+
+```toml
+[[abbr]]
+key    = "k*"
+match  = "glob"
+expand = "kubectl {*}"
+```
+
+`kgp<Space>` expands to `kubectl gp`. The `*` may match nothing, so `k<Space>` expands too.
+
+**Matching:**
+
+- Glob rules are tried after every exact and `{number}` rule, so `gst` as an exact key still wins over a glob `g*` listed earlier.
+- Characters are compared, not bytes: `?` matches one `ä`. On Git Bash the match runs in bash instead: under the C locale `?` matches one byte, and MSYS bash counts a character outside the Basic Multilingual Plane (most emoji) as two.
+- A glob rule whose rendered text equals the token, or is empty, is skipped (for example `key = "g*"` with `expand = "g{*}"`).
+- The capture is inserted as typed. A `{}` inside it stays literal text; only the `{}` written in `expand` places the cursor.
+- `{*}` in a key with no `*` (only `?`) is replaced by nothing.
+- A pattern without a fixed part claims every token no earlier rule claims. `k*` also rewrites `kill` typed at command position; a separator such as `k.*` avoids real commands.
+
+**Limits and rejections (enforced at config-load time):**
+
+- The key must contain at least one `*` or `?`, and at most one `*`.
+- `[`, `]`, `{`, `}`, `(`, `)` and `\` are rejected in a glob key. On Git Bash the key is matched by a bash `case` pattern, where these characters would change meaning.
+- Any other `match` value is rejected. `runex add` does not write glob rules; add them by hand.
+
+The design is recorded in [ADR 0005](decisions/0005-pattern-keys-glob-and-regex.md).
 
 ### Field limits and rejected characters
 

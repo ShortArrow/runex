@@ -651,6 +651,7 @@ mod tests {
                 expand: crate::domain::model::PerShellString::All("git status".into()),
                 when_command_exists: None,
                 number: None,
+                match_kind: None,
             }],
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
@@ -758,6 +759,7 @@ mod tests {
                 expand: crate::domain::model::PerShellString::All("git commit -m".into()),
                 when_command_exists: None,
                 number: None,
+                match_kind: None,
             }],
         };
         let s = export_script(Shell::Bash, "runex", Some(&config));
@@ -826,6 +828,7 @@ mod tests {
                 expand: crate::domain::model::PerShellString::All("git commit -m".into()),
                 when_command_exists: None,
                 number: None,
+                match_kind: None,
             }],
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));

@@ -70,6 +70,11 @@ expand = "echo PRE_{}_POST"
 key    = "up{number}"
 expand = "echo UP_{number}_END"
 number = "x"
+
+[[abbr]]
+key    = "zq*"
+match  = "glob"
+expand = "echo GLOB_{*}_END"
 "#,
     )
     .unwrap();
@@ -394,5 +399,31 @@ fn cygwin_bake_falls_through_when_token_is_not_an_abbreviation() {
         saw,
         "unknown tokens must self-insert a Space and execute as typed; \
          the PTY never saw NOTANABBR on stdout"
+    );
+}
+
+/// Issue #19: a `match = "glob"` rule expands on the bake path, with
+/// the `*` capture substituted into `{*}`.
+#[test]
+fn cygwin_bake_expands_glob_rule() {
+    if !bash4_available() {
+        eprintln!("skipping: bash 4+ not available");
+        return;
+    }
+    let dir = tempdir().unwrap();
+    let home = dir.path();
+    let rcfile = user_runs_init_bash_with_full_config(home);
+    let mut session = spawn_cyg_bash(&rcfile, home);
+
+    session.send("zqab ").ok();
+    session.send_line("").ok();
+
+    use expectrl::Regex;
+    let saw = session.expect(Regex(r"GLOB_ab_END")).is_ok();
+    session.send_line("exit").ok();
+    assert!(
+        saw,
+        "the cygwin bake path must expand `zqab<Space>` via the glob table \
+         to `echo GLOB_ab_END`; the PTY never saw GLOB_ab_END"
     );
 }
