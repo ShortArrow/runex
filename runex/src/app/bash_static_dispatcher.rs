@@ -14,8 +14,8 @@
 //! ## Strategy
 //!
 //! Avoid spawning `runex.exe` from the trigger handler altogether on
-//! Git Bash. The cache file embeds the abbreviation table as a bash
-//! associative array and re-implements the lookup/render in pure bash.
+//! Git Bash. The cache file embeds the abbreviation rules as bash
+//! indexed arrays and re-implements the lookup/render in pure bash.
 //! A runtime `case "${OSTYPE-}"` switch inside the same cache file
 //! routes Git Bash to this bake-mode dispatcher and Linux/WSL bash to
 //! the existing `runex hook` exec path; one cache file serves every
@@ -35,8 +35,8 @@
 use crate::domain::expand::NUMBER_PLACEHOLDER;
 use crate::domain::model::{Config, Shell};
 
-/// Wrap `s` as a bash double-quoted string suitable for embedding inside
-/// an associative-array initializer like `["key"]="value"`.
+/// Wrap `s` as a bash double-quoted string suitable for embedding as a
+/// field of a baked table entry like `"key"$'\037'"value"`.
 ///
 /// Escapes the four characters that bash interprets inside a
 /// double-quoted string (`"`, `\`, `$`, `` ` ``) so the value survives
@@ -66,84 +66,72 @@ fn bash_double_quote_for_assoc(s: &str) -> String {
     out
 }
 
-/// Build the `__runex_abbr_expand` associative-array body for the bake
-/// dispatcher: one `    ["key"]="expand"` line per non-pattern rule.
+/// The rule's `when_command_exists` for bash, joined with `:` — the
+/// separator the bake dispatcher splits on, which no command name
+/// contains.
 ///
-/// Rules whose key contains `{` are skipped — they are pattern rules and
-/// are handled by [`pattern_table_lines`] further down. Rules without a
-/// bash-applicable expansion (e.g. `pwsh`-only `ByShell` with no
-/// `default`) are dropped silently; the user already validated that the
-/// config makes sense for the shells they care about, and dropping is the
-/// only response that keeps the bake path bytewise equivalent to the
-/// exec path for bash.
+/// Returns `Some("")` for an unconditional rule (or an empty list, which
+/// the exec path also treats as satisfied) and `None` when the rule has
+/// a condition table without a bash entry: the exec path skips such a
+/// rule on bash, so the bake tables omit it.
+fn bash_conditions(rule: &crate::domain::model::Abbr) -> Option<String> {
+    match &rule.when_command_exists {
+        None => Some(String::new()),
+        Some(per_shell) => per_shell.for_shell(Shell::Bash).map(|cmds| cmds.join(":")),
+    }
+}
+
+/// Build the `__runex_abbr_exact` indexed-array body for exact rules
+/// (no `{` in the key, no `match`), one line per rule in config order:
+///
+/// ```text
+///     "key"$'\037'"template"$'\037'"cmd1:cmd2"
+/// ```
+///
+/// Duplicate keys are all kept so the dispatcher can fall through from a
+/// skipped rule to the next one with the same key, as the exec path
+/// does. The third field is empty for an unconditional rule. Rules
+/// without a bash expansion, or whose condition has no bash entry (see
+/// [`bash_conditions`]), are omitted.
 fn exact_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
     for rule in &config.abbr {
         if rule.key.contains('{') || rule.match_kind.is_some() {
             continue;
         }
-        let Some(expand) = rule.expand.for_shell(Shell::Bash) else {
+        let Some(template) = rule.expand.for_shell(Shell::Bash) else {
             continue;
         };
-        lines.push(format!(
-            "    [{}]={}",
-            bash_double_quote_for_assoc(&rule.key),
-            bash_double_quote_for_assoc(expand),
-        ));
-    }
-    lines.join("\n")
-}
-
-/// Build the `__runex_abbr_cond` associative-array body: one
-/// `    ["key"]="cmd1:cmd2"` line per rule that has a non-empty
-/// `when_command_exists` list for bash.
-///
-/// `:` is used as the join character because the dispatcher in
-/// `bash.sh` splits the list with `IFS=':'` — neither a command name
-/// nor a `bash_double_quote_for_assoc`'d byte sequence can contain a
-/// raw `:` that would confuse the split. Empty lists are skipped (a
-/// guard of "no commands required" is equivalent to no guard at all).
-fn cond_table_lines(config: &Config) -> String {
-    let mut lines = Vec::new();
-    for rule in &config.abbr {
-        if rule.key.contains('{') || rule.match_kind.is_some() {
-            continue;
-        }
-        let Some(cmds) = rule
-            .when_command_exists
-            .as_ref()
-            .and_then(|w| w.for_shell(Shell::Bash))
-        else {
+        let Some(conds) = bash_conditions(rule) else {
             continue;
         };
-        if cmds.is_empty() {
-            continue;
-        }
-        let joined = cmds.join(":");
+        let sep = "$'\\037'";
         lines.push(format!(
-            "    [{}]={}",
-            bash_double_quote_for_assoc(&rule.key),
-            bash_double_quote_for_assoc(&joined),
+            "    {key}{sep}{template}{sep}{conds}",
+            key = bash_double_quote_for_assoc(&rule.key),
+            template = bash_double_quote_for_assoc(template),
+            conds = bash_double_quote_for_assoc(&conds),
         ));
     }
     lines.join("\n")
 }
 
 /// Build the `__runex_abbr_patterns` indexed-array body for rules whose
-/// key contains `{number}`.
+/// key contains `{number}`, in config order.
 ///
 /// Each emitted line is a single bash double-quoted string concatenated
 /// with `$'\037'` (ANSI-C-quoted US, 0x1F) field separators:
 ///
 /// ```text
-///     "prefix"$'\037'"suffix"$'\037'"template"$'\037'"unit"
+///     "prefix"$'\037'"suffix"$'\037'"template"$'\037'"unit"$'\037'"cmd1:cmd2"
 /// ```
 ///
-/// The bake dispatcher in `bash.sh` splits this with
-/// `IFS=$'\037' read -r prefix suffix template unit`. US is safe as a
-/// separator because the config validator rejects every ASCII control
-/// character in user-facing fields, so it can never appear inside
-/// `prefix` / `suffix` / `template` / `unit`.
+/// The bake dispatcher splits this with
+/// `IFS=$'\037' read -r prefix suffix template unit conds`. US is safe as
+/// a separator because the config validator rejects every ASCII control
+/// character in user-facing fields. The last field is the bash
+/// condition from [`bash_conditions`]; a rule whose condition has no
+/// bash entry is omitted.
 fn pattern_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
     for rule in &config.abbr {
@@ -156,16 +144,19 @@ fn pattern_table_lines(config: &Config) -> String {
         let Some(template) = rule.expand.for_shell(Shell::Bash) else {
             continue;
         };
+        let Some(conds) = bash_conditions(rule) else {
+            continue;
+        };
         let prefix = &rule.key[..pos];
         let suffix = &rule.key[pos + NUMBER_PLACEHOLDER.len()..];
         let sep = "$'\\037'";
         lines.push(format!(
-            "    {prefix}{sep}{suffix}{sep}{template}{sep}{unit}",
+            "    {prefix}{sep}{suffix}{sep}{template}{sep}{unit}{sep}{conds}",
             prefix   = bash_double_quote_for_assoc(prefix),
             suffix   = bash_double_quote_for_assoc(suffix),
             template = bash_double_quote_for_assoc(template),
             unit     = bash_double_quote_for_assoc(unit),
-            sep      = sep,
+            conds    = bash_double_quote_for_assoc(&conds),
         ));
     }
     lines.join("\n")
@@ -183,8 +174,7 @@ fn pattern_table_lines(config: &Config) -> String {
 /// so bash and `domain::expand::match_glob_key` agree on what matches.
 /// `head` / `tail` are the key's parts around its single `*` (the whole
 /// key and `""` when there is none) and strip the capture out of the
-/// token. The last field carries `when_command_exists` for bash, joined
-/// with `:` like [`cond_table_lines`].
+/// token. The last field is the bash condition from [`bash_conditions`].
 fn glob_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
     for rule in config.abbr.iter().filter(|rule| rule.match_kind.is_some()) {
@@ -192,12 +182,8 @@ fn glob_table_lines(config: &Config) -> String {
             continue;
         };
         let (head, tail) = rule.key.split_once('*').unwrap_or((rule.key.as_str(), ""));
-        let conds = match &rule.when_command_exists {
-            None => String::new(),
-            Some(per_shell) => match per_shell.for_shell(Shell::Bash) {
-                Some(cmds) => cmds.join(":"),
-                None => continue,
-            },
+        let Some(conds) = bash_conditions(rule) else {
+            continue;
         };
         let sep = "$'\\037'";
         lines.push(format!(
@@ -217,10 +203,16 @@ fn glob_table_lines(config: &Config) -> String {
 /// 1. `__runex_cyg_expand` — public entry, called from `__runex_expand`
 ///    when sourced under Git Bash (selected by the `case "${OSTYPE-}"`
 ///    switch at the bottom of this block).
-/// 2. `__runex_abbr_expand` / `__runex_abbr_cond` / `__runex_abbr_patterns`
-///    — static tables baked from `config`.
-/// 3. `__runex_cyg_lookup` / `__runex_cyg_pattern_lookup` / `__runex_cyg_render`
-///    — helpers that operate purely on bash variables (no subprocesses).
+/// 2. `__runex_abbr_exact` / `__runex_abbr_patterns` / `__runex_abbr_globs`
+///    — indexed arrays baked from `config`, one per phase, each in config
+///    order with the rule's bash condition as the last field.
+/// 3. `__runex_cyg_lookup` / `__runex_cyg_pattern_lookup` /
+///    `__runex_cyg_glob_lookup` — ordered scans over those tables that
+///    skip a rule the exec path would skip (self-loop, missing command,
+///    over the 4096-byte cap) and fall through to the next one; plus
+///    `__runex_cyg_render` / `__runex_cyg_conds_met` /
+///    `__runex_cyg_byte_len`. All operate purely on bash variables (no
+///    subprocesses).
 /// 4. `case "${OSTYPE-}"` — re-defines `__runex_expand` to either the
 ///    bake path (cygwin / msys) or keep the exec path (Linux / WSL).
 ///
@@ -229,16 +221,13 @@ fn glob_table_lines(config: &Config) -> String {
 /// legacy escape hatch (`eval "$(runex export bash)"`) stays unchanged.
 pub(crate) fn generate_cygwin_dispatcher(config: &Config) -> String {
     let exact = exact_table_lines(config);
-    let cond = cond_table_lines(config);
     let patterns = pattern_table_lines(config);
     let exact_block = if exact.is_empty() { String::new() } else { format!("\n{exact}\n") };
-    let cond_block  = if cond.is_empty()  { String::new() } else { format!("\n{cond}\n") };
     let pattern_block = if patterns.is_empty() { String::new() } else { format!("\n{patterns}\n") };
     let globs = glob_table_lines(config);
     let glob_block = if globs.is_empty() { String::new() } else { format!("\n{globs}\n") };
     format!(
-        r#"declare -gA __runex_abbr_expand=({exact_block})
-declare -gA __runex_abbr_cond=({cond_block})
+        r#"__runex_abbr_exact=({exact_block})
 __runex_abbr_patterns=({pattern_block})
 __runex_abbr_globs=({glob_block})
 __runex_cyg_render() {{
@@ -252,27 +241,35 @@ __runex_cyg_render() {{
         __runex_out="${{pos}}${{text#*\{{\}}}}"
     fi
 }}
+__runex_cyg_conds_met() {{
+    local conds="$1" c
+    __runex_conds_met=1
+    [ -z "$conds" ] && return
+    local IFS=':'
+    for c in $conds; do command -v "$c" >/dev/null 2>&1 || __runex_conds_met=0; done
+    IFS=$' \t\n'
+}}
 __runex_cyg_lookup() {{
-    local key="$1" raw conds c
+    local token="$1" entry key template conds
     __runex_out=""
     __runex_cursor_off=""
-    raw="${{__runex_abbr_expand[$key]-}}"
-    [ -z "$raw" ] && return
-    conds="${{__runex_abbr_cond[$key]-}}"
-    if [ -n "$conds" ]; then
-        local IFS=':'
-        for c in $conds; do command -v "$c" >/dev/null 2>&1 || return; done
-    fi
-    [ "$raw" = "$key" ] && return
-    __runex_cyg_render "$raw"
+    for entry in "${{__runex_abbr_exact[@]}}"; do
+        IFS=$'\037' read -r key template conds <<<"$entry"
+        [ "$key" = "$token" ] || continue
+        [ "$template" = "$key" ] && continue
+        __runex_cyg_conds_met "$conds"
+        [ "$__runex_conds_met" -eq 1 ] || continue
+        __runex_cyg_render "$template"
+        return
+    done
 }}
 __runex_cyg_pattern_lookup() {{
-    local token="$1" entry prefix suffix template unit rest n i repeated rendered
+    local token="$1" entry prefix suffix template unit conds rest digits n i repeated rendered
     __runex_out=""
     __runex_cursor_off=""
     for entry in "${{__runex_abbr_patterns[@]}}"; do
-        IFS=$'\037' read -r prefix suffix template unit <<<"$entry"
-        [ "${{token#"$prefix"}}" = "$token" ] && continue
+        IFS=$'\037' read -r prefix suffix template unit conds <<<"$entry"
+        if [ -n "$prefix" ] && [ "${{token#"$prefix"}}" = "$token" ]; then continue; fi
         rest="${{token#"$prefix"}}"
         if [ -n "$suffix" ]; then
             [ "${{rest%"$suffix"}}" = "$rest" ] && continue
@@ -280,14 +277,20 @@ __runex_cyg_pattern_lookup() {{
         fi
         [ -z "$rest" ] && continue
         case "$rest" in (*[!0-9]*) continue ;; esac
-        n="$rest"
-        [ "$n" -le 0 ] 2>/dev/null && continue
-        [ "$n" -gt 128 ] 2>/dev/null && continue
+        digits="${{rest#"${{rest%%[!0]*}}"}}"
+        [ -z "$digits" ] && continue
+        [ "${{#digits}}" -gt 3 ] && continue
+        n=$((10#$digits))
+        [ "$n" -gt 128 ] && continue
+        __runex_cyg_conds_met "$conds"
+        [ "$__runex_conds_met" -eq 1 ] || continue
         repeated=""
         for ((i=0; i<n; i++)); do repeated="${{repeated}}${{unit}}"; done
-        [ "${{#repeated}}" -gt 4096 ] && continue
-        rendered="${{template//\{{number\}}/$repeated}}"
-        [ "${{#rendered}}" -gt 4096 ] && continue
+        __runex_cyg_byte_len "$repeated"
+        [ "$__runex_len" -gt 4096 ] && continue
+        rendered="${{template//"{{number}}"/"$repeated"}}"
+        __runex_cyg_byte_len "$rendered"
+        [ "$__runex_len" -gt 4096 ] && continue
         __runex_cyg_render "$rendered"
         return
     done
@@ -424,7 +427,6 @@ __runex_cyg_expand() {{
 }}
 "#,
         exact_block = exact_block,
-        cond_block = cond_block,
         pattern_block = pattern_block,
         glob_block = glob_block,
     )
@@ -495,7 +497,7 @@ mod tests {
 
     // ── exact_table_lines ──────────────────────────────────────────────
 
-    use crate::domain::model::{Abbr, KeybindConfig, PerShellString, PrecacheConfig};
+    use crate::domain::model::{Abbr, KeybindConfig, PerShellCmds, PerShellString, PrecacheConfig};
 
     fn cfg(abbr: Vec<Abbr>) -> Config {
         Config {
@@ -516,40 +518,92 @@ mod tests {
         }
     }
 
+    fn abbr_with_when_cmds(key: &str, expand: &str, cmds: Vec<&str>) -> Abbr {
+        Abbr {
+            key: key.into(),
+            expand: PerShellString::All(expand.into()),
+            when_command_exists: Some(PerShellCmds::All(
+                cmds.into_iter().map(String::from).collect(),
+            )),
+            number: None,
+            match_kind: None,
+        }
+    }
+
+    fn pwsh_only_condition() -> Option<PerShellCmds> {
+        Some(PerShellCmds::ByShell {
+            default: None,
+            bash: None,
+            zsh: None,
+            pwsh: Some(vec!["git".into()]),
+            nu: None,
+        })
+    }
+
     #[test]
-    fn exact_table_lines_emits_one_entry_per_plain_abbr() {
+    fn exact_table_lines_emits_one_entry_per_exact_rule_in_config_order() {
         let c = cfg(vec![
             plain_abbr("gst", "git status"),
             plain_abbr("gcm", "git commit -m"),
         ]);
-        let s = exact_table_lines(&c);
-        assert!(s.contains("[\"gst\"]=\"git status\""), "got: {s}");
-        assert!(s.contains("[\"gcm\"]=\"git commit -m\""), "got: {s}");
+        assert_eq!(
+            exact_table_lines(&c),
+            "    \"gst\"$'\\037'\"git status\"$'\\037'\"\"\n    \"gcm\"$'\\037'\"git commit -m\"$'\\037'\"\""
+        );
     }
 
     #[test]
-    fn exact_table_lines_excludes_pattern_keys() {
-        // `{number}` keys go into the pattern table instead.
-        let mut up = plain_abbr("up{number}", "cd {number}");
-        up.number = Some("../".into());
-        let c = cfg(vec![plain_abbr("gst", "git status"), up]);
-        let s = exact_table_lines(&c);
-        assert!(s.contains("[\"gst\"]"), "exact table should keep gst: {s}");
-        assert!(!s.contains("up{number}"), "exact table should drop pattern keys: {s}");
+    fn exact_table_lines_keeps_duplicate_keys_in_config_order() {
+        let c = cfg(vec![
+            abbr_with_when_cmds("ls", "lsd", vec!["lsd"]),
+            plain_abbr("ls", "ls --color"),
+        ]);
+        assert_eq!(
+            exact_table_lines(&c),
+            "    \"ls\"$'\\037'\"lsd\"$'\\037'\"lsd\"\n    \"ls\"$'\\037'\"ls --color\"$'\\037'\"\""
+        );
     }
 
     #[test]
-    fn exact_table_lines_excludes_cursor_placeholder_in_key_position_safely() {
-        // `{}` cursor placeholder belongs to expand text, not keys.
-        // The key filter rejects any `{`, which includes the unlikely
-        // case of a `{}` literal in the key. Validator already rejects
-        // that, but the filter is the line of defence.
-        let mut bad = plain_abbr("ok", "ok");
-        bad.key = "bad{}key".into();
-        let c = cfg(vec![plain_abbr("gst", "git status"), bad]);
-        let s = exact_table_lines(&c);
-        assert!(s.contains("[\"gst\"]"), "got: {s}");
-        assert!(!s.contains("bad{}key"), "got: {s}");
+    fn exact_table_lines_joins_multi_command_condition_with_colon() {
+        let c = cfg(vec![abbr_with_when_cmds(
+            "ks",
+            "kubectl get pods",
+            vec!["kubectl", "stern"],
+        )]);
+        assert_eq!(
+            exact_table_lines(&c),
+            "    \"ks\"$'\\037'\"kubectl get pods\"$'\\037'\"kubectl:stern\""
+        );
+    }
+
+    #[test]
+    fn exact_table_lines_uses_bash_specific_when_command_exists_value() {
+        let a = Abbr {
+            when_command_exists: Some(PerShellCmds::ByShell {
+                default: Some(vec!["open".into()]),
+                bash:    Some(vec!["xdg-open".into()]),
+                zsh: None, pwsh: None, nu: None,
+            }),
+            ..plain_abbr("open", "xdg-open")
+        };
+        assert_eq!(
+            exact_table_lines(&cfg(vec![a])),
+            "    \"open\"$'\\037'\"xdg-open\"$'\\037'\"xdg-open\""
+        );
+    }
+
+    #[test]
+    fn exact_table_lines_omits_rule_whose_condition_has_no_bash_entry() {
+        let pwsh_only = Abbr {
+            when_command_exists: pwsh_only_condition(),
+            ..plain_abbr("pwx", "pwshexact")
+        };
+        let c = cfg(vec![pwsh_only, plain_abbr("gst", "git status")]);
+        assert_eq!(
+            exact_table_lines(&c),
+            "    \"gst\"$'\\037'\"git status\"$'\\037'\"\""
+        );
     }
 
     #[test]
@@ -565,14 +619,14 @@ mod tests {
             number: None,
             match_kind: None,
         };
-        let s = exact_table_lines(&cfg(vec![a]));
-        assert!(s.contains("[\"open\"]=\"xdg-open --wait\""), "got: {s}");
+        assert_eq!(
+            exact_table_lines(&cfg(vec![a])),
+            "    \"open\"$'\\037'\"xdg-open --wait\"$'\\037'\"\""
+        );
     }
 
     #[test]
     fn exact_table_lines_skips_rules_without_bash_expand_value() {
-        // `default = None` + bash = None → for_shell(Bash) returns None
-        // and the rule contributes nothing to the bake table.
         let a = Abbr {
             key: "winonly".into(),
             expand: PerShellString::ByShell {
@@ -586,108 +640,39 @@ mod tests {
             number: None,
             match_kind: None,
         };
-        let s = exact_table_lines(&cfg(vec![a, plain_abbr("gst", "git status")]));
-        assert!(!s.contains("winonly"), "got: {s}");
-        assert!(s.contains("[\"gst\"]"), "got: {s}");
+        assert_eq!(
+            exact_table_lines(&cfg(vec![a, plain_abbr("gst", "git status")])),
+            "    \"gst\"$'\\037'\"git status\"$'\\037'\"\""
+        );
     }
 
     #[test]
-    fn exact_table_lines_indents_with_four_spaces() {
-        // Cache file readability: every entry indented for inclusion
-        // inside the `declare -gA __runex_abbr_expand=(...)` block.
-        let s = exact_table_lines(&cfg(vec![plain_abbr("gst", "git status")]));
-        assert!(s.starts_with("    "), "expected four-space indent, got: {s:?}");
+    fn exact_table_lines_excludes_number_and_glob_rules() {
+        let c = cfg(vec![
+            plain_abbr("gst", "git status"),
+            pattern_abbr("up{number}", "cd {number}", "../"),
+            glob_abbr("k*", "kubectl {*}"),
+        ]);
+        assert_eq!(
+            exact_table_lines(&c),
+            "    \"gst\"$'\\037'\"git status\"$'\\037'\"\""
+        );
+    }
+
+    #[test]
+    fn exact_table_lines_excludes_brace_keys_defensively() {
+        let mut bad = plain_abbr("ok", "ok");
+        bad.key = "bad{}key".into();
+        let c = cfg(vec![plain_abbr("gst", "git status"), bad]);
+        assert_eq!(
+            exact_table_lines(&c),
+            "    \"gst\"$'\\037'\"git status\"$'\\037'\"\""
+        );
     }
 
     #[test]
     fn exact_table_lines_empty_for_empty_config() {
-        let s = exact_table_lines(&cfg(vec![]));
-        assert_eq!(s, "");
-    }
-
-    // ── cond_table_lines ───────────────────────────────────────────────
-
-    use crate::domain::model::PerShellCmds;
-
-    fn abbr_with_when_cmds(key: &str, expand: &str, cmds: Vec<&str>) -> Abbr {
-        Abbr {
-            key: key.into(),
-            expand: PerShellString::All(expand.into()),
-            when_command_exists: Some(PerShellCmds::All(
-                cmds.into_iter().map(String::from).collect(),
-            )),
-            number: None,
-            match_kind: None,
-        }
-    }
-
-    #[test]
-    fn cond_table_lines_emits_entry_for_single_command_guard() {
-        let c = cfg(vec![abbr_with_when_cmds("ls", "lsd", vec!["lsd"])]);
-        let s = cond_table_lines(&c);
-        assert!(s.contains("[\"ls\"]=\"lsd\""), "got: {s}");
-    }
-
-    #[test]
-    fn cond_table_lines_joins_multi_command_guard_with_colon() {
-        // `:` is the conventional bash IFS for PATH-style lists and never
-        // appears in a command name, so it's the safest delim for splitting
-        // back in the bake dispatcher.
-        let c = cfg(vec![abbr_with_when_cmds(
-            "ks",
-            "kubectl get pods",
-            vec!["kubectl", "stern"],
-        )]);
-        let s = cond_table_lines(&c);
-        assert!(s.contains("[\"ks\"]=\"kubectl:stern\""), "got: {s}");
-    }
-
-    #[test]
-    fn cond_table_lines_skips_rules_without_when_command_exists() {
-        let c = cfg(vec![
-            plain_abbr("gst", "git status"),
-            abbr_with_when_cmds("ls", "lsd", vec!["lsd"]),
-        ]);
-        let s = cond_table_lines(&c);
-        assert!(s.contains("[\"ls\"]"), "got: {s}");
-        assert!(!s.contains("[\"gst\"]"), "cond table must not list unguarded rules: {s}");
-    }
-
-    #[test]
-    fn cond_table_lines_uses_bash_specific_when_command_exists_value() {
-        let a = Abbr {
-            key: "open".into(),
-            expand: PerShellString::All("xdg-open".into()),
-            when_command_exists: Some(PerShellCmds::ByShell {
-                default: Some(vec!["open".into()]),
-                bash:    Some(vec!["xdg-open".into()]),
-                zsh: None, pwsh: None, nu: None,
-            }),
-            number: None,
-            match_kind: None,
-        };
-        let s = cond_table_lines(&cfg(vec![a]));
-        assert!(s.contains("[\"open\"]=\"xdg-open\""), "got: {s}");
-    }
-
-    #[test]
-    fn cond_table_lines_skips_empty_command_list() {
-        // Defensive: an empty list would map to an empty string in the
-        // bake table and bash's `for c in $conds` would do nothing,
-        // which is correct but wastes a line in the cache file.
-        let c = cfg(vec![abbr_with_when_cmds("nope", "noop", vec![])]);
-        let s = cond_table_lines(&c);
-        assert_eq!(s, "");
-    }
-
-    #[test]
-    fn cond_table_lines_excludes_pattern_keys() {
-        // Pattern keys (`{number}`) live in the pattern table, which has
-        // its own condition handling. Don't double-list them here.
-        let mut up = abbr_with_when_cmds("up{number}", "cd {number}", vec!["pushd"]);
-        up.number = Some("../".into());
-        let s = cond_table_lines(&cfg(vec![up]));
-        assert_eq!(s, "");
+        assert_eq!(exact_table_lines(&cfg(vec![])), "");
     }
 
     // ── glob rules (issue #19) ─────────────────────────────────────────
@@ -697,23 +682,6 @@ mod tests {
             match_kind: Some(crate::domain::model::MatchKind::Glob),
             ..plain_abbr(key, expand)
         }
-    }
-
-    #[test]
-    fn exact_table_lines_excludes_glob_keys() {
-        let c = cfg(vec![plain_abbr("gst", "git status"), glob_abbr("k*", "kubectl {*}")]);
-        let s = exact_table_lines(&c);
-        assert!(s.contains("[\"gst\"]"), "exact table should keep gst: {s}");
-        assert!(!s.contains("k*"), "a glob key must not be looked up literally: {s}");
-    }
-
-    #[test]
-    fn cond_table_lines_excludes_glob_keys() {
-        let rule = Abbr {
-            match_kind: Some(crate::domain::model::MatchKind::Glob),
-            ..abbr_with_when_cmds("k*", "kubectl {*}", vec!["kubectl"])
-        };
-        assert_eq!(cond_table_lines(&cfg(vec![rule])), "");
     }
 
     #[test]
@@ -768,11 +736,31 @@ mod tests {
         let s = pattern_table_lines(&c);
         // Field separator is bash ANSI-C-quoted US (\037). The four-space
         // indent matches the array-entry convention used elsewhere.
-        assert!(
-            s.contains("\"up\"$'\\037'\"\"$'\\037'\"cd {number}\"$'\\037'\"../\""),
-            "got: {s}"
+        assert_eq!(
+            s,
+            "    \"up\"$'\\037'\"\"$'\\037'\"cd {number}\"$'\\037'\"../\"$'\\037'\"\""
         );
-        assert!(s.starts_with("    "), "expected four-space indent, got: {s:?}");
+    }
+
+    #[test]
+    fn pattern_table_lines_carries_the_bash_condition_as_fifth_field() {
+        let up = Abbr {
+            when_command_exists: Some(PerShellCmds::All(vec!["pushd".into(), "popd".into()])),
+            ..pattern_abbr("up{number}", "cd {number}", "../")
+        };
+        assert_eq!(
+            pattern_table_lines(&cfg(vec![up])),
+            "    \"up\"$'\\037'\"\"$'\\037'\"cd {number}\"$'\\037'\"../\"$'\\037'\"pushd:popd\""
+        );
+    }
+
+    #[test]
+    fn pattern_table_lines_omits_rule_whose_condition_has_no_bash_entry() {
+        let up = Abbr {
+            when_command_exists: pwsh_only_condition(),
+            ..pattern_abbr("up{number}", "cd {number}", "../")
+        };
+        assert_eq!(pattern_table_lines(&cfg(vec![up])), "");
     }
 
     #[test]
@@ -780,9 +768,9 @@ mod tests {
         // `g{number}p` → prefix="g", suffix="p"
         let c = cfg(vec![pattern_abbr("g{number}p", "git push -n {number}", "x")]);
         let s = pattern_table_lines(&c);
-        assert!(
-            s.contains("\"g\"$'\\037'\"p\"$'\\037'\"git push -n {number}\"$'\\037'\"x\""),
-            "got: {s}"
+        assert_eq!(
+            s,
+            "    \"g\"$'\\037'\"p\"$'\\037'\"git push -n {number}\"$'\\037'\"x\"$'\\037'\"\""
         );
     }
 

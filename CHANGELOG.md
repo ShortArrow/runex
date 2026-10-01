@@ -51,6 +51,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Git Bash: exact and `{number}` rules behave like on every other
+  shell (#47).** The bake path kept only the last rule per exact key
+  and shared one condition list between all rules with that key, so a
+  skipped rule (self-loop or missing command) did not fall through
+  to the next one with the same key; an exact rule whose
+  `when_command_exists` only listed other shells expanded anyway, and
+  `{number}` rules ignored `when_command_exists` altogether. A `&` in
+  a `number` unit was replaced by the matched `{number}` under bash
+  5.2, and the 4096 cap on a `{number}` rule counted characters
+  instead of bytes. A count with a leading zero is now decimal, as
+  elsewhere: `up010` repeats the unit ten times instead of eight, and
+  `up08` eight times instead of none. A `{number}` key with no prefix
+  (`{number}x`) now matches on Git Bash too.
 - **clink: a buffer containing a zero-width or bidi character keeps
   it, and the cursor stays in place (#36).** `lua_quote_string` dropped
   NUL, the Unicode line separators (U+0085, U+2028, U+2029) and the

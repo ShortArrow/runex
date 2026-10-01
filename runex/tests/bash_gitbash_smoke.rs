@@ -184,6 +184,59 @@ expand = "E2 {*}"
 key    = "l*"
 match  = "glob"
 expand = "{*}{*}{*}{*}"
+
+[[abbr]]
+key    = "dup"
+expand = "dup{}"
+
+[[abbr]]
+key    = "dup"
+expand = "second"
+
+[[abbr]]
+key    = "chn"
+expand = "first"
+when_command_exists = ["runex-no-such-command"]
+
+[[abbr]]
+key    = "chn"
+expand = "third {}end"
+
+[[abbr]]
+key    = "pwx"
+expand = "pwshexact"
+when_command_exists = { pwsh = ["git"] }
+
+[[abbr]]
+key    = "wn{number}"
+expand = "cond-number {number}"
+number = "a"
+when_command_exists = ["runex-no-such-command"]
+
+[[abbr]]
+key    = "amp{number}"
+expand = "A{number}B"
+number = "&"
+
+[[abbr]]
+key    = "bs{number}"
+expand = "S{number}{}E"
+number = '\'
+
+[[abbr]]
+key    = "oc{number}"
+expand = "O{number}"
+number = "x"
+
+[[abbr]]
+key    = "nb{number}"
+expand = "x{number}"
+number = "ääääääääääääääää"
+
+[[abbr]]
+key    = "{number}zp"
+expand = "NP{number}"
+number = "a"
 "#,
     )
     .unwrap();
@@ -728,5 +781,48 @@ READLINE_LINE="$tok"; READLINE_POINT=${#tok}; __runex_expand
             "[{label}] a glob rule that renders to nothing is skipped and the next glob rule is tried; got:\n{out}"
         );
         assert!(out.contains("BYTECAP=ok"), "[{label}] the 4096 cap counts bytes, as the exec path does; got:\n{out}");
+    });
+}
+
+/// Issue #47: exact and `{number}` rules on the bake path follow the
+/// exec path's skip-and-fall-through semantics, per-rule conditions,
+/// decimal counts, literal units and the 4096-byte cap.
+#[test]
+fn bake_exact_and_number_rules_match_the_exec_path_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_exact_and_number_rules", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"export LC_ALL=C.UTF-8
+READLINE_LINE="dup"; READLINE_POINT=3; __runex_expand; echo "DUP=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="chn"; READLINE_POINT=3; __runex_expand; echo "CHN=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="pwx"; READLINE_POINT=3; __runex_expand; echo "PWX=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="wn2"; READLINE_POINT=3; __runex_expand; echo "WN=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="amp2"; READLINE_POINT=4; __runex_expand; echo "AMP=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="bs1"; READLINE_POINT=3; __runex_expand; echo "BS=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="oc010"; READLINE_POINT=5; __runex_expand; echo "OC10=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="oc08"; READLINE_POINT=4; __runex_expand; echo "OC8=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="nb128"; READLINE_POINT=5; __runex_expand; echo "NB=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="3zp"; READLINE_POINT=3; __runex_expand; echo "NOPREFIX=[$READLINE_LINE] P=$READLINE_POINT""#,
+        );
+        let expected = [
+            ("DUP=[dup] P=3", "the first of two rules with the same key wins; `dup{}` only adds a cursor and is not a self-loop"),
+            ("CHN=[third end] P=6", "a failed condition skips only its own rule"),
+            ("PWX=[pwx ] P=4", "an exact rule whose condition has no bash entry is skipped"),
+            ("WN=[wn2 ] P=4", "a {number} rule respects when_command_exists"),
+            ("AMP=[A&&B ] P=5", "an & unit is inserted literally"),
+            ("BS=[S\\E] P=2", "a backslash unit is inserted literally"),
+            ("OC10=[Oxxxxxxxxxx ] P=12", "a leading-zero count is decimal"),
+            ("OC8=[Oxxxxxxxx ] P=10", "08 is the decimal count 8"),
+            ("NB=[nb128 ] P=6", "the 4096 cap on a {number} rule counts bytes"),
+            ("NOPREFIX=[NPaaa ] P=6", "a {number} key with no prefix matches"),
+        ];
+        for (needle, why) in expected {
+            assert!(out.contains(needle), "[{label}] {why}: expected `{needle}`; got:\n{out}");
+        }
     });
 }
