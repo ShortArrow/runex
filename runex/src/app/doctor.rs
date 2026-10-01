@@ -185,7 +185,8 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
 /// (ADR 0005) it is a template that, with the cursor placeholder `{}`
 /// removed, is empty, or is the key with its `*` turned into `{*}` (a
 /// `?` would render literally and change the token); a glob whose
-/// `expand` merely equals its key text does expand.
+/// `expand` merely equals its key text does expand. A regex rule
+/// (issue #20) cannot be decided statically and is never reported.
 fn rewrites_token_to_itself(abbr: &crate::domain::model::Abbr, template: &str) -> bool {
     match abbr.match_kind {
         None => template == abbr.key,
@@ -195,6 +196,7 @@ fn rewrites_token_to_itself(abbr: &crate::domain::model::Abbr, template: &str) -
                 || (!abbr.key.contains('?')
                     && text == abbr.key.replacen('*', crate::domain::expand::GLOB_CAPTURE_PLACEHOLDER, 1))
         }
+        Some(crate::domain::model::MatchKind::Regex) => false,
     }
 }
 
@@ -533,6 +535,25 @@ pub(crate) fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
     checks
 }
 
+/// On Windows, one WARN row when the config has regex rules: the Git
+/// Bash bake path has no regex engine, so they never expand there.
+/// `is_windows` is a parameter so the check is testable on every OS.
+pub(crate) fn check_regex_git_bash(config: &Config, is_windows: bool) -> Option<Check> {
+    let regex_rules = config
+        .abbr
+        .iter()
+        .filter(|abbr| abbr.match_kind == Some(crate::domain::model::MatchKind::Regex))
+        .count();
+    (is_windows && regex_rules > 0).then(|| Check {
+        name: "abbr.regex_git_bash".into(),
+        status: CheckStatus::Warn,
+        detail: format!(
+            "{regex_rules} regex rule(s) do not expand in Git Bash (bake mode); other shells are unaffected"
+        ),
+        detail_verbose: None,
+    })
+}
+
 /// Run environment diagnostics.
 ///
 /// `config` is `None` when config loading failed (parse error, etc.).
@@ -569,6 +590,7 @@ where
     if let Some(cfg) = config {
         checks.extend(check_keybind(cfg));
         checks.extend(check_abbr_quality(cfg));
+        checks.extend(check_regex_git_bash(cfg, cfg!(windows)));
         checks.extend(check_when_command_exists(cfg, &command_exists));
     }
     DiagResult { checks }
@@ -827,6 +849,39 @@ mod tests {
     fn doctor_reports_a_duplicate_glob_rule_unreachable() {
         let cfg = test_config(vec![glob("k*", "kubectl {*}"), glob("k*", "never")]);
         assert_eq!(check_unreachable_duplicates(&cfg).len(), 1);
+    }
+
+    fn regex(key: &str, exp: &str) -> Abbr {
+        Abbr { match_kind: Some(crate::domain::model::MatchKind::Regex), ..abbr(key, exp) }
+    }
+
+    #[test]
+    fn doctor_warns_on_windows_that_regex_rules_do_not_expand_in_git_bash() {
+        let cfg = test_config(vec![abbr("gst", "git status"), regex(r"k(\w+)", "kubectl {1}"), regex("d(.)", "docker {1}")]);
+        let check = check_regex_git_bash(&cfg, true).expect("a regex rule on Windows must produce a row");
+        assert_eq!(check.name, "abbr.regex_git_bash");
+        assert_eq!(check.status, CheckStatus::Warn);
+        assert_eq!(
+            check.detail,
+            "2 regex rule(s) do not expand in Git Bash (bake mode); other shells are unaffected"
+        );
+    }
+
+    #[test]
+    fn doctor_has_no_git_bash_regex_row_off_windows() {
+        let cfg = test_config(vec![regex(r"k(\w+)", "kubectl {1}")]);
+        assert_eq!(check_regex_git_bash(&cfg, false), None);
+    }
+
+    #[test]
+    fn doctor_has_no_git_bash_regex_row_without_regex_rules() {
+        let cfg = test_config(vec![abbr("gst", "git status"), glob("k*", "kubectl {*}")]);
+        assert_eq!(check_regex_git_bash(&cfg, true), None);
+    }
+
+    #[test]
+    fn doctor_does_not_warn_self_loop_for_a_regex_rule() {
+        assert!(!self_loop_warned(&test_config(vec![regex("x(.*)", "x{1}")])));
     }
 
     #[test]

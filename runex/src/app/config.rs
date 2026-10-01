@@ -107,6 +107,12 @@ pub(crate) enum ConfigError {
     GlobKeyHasMultipleStars(usize),
     #[error("abbr rule #{0}: glob key contains one of [ ] {{ }} ( ) \\ (only `*` and `?` are special in a glob key)")]
     GlobKeyHasUnsupportedChar(usize),
+
+    // match = "regex" (issue #20)
+    #[error("abbr rule #{0}: regex key does not compile: {1}")]
+    RegexKeyInvalid(usize, String),
+    #[error("abbr rule #{0}: expand refers to a group {{1}}..{{9}} that the regex key does not have")]
+    RegexExpandGroupOutOfRange(usize),
 }
 
 /// Reason a validation check failed. Shared across the walker (for doctor
@@ -160,6 +166,11 @@ pub(crate) enum ValidationReason {
     GlobKeyWithoutWildcard,
     GlobKeyHasMultipleStars,
     GlobKeyHasUnsupportedChar,
+
+    // match = "regex" (issue #20, rule-scope)
+    /// Carries the engine's error text, already sanitized for display.
+    RegexKeyInvalid(String),
+    RegexExpandGroupOutOfRange,
 }
 
 /// A single validation failure.
@@ -186,12 +197,12 @@ pub(crate) enum ValidationIssue {
 impl ValidationIssue {
     /// Human-readable reason phrase (no leading "abbr rule #N: " prefix).
     /// Used by `doctor` for WARN detail text.
-    pub(crate) fn reason_text(&self) -> &'static str {
+    pub(crate) fn reason_text(&self) -> std::borrow::Cow<'static, str> {
         let reason = match self {
             ValidationIssue::Config { reason } => reason,
             ValidationIssue::Rule { reason, .. } => reason,
         };
-        match reason {
+        let text = match reason {
             ValidationReason::TooManyRules => "config has too many abbr rules",
             ValidationReason::KeyEmpty => "key is empty",
             ValidationReason::KeyWhitespaceOnly => "key contains only whitespace",
@@ -226,7 +237,14 @@ impl ValidationIssue {
             ValidationReason::GlobKeyWithoutWildcard => "glob key has no `*` or `?`",
             ValidationReason::GlobKeyHasMultipleStars => "glob key contains more than one `*`",
             ValidationReason::GlobKeyHasUnsupportedChar => "glob key contains one of [ ] { } ( ) \\",
-        }
+            ValidationReason::RegexKeyInvalid(engine_text) => {
+                return format!("regex key does not compile: {engine_text}").into();
+            }
+            ValidationReason::RegexExpandGroupOutOfRange => {
+                "expand refers to a group {1}..{9} that the regex key does not have"
+            }
+        };
+        text.into()
     }
 
     /// Convert back to a `ConfigError` for `parse_config`.
@@ -271,6 +289,8 @@ impl ValidationIssue {
             ValidationReason::GlobKeyWithoutWildcard => ConfigError::GlobKeyWithoutWildcard(n),
             ValidationReason::GlobKeyHasMultipleStars => ConfigError::GlobKeyHasMultipleStars(n),
             ValidationReason::GlobKeyHasUnsupportedChar => ConfigError::GlobKeyHasUnsupportedChar(n),
+            ValidationReason::RegexKeyInvalid(engine_text) => ConfigError::RegexKeyInvalid(n, engine_text.clone()),
+            ValidationReason::RegexExpandGroupOutOfRange => ConfigError::RegexExpandGroupOutOfRange(n),
         }
     }
 }
@@ -522,6 +542,9 @@ fn visit_validation_issues(
         if walk_glob_key_issues(abbr, rule_index, &mut f).is_break() {
             return;
         }
+        if walk_regex_key_issues(abbr, rule_index, &mut f).is_break() {
+            return;
+        }
         // (b-5) {number} placeholder consistency (issue #1)
         if walk_number_placeholder_issues(abbr, rule_index, &mut f).is_break() {
             return;
@@ -558,6 +581,61 @@ fn walk_glob_key_issues(
     std::ops::ControlFlow::Continue(())
 }
 
+/// Validate a `match = "regex"` rule (issue #20): the key must compile
+/// as a whole-token regex, and every `{1}`..`{9}` in `expand` must name
+/// a group the key has. An expand is not checked against a key that
+/// does not compile.
+fn walk_regex_key_issues(
+    abbr: &crate::domain::model::Abbr,
+    rule_index: usize,
+    mut f: impl FnMut(ValidationIssue) -> std::ops::ControlFlow<()>,
+) -> std::ops::ControlFlow<()> {
+    if abbr.match_kind != Some(crate::domain::model::MatchKind::Regex) {
+        return std::ops::ControlFlow::Continue(());
+    }
+    let group_count = match crate::domain::expand::regex_key_group_count(&abbr.key) {
+        Ok(group_count) => group_count,
+        Err(error) => {
+            let engine_text = crate::domain::sanitize::sanitize_for_display(&error.to_string());
+            f(ValidationIssue::Rule {
+                rule_index,
+                field_path: "key".into(),
+                reason: ValidationReason::RegexKeyInvalid(engine_text),
+            })?;
+            return std::ops::ControlFlow::Continue(());
+        }
+    };
+    for (field_path, template) in expand_values_with_paths(&abbr.expand) {
+        if refers_to_missing_regex_group(template, group_count) {
+            f(ValidationIssue::Rule {
+                rule_index,
+                field_path,
+                reason: ValidationReason::RegexExpandGroupOutOfRange,
+            })?;
+        }
+    }
+    std::ops::ControlFlow::Continue(())
+}
+
+/// Every expand value with its field path, in the order
+/// [`walk_expand_issues`] reports them.
+fn expand_values_with_paths(expand: &crate::domain::model::PerShellString) -> Vec<(String, &str)> {
+    use crate::domain::model::PerShellString;
+    match expand {
+        PerShellString::All(s) => vec![("expand".into(), s.as_str())],
+        PerShellString::ByShell { default, bash, zsh, pwsh, nu } => PER_SHELL_LABELS
+            .iter()
+            .zip([default, bash, zsh, pwsh, nu])
+            .filter_map(|(label, value)| Some((format!("expand.{label}"), value.as_deref()?)))
+            .collect(),
+    }
+}
+
+/// Whether `template` contains a `{N}` (1..9) above `group_count`.
+fn refers_to_missing_regex_group(template: &str, group_count: usize) -> bool {
+    (group_count + 1..=9).any(|n| template.contains(&format!("{{{n}}}")))
+}
+
 /// Validate the cross-field invariants of the `{number}` placeholder
 /// feature (issue #1). Emits a sequence of issues in field-name order:
 ///
@@ -565,13 +643,18 @@ fn walk_glob_key_issues(
 /// 2. key/number — `{number}` in key without a `number` field
 /// 3. number/key — `number` field without a `{number}` in key
 /// 4. number — empty / NUL / control / deceptive / oversize unit
+///
+/// A regex key (issue #20) has no `{number}` placeholder: its braces are
+/// regex syntax, so checks 1 and 2 do not apply and any `number` field
+/// fails check 3.
 fn walk_number_placeholder_issues(
     abbr: &crate::domain::model::Abbr,
     rule_index: usize,
     mut f: impl FnMut(ValidationIssue) -> std::ops::ControlFlow<()>,
 ) -> std::ops::ControlFlow<()> {
     let key = &abbr.key;
-    let has_brace = key.contains('{');
+    let is_regex = abbr.match_kind == Some(crate::domain::model::MatchKind::Regex);
+    let has_brace = !is_regex && key.contains('{');
     let number_count = if has_brace { key.matches(NUMBER_PLACEHOLDER).count() } else { 0 };
 
     // 1. Unknown placeholder syntax: braces appear but `{number}` is not the
@@ -2135,4 +2218,115 @@ expand = "git commit -m"
             assert!(reasons.contains(&(2, "key", ValidationReason::GlobKeyWithoutWildcard)), "{reasons:?}");
         }
     } // mod glob_match
+
+    mod regex_match {
+        //! Validation of `match = "regex"` rules (issue #20).
+        use super::*;
+
+        fn regex_rule(key: &str, expand: &str) -> String {
+            format!("version = 1\n[[abbr]]\nkey = '{key}'\nmatch = \"regex\"\nexpand = '{expand}'\n")
+        }
+
+        fn rule_reasons(cfg: &Config) -> Vec<(usize, String, ValidationReason)> {
+            collect_validation_issues(cfg)
+                .into_iter()
+                .filter_map(|i| match i {
+                    ValidationIssue::Rule { rule_index, field_path, reason } => Some((rule_index, field_path, reason)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[test]
+        fn accepts_a_regex_rule_and_reads_the_match_field() {
+            let cfg = parse_config(&regex_rule(r"k(\w+)", "kubectl {1}")).unwrap();
+            assert_eq!(cfg.abbr[0].match_kind, Some(crate::domain::model::MatchKind::Regex));
+        }
+
+        #[test]
+        fn rejects_a_regex_key_that_does_not_compile() {
+            let err = parse_config(&regex_rule("k(", "x")).unwrap_err();
+            assert!(matches!(err, ConfigError::RegexKeyInvalid(1, _)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_a_key_that_compiles_only_inside_the_anchoring_group() {
+            let err = parse_config(&regex_rule("a)|(b", "x")).unwrap_err();
+            assert!(matches!(err, ConfigError::RegexKeyInvalid(1, _)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_a_group_number_the_key_does_not_have() {
+            let err = parse_config(&regex_rule(r"k(\w+)", "x {2}")).unwrap_err();
+            assert!(matches!(err, ConfigError::RegexExpandGroupOutOfRange(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn accepts_braces_of_a_counted_repetition_in_the_key() {
+            assert!(parse_config(&regex_rule("a{2}", "aa")).is_ok());
+        }
+
+        #[test]
+        fn rejects_a_number_field_on_a_regex_rule() {
+            let err = parse_config(
+                "version = 1\n[[abbr]]\nkey = 'a{2}'\nmatch = \"regex\"\nexpand = 'x'\nnumber = '../'\n",
+            )
+            .unwrap_err();
+            assert!(matches!(err, ConfigError::NumberFieldWithoutKeyPlaceholder(1)), "got {err:?}");
+        }
+
+        #[test]
+        fn rejects_the_misspelled_match_value_regexp() {
+            let err = parse_config(
+                "version = 1\n[[abbr]]\nkey = 'k'\nmatch = \"regexp\"\nexpand = \"x\"\n",
+            )
+            .unwrap_err();
+            assert!(matches!(err, ConfigError::Parse(_)), "got {err:?}");
+        }
+
+        #[test]
+        fn invalid_regex_error_message_carries_the_engine_text() {
+            let err = parse_config(&regex_rule("k(", "x")).unwrap_err();
+            let message = err.to_string();
+            assert!(message.starts_with("abbr rule #1: regex key does not compile: "), "{message}");
+            assert!(message.len() > "abbr rule #1: regex key does not compile: ".len(), "{message}");
+        }
+
+        #[test]
+        fn doctor_walker_reports_both_regex_problems_with_field_paths() {
+            let regex = |key: &str, expand: crate::domain::model::PerShellString| crate::domain::model::Abbr {
+                key: key.into(),
+                expand,
+                when_command_exists: None,
+                number: None,
+                match_kind: Some(crate::domain::model::MatchKind::Regex),
+            };
+            let per_shell = crate::domain::model::PerShellString::ByShell {
+                default: Some("x {1}".into()),
+                bash: None,
+                zsh: None,
+                pwsh: Some("x {2}".into()),
+                nu: None,
+            };
+            let cfg = Config {
+                version: 1,
+                keybind: crate::domain::model::KeybindConfig::default(),
+                precache: crate::domain::model::PrecacheConfig::default(),
+                abbr: vec![
+                    regex("k(", crate::domain::model::PerShellString::All("x".into())),
+                    regex(r"k(\w+)", per_shell),
+                ],
+            };
+            let reasons = rule_reasons(&cfg);
+            assert!(
+                reasons.iter().any(|(i, path, r)| *i == 1 && path == "key" && matches!(r, ValidationReason::RegexKeyInvalid(_))),
+                "{reasons:?}"
+            );
+            assert!(
+                reasons.contains(&(2, "expand.pwsh".to_string(), ValidationReason::RegexExpandGroupOutOfRange)),
+                "{reasons:?}"
+            );
+            assert_eq!(reasons.len(), 2, "{reasons:?}");
+        }
+    } // mod regex_match
 }

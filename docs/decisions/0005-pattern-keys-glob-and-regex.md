@@ -88,3 +88,41 @@ silently change existing configs.
 - `runex add` gains no `--match` flag in this change; glob rules are
   written by hand.
 - `runex doctor --strict` accepts `match` as a known field.
+
+## Amendment 2026-10-01: regex keys (#20)
+
+The measurement item 6 called for was taken on 2026-10-01 (Windows 11,
+rustc 1.97.1, release builds, 50 runs each, median with range):
+
+| | `regex` 1.13.1 | `regex-lite` 0.1.9 |
+|---|---|---|
+| compile `^k(\w+)$` | 600 µs | 1.6 µs |
+| compile 50 typical patterns, fresh process | 15.0 ms (12.9–20.0) | 0.14 ms (0.13–0.17) |
+| `runex.exe` size increase | +1.58 MB | +0.10 MB |
+
+The hook re-reads the config on every key press, and the whole
+in-process expansion took a median 217 µs (PRD §7). One `\w` pattern
+in `regex` costs more than that budget; in `regex-lite` it is
+negligible.
+
+7. **Engine.** Regex keys use `regex-lite`. Its `\w`, `\d` and
+   case-insensitivity are ASCII-only and it has no `\p{..}` classes;
+   abbreviation tokens are almost always ASCII, and the cost of full
+   Unicode support is paid on every key press.
+
+8. **Whole-token match.** A regex key must match the entire token (it
+   is compiled as `^(?:key)$`), so a short pattern cannot fire on any
+   token that merely contains it.
+
+9. **Captures.** `{1}`…`{9}` and `{name}` insert capture groups; a
+   group that did not take part inserts nothing. `{name}` that names no
+   group stays literal text, so shell braces such as `awk '{print}'`
+   survive. `{N}` beyond the group count is a config error.
+
+10. **Git Bash.** The bake dispatcher matches in bash, whose `=~`
+    rejects `\d`, named groups, `(?:..)` and lazy quantifiers (observed
+    on Git Bash 5.2.37). Regex rules are therefore left out of the bake
+    tables and do not expand on Git Bash; `runex doctor` on Windows
+    says so. Calling `runex` from the bake path for regex rules was
+    rejected because spawning a Win32 executable there loses the next
+    Ctrl+C (issue #7).

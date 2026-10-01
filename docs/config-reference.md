@@ -202,7 +202,7 @@ Each `[[abbr]]` entry defines one abbreviation rule.
 | `expand` | string or per-shell table | yes | The full text to expand into. See [per-shell form](#per-shell-form) below. |
 | `when_command_exists` | array of strings or per-shell table | no | Only expand if **all** listed commands resolve via `which` at hook time. |
 | `number` | string | no | Repetition unit for the `{number}` placeholder in `key`/`expand`. See [Numeric repetition](#numeric-repetition-number-placeholder). |
-| `match` | string | no | `"glob"` reads `key` as a `*` / `?` pattern. Omit it for an exact or `{number}` key. See [Glob keys](#glob-keys-match--glob). |
+| `match` | string | no | `"glob"` reads `key` as a `*` / `?` pattern; `"regex"` reads it as a regular expression that must match the whole token. Omit it for an exact or `{number}` key. See [Glob keys](#glob-keys-match--glob) and [Regex keys](#regex-keys-match--regex). |
 
 #### Per-shell form
 
@@ -224,10 +224,10 @@ when_command_exists = { default = ["rm"], pwsh = ["Remove-Item"] }
 
 ### Evaluation order
 
-Rules are tried in three passes: exact keys first, then `{number}` keys, then glob keys (`match = "glob"`). A rule in an earlier pass always wins, whatever its position in the file. Within a pass, rules are evaluated top-to-bottom. For each rule:
+Rules are tried in four passes: exact keys first, then `{number}` keys, then glob keys (`match = "glob"`), then regex keys (`match = "regex"`). A rule in an earlier pass always wins, whatever its position in the file. Within a pass, rules are evaluated top-to-bottom. For each rule:
 
 1. If `key` does not match the input token, skip.
-2. If the rule would rewrite the token to itself, skip and continue to the next rule. An exact rule is checked before step 3 (`key == expand`); a glob rule after rendering (the rendered text equals the token).
+2. If the rule would rewrite the token to itself, skip and continue to the next rule. An exact rule is checked before step 3 (`key == expand`); a glob or regex rule after rendering (the rendered text equals the token).
 3. If `when_command_exists` lists a command that is not found, skip and continue to the next rule.
 4. Otherwise, expand and stop.
 
@@ -347,6 +347,40 @@ expand = "kubectl {*}"
 - Any other `match` value is rejected. `runex add` does not write glob rules; add them by hand.
 
 The design is recorded in [ADR 0005](decisions/0005-pattern-keys-glob-and-regex.md).
+
+### Regex keys (`match = "regex"`)
+
+With `match = "regex"`, `key` is a regular expression that must match the **whole** token: runex compiles it as `^(?:key)$`. In `expand`, `{1}` to `{9}` are replaced by the numbered capture groups and `{name}` by a named group, written `(?P<name>...)` or `(?<name>...)`.
+
+```toml
+[[abbr]]
+key    = 'g(?P<rest>.+)'
+match  = "regex"
+expand = "git {rest}"
+```
+
+`gco<Space>` expands to `git co`. Single quotes in TOML keep the backslashes of `\w` or `\d` literal.
+
+**Matching:**
+
+- Regex rules are tried after every exact, `{number}` and glob rule. Among regex rules, the first in the file wins.
+- The key is anchored at both ends: `k(\w+)` matches `kgp` but not `xkgp`.
+- A group that took no part in the match is replaced by nothing: `a(x)?b` with `expand = "[{1}]"` turns `ab` into `[]`.
+- `{name}` where `name` is not a group of the key stays literal text, so `awk '{print}' {1}` keeps its `{print}`.
+- The captures are inserted as typed. A `{}` inside one stays literal text; only the `{}` written in `expand` places the cursor.
+- A regex rule whose rendered text equals the token, or is empty, is skipped, as for glob rules. A rendering over 4096 bytes is skipped too.
+- **Regex keys do not expand on Git Bash.** The Git Bash bake path matches in bash, which has no regex engine compatible with runex, so regex rules are left out of its tables. bash on Linux and macOS, zsh, pwsh, nu and clink are unaffected. On Windows, `runex doctor` shows a WARN row `abbr.regex_git_bash` when the config has a regex rule.
+
+**Syntax:** runex uses [regex-lite](https://docs.rs/regex-lite). It accepts the usual syntax of the `regex` crate, but its Unicode support is limited: `\w`, `\d`, `\s` and case-insensitive matching (`(?i)`) cover ASCII only, and Unicode classes such as `\p{L}` are rejected.
+
+**Limits and rejections (enforced at config-load time):**
+
+- A key that does not compile is rejected, with the engine's error message. So is a key that only compiles inside the anchoring group, such as `a)|(b`.
+- `{N}` in `expand` (any per-shell value) above the number of groups in the key is rejected: `k(\w+)` with `expand = "x {2}"` fails to load.
+- A `number` field on a regex rule is rejected. Braces in a regex key are regex syntax (`a{2}`), not a `{number}` placeholder.
+- `runex add` does not write regex rules; add them by hand.
+
+**Cost:** regex keys are compiled when the config loads and again at each key press. Ten regex rules added 70–115 µs per key press over ten exact rules (median difference of `runex timings` totals, three rounds of 10 runs, Windows 11, release build, 2026-10-01). The cost grows with the number of regex rules.
 
 ### Field limits and rejected characters
 
