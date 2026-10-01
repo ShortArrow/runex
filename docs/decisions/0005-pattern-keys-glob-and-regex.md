@@ -126,3 +126,10 @@ negligible.
     says so. Calling `runex` from the bake path for regex rules was
     rejected because spawning a Win32 executable there loses the next
     Ctrl+C (issue #7).
+
+11. **Limits.** A regex key may have at most 16 capture groups and
+    compile to at most 64 KiB, and it must compile both alone and
+    anchored. regex-lite's default limit bounds only the NFA; review of
+    #49 found a 915-byte key that made every key press allocate about
+    2.3 GiB for capture slots. Within these limits one rule stayed under
+    10 MiB and 32 ms per press against a 16 KiB token.

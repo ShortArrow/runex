@@ -206,6 +206,19 @@ fn is_always_skipped(abbr: &crate::domain::model::Abbr) -> bool {
     abbr.expand.all_values().iter().all(|v| rewrites_token_to_itself(abbr, v))
 }
 
+/// Whether `abbr`, once it matches, always fires and so hides every
+/// later rule with the same key. An exact rule does unless it is a
+/// self-loop. A glob or regex rule is skipped at runtime when its
+/// rendered text is empty or equals the token, which depends on the
+/// token; only an expansion that contains a space in every shell, which
+/// no token does, is sure to fire.
+fn always_fires_when_matched(abbr: &crate::domain::model::Abbr) -> bool {
+    match abbr.match_kind {
+        None => !is_always_skipped(abbr),
+        Some(_) => abbr.expand.all_values().iter().all(|v| v.contains(' ')),
+    }
+}
+
 fn check_when_command_exists<F>(config: &Config, command_exists: &F) -> Vec<Check>
 where
     F: Fn(&str) -> bool,
@@ -527,7 +540,7 @@ pub(crate) fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
                 ),
                 detail_verbose: None,
             });
-        } else if abbr.when_command_exists.is_none() && !is_always_skipped(abbr) {
+        } else if abbr.when_command_exists.is_none() && always_fires_when_matched(abbr) {
             // This is an unconditional rule — record it.
             unconditional_keys.insert(identity, i);
         }
@@ -853,6 +866,30 @@ mod tests {
 
     fn regex(key: &str, exp: &str) -> Abbr {
         Abbr { match_kind: Some(crate::domain::model::MatchKind::Regex), ..abbr(key, exp) }
+    }
+
+    /// A pattern rule is skipped at runtime when its rendered text is
+    /// empty or equals the token, so a later rule with the same key can
+    /// still fire (review of #49). Only an expansion that always
+    /// contains a space, which no token does, makes it a sure shadow.
+    #[test]
+    fn doctor_does_not_report_a_regex_fallback_chain_unreachable() {
+        for first in ["{1}{}", "x{1}", "{1}{1}{1}{1}{1}"] {
+            let cfg = test_config(vec![regex("x(.*)", first), regex("x(.*)", "X2 {1}")]);
+            assert!(check_unreachable_duplicates(&cfg).is_empty(), "{first}: {:?}", check_unreachable_duplicates(&cfg));
+        }
+    }
+
+    #[test]
+    fn doctor_reports_a_regex_rule_behind_one_whose_expansion_always_has_a_space() {
+        let cfg = test_config(vec![regex("k(\\w+)", "kubectl {1}"), regex("k(\\w+)", "never")]);
+        assert_eq!(check_unreachable_duplicates(&cfg).len(), 1);
+    }
+
+    #[test]
+    fn doctor_does_not_report_a_glob_fallback_chain_unreachable() {
+        let cfg = test_config(vec![glob("e*", "{}{*}"), glob("e*", "E2 {*}")]);
+        assert!(check_unreachable_duplicates(&cfg).is_empty(), "{:?}", check_unreachable_duplicates(&cfg));
     }
 
     #[test]

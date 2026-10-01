@@ -91,19 +91,43 @@ pub(crate) fn match_rule(abbr: &Abbr, token: &str) -> Option<Bindings> {
     }
 }
 
-/// Compile a regex `key` so that it must match the whole token
-/// (`^(?:key)$`). The key must already have passed
-/// [`regex_key_group_count`]: a key such as `a)|(b` compiles only once
-/// wrapped, and wrapping it would turn the anchors into alternatives.
-fn compile_regex_key(key: &str) -> Result<regex_lite::Regex, regex_lite::Error> {
-    regex_lite::Regex::new(&format!("^(?:{key})$"))
+/// Upper bound on a compiled regex key. The config is re-read on every
+/// key press, and regex-lite's default limit (10 MiB) bounds only the
+/// NFA: a key under 1 KiB could still make each match allocate
+/// gigabytes for its capture slots. Abbreviation patterns compile to a
+/// few KiB.
+const REGEX_SIZE_LIMIT: usize = 64 * 1024;
+
+/// Upper bound on capture groups in a regex key; the capture slot table
+/// grows with this number times the compiled size.
+pub(crate) const MAX_REGEX_GROUPS: usize = 16;
+
+fn build_regex(pattern: &str) -> Result<regex_lite::Regex, regex_lite::Error> {
+    regex_lite::RegexBuilder::new(pattern).size_limit(REGEX_SIZE_LIMIT).build()
 }
 
-/// Check that a regex `key` compiles on its own, and return how many
-/// capture groups it has. Config validation runs this on every regex
-/// key, which is what makes wrapping it in [`compile_regex_key`] safe.
-pub(crate) fn regex_key_group_count(key: &str) -> Result<usize, regex_lite::Error> {
-    Ok(regex_lite::Regex::new(key)?.captures_len() - 1)
+/// Compile a regex `key` so that it must match the whole token
+/// (`^(?:key)$`). The key must already have passed
+/// [`regex_key_group_count`].
+fn compile_regex_key(key: &str) -> Result<regex_lite::Regex, regex_lite::Error> {
+    build_regex(&format!("^(?:{key})$"))
+}
+
+/// Validate a regex `key` and return how many capture groups it has.
+/// The key must compile on its own (a key such as `a)|(b` compiles only
+/// once wrapped, and wrapping it would turn the anchors into
+/// alternatives) and wrapped as [`compile_regex_key`] does (a `(?x)`
+/// comment or the nesting limit can break only the wrapped form), within
+/// [`REGEX_SIZE_LIMIT`] and [`MAX_REGEX_GROUPS`]. Config validation runs
+/// this on every regex key, so the runtime compile cannot fail.
+pub(crate) fn regex_key_group_count(key: &str) -> Result<usize, String> {
+    let alone = build_regex(key).map_err(|error| error.to_string())?;
+    compile_regex_key(key).map_err(|error| error.to_string())?;
+    let groups = alone.captures_len() - 1;
+    if groups > MAX_REGEX_GROUPS {
+        return Err(format!("{groups} capture groups (at most {MAX_REGEX_GROUPS} are allowed)"));
+    }
+    Ok(groups)
 }
 
 /// Match a regex `key` against `token`. Returns every capture group,

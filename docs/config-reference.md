@@ -371,16 +371,17 @@ expand = "git {rest}"
 - A regex rule whose rendered text equals the token, or is empty, is skipped, as for glob rules. A rendering over 4096 bytes is skipped too.
 - **Regex keys do not expand on Git Bash.** The Git Bash bake path matches in bash, which has no regex engine compatible with runex, so regex rules are left out of its tables. bash on Linux and macOS, zsh, pwsh, nu and clink are unaffected. On Windows, `runex doctor` shows a WARN row `abbr.regex_git_bash` when the config has a regex rule.
 
-**Syntax:** runex uses [regex-lite](https://docs.rs/regex-lite). It accepts the usual syntax of the `regex` crate, but its Unicode support is limited: `\w`, `\d`, `\s` and case-insensitive matching (`(?i)`) cover ASCII only, and Unicode classes such as `\p{L}` are rejected.
+**Syntax:** runex uses [regex-lite](https://docs.rs/regex-lite). It accepts most of the syntax of the `regex` crate, with two gaps: `\w`, `\d`, `\s` and case-insensitive matching (`(?i)`) cover ASCII only, and Unicode classes such as `\p{L}` and class intersection such as `[a-z&&[^b]]` are rejected.
 
 **Limits and rejections (enforced at config-load time):**
 
-- A key that does not compile is rejected, with the engine's error message. So is a key that only compiles inside the anchoring group, such as `a)|(b`.
+- A key that does not compile is rejected, with the engine's error message. So is a key that only compiles inside the anchoring group, such as `a)|(b`, and one that compiles alone but not once anchored, such as a `(?x)` key whose trailing `#` comment would swallow the closing `)$`.
+- A key with more than 16 capture groups, or whose compiled form exceeds 64 KiB, is rejected. The config is re-read on every key press; within these limits one regex rule stayed under 10 MiB and 32 ms per press even against a 16 KiB token (measured with `runex hook`, release build, Windows 11, 2026-10-01).
 - `{N}` in `expand` (any per-shell value) above the number of groups in the key is rejected: `k(\w+)` with `expand = "x {2}"` fails to load.
 - A `number` field on a regex rule is rejected. Braces in a regex key are regex syntax (`a{2}`), not a `{number}` placeholder.
 - `runex add` does not write regex rules; add them by hand.
 
-**Cost:** regex keys are compiled when the config loads and again at each key press. Ten regex rules added 70–115 µs per key press over ten exact rules (difference of the median `runex timings` totals in four comparisons of 10 runs each, Windows 11, release build, 2026-10-01). The cost grows with the number of regex rules.
+**Cost:** the config is re-read on every key press, and each regex key is compiled twice per press (once to validate, once to match). Ten typical regex rules added 50–115 µs per key press over ten exact rules: difference of the median `runex timings` totals in twelve comparisons of 10 runs each, with a token that matches no rule (`zzz`) and one that matches a regex rule (`kgp`), Windows 11, release build, 2026-10-01. The cost grows with the number of regex rules.
 
 ### Field limits and rejected characters
 

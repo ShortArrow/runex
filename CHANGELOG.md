@@ -32,13 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a regular expression, compiled with the regex-lite crate and
   anchored so it must match the whole token (`^(?:key)$`).
   In `expand`, `{1}` to `{9}` receive the numbered groups and `{name}`
-  a named group; a key that does not compile, or an `expand` that
+  a named group; a key that does not compile (alone or anchored), has
+  more than 16 groups or compiles past 64 KiB, or an `expand` that
   names a group number the key lacks, fails to load. Regex rules are
-  tried after exact, `{number}` and glob rules. Ten regex rules added
-  70–115 µs per key press over ten exact rules (difference of the
-  median `runex timings` totals in four comparisons of 10 runs each,
-  Windows 11, release build, 2026-10-01). They do not expand on the Git Bash bake path, and
-  `runex doctor` on Windows warns when the config has one.
+  tried after exact, `{number}` and glob rules. Ten typical regex
+  rules added 50–115 µs per key press over ten exact rules (difference
+  of the median `runex timings` totals in twelve comparisons of 10 runs
+  each, tokens `zzz` and `kgp`, Windows 11, release build, 2026-10-01).
+  They do not expand on the Git Bash bake path, and `runex doctor` on
+  Windows warns when the config has one.
 - **Glob keys: `match = "glob"` (#19).** A rule can read its `key` as
   a pattern where `*` matches zero or more characters and `?` exactly
   one; `{*}` in `expand` receives what the `*` matched

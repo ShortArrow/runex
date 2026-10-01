@@ -2328,5 +2328,39 @@ expand = "git commit -m"
             );
             assert_eq!(reasons.len(), 2, "{reasons:?}");
         }
+
+        fn rejected(key: &str) -> bool {
+            matches!(parse_config(&regex_rule(key, "x")), Err(ConfigError::RegexKeyInvalid(1, _)))
+        }
+
+        /// The runtime compiles `^(?:key)$`; a key whose `(?x)` comment
+        /// swallows the closing `)$` compiles alone but not wrapped, and
+        /// would load and then never match (review of #49).
+        #[test]
+        fn rejects_a_key_that_compiles_alone_but_not_wrapped() {
+            assert!(rejected(r"(?x)k(\w+)#c"));
+        }
+
+        /// The wrapper adds one level of nesting.
+        #[test]
+        fn rejects_a_key_nested_one_level_short_of_the_engine_limit() {
+            let key = format!("{}a{}", "(?:".repeat(50), ")".repeat(50));
+            assert!(rejected(&key));
+        }
+
+        #[test]
+        fn rejects_more_than_sixteen_capture_groups() {
+            assert!(!rejected(&"(a)".repeat(16)));
+            assert!(rejected(&"(a)".repeat(17)));
+        }
+
+        /// A key under 1 KiB that made regex-lite allocate about 2.3 GiB
+        /// per key press (its size limit bounds the NFA, not the capture
+        /// slot table).
+        #[test]
+        fn rejects_a_key_whose_compiled_form_is_too_large() {
+            assert!(rejected(&format!("{}(?:a{{500}}){{500}}", "(a)".repeat(10))));
+            assert!(rejected(r"(?:[a-z]{500}){500}(x)"));
+        }
     } // mod regex_match
 }
