@@ -380,7 +380,7 @@ expand = "git {rest}"
 - A `number` field on a regex rule is rejected. Braces in a regex key are regex syntax (`a{2}`), not a `{number}` placeholder.
 - `runex add` does not write regex rules; add them by hand.
 
-**Cost:** regex keys are compiled when the config loads and again at each key press. Ten regex rules added 70–115 µs per key press over ten exact rules (median difference of `runex timings` totals, three rounds of 10 runs, Windows 11, release build, 2026-10-01). The cost grows with the number of regex rules.
+**Cost:** regex keys are compiled when the config loads and again at each key press. Ten regex rules added 70–115 µs per key press over ten exact rules (difference of the median `runex timings` totals in four comparisons of 10 runs each, Windows 11, release build, 2026-10-01). The cost grows with the number of regex rules.
 
 ### Field limits and rejected characters
 
