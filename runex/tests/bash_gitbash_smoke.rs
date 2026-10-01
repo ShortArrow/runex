@@ -838,7 +838,8 @@ READLINE_LINE="3zp"; READLINE_POINT=3; __runex_expand; echo "NOPREFIX=[$READLINE
 /// builtin such as `shopt` is not a command there, matching the exec
 /// path's `which`), `{number}` substitution ignores `nocasematch`, and a
 /// command missing from PATH is looked up once per expansion even when
-/// many rules name it.
+/// many rules name it. A command name starting with `-` is a name, not an
+/// option to the lookup.
 #[test]
 fn bake_conditions_and_number_rendering_match_the_exec_path_on_every_cygwin_bash() {
     let mut config = String::from(
@@ -855,6 +856,24 @@ when_command_exists = ["shopt"]
 [[abbr]]
 key    = "bi"
 expand = "bi2"
+
+[[abbr]]
+key    = "da"
+expand = "dash-wrong"
+when_command_exists = ["-t"]
+
+[[abbr]]
+key    = "da"
+expand = "da2"
+
+[[abbr]]
+key    = "zz"
+expand = "{}"
+
+[[abbr]]
+key    = "ez{number}"
+expand = "{}"
+number = "x"
 
 [[abbr]]
 key    = "cn{number}"
@@ -878,6 +897,9 @@ number = "x"
             "msys",
             r#"export LC_ALL=C.UTF-8
 READLINE_LINE="bi"; READLINE_POINT=2; __runex_expand; echo "BI=[$READLINE_LINE]"
+READLINE_LINE="da"; READLINE_POINT=2; __runex_expand; echo "DA=[$READLINE_LINE]"
+READLINE_LINE="zz"; READLINE_POINT=2; __runex_expand; echo "ZZ=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="echo a; ez2"; READLINE_POINT=11; __runex_expand; echo "EZ=[$READLINE_LINE] P=$READLINE_POINT"
 shopt -s nocasematch
 READLINE_LINE="cn2"; READLINE_POINT=3; __runex_expand; echo "CN=[$READLINE_LINE]"
 shopt -q nocasematch && echo "NOCASE_RESTORED=on"
@@ -888,6 +910,12 @@ end=${EPOCHREALTIME/./}
 echo "PF=[$READLINE_LINE] MS=$(( (end - start) / 1000 ))""#,
         );
         assert!(out.contains("BI=[bi2 ]"), "[{label}] a builtin is not a PATH command; got:\n{out}");
+        assert!(out.contains("DA=[da2 ]"), "[{label}] `-t` is a missing command, not an option; got:
+{out}");
+        assert!(out.contains("ZZ=[] P=0"), "[{label}] an expand of only {{}} empties the line like exec; got:
+{out}");
+        assert!(out.contains("EZ=[echo a; ] P=8"), "[{label}] a {{number}} rule rendering to nothing still fires, like exec; got:
+{out}");
         assert!(out.contains("CN=[cn xx {NUMBER} ]"), "[{label}] {{number}} substitution is case-sensitive; got:\n{out}");
         assert!(out.contains("NOCASE_RESTORED=on"), "[{label}] the user's nocasematch is restored; got:\n{out}");
         assert!(out.contains("PF=[pfok ]"), "[{label}] the fallback after 100 failing rules fires; got:\n{out}");

@@ -66,11 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`{number}x`) now matches on Git Bash too. `when_command_exists`
   looks only at PATH there as everywhere else (a bash builtin no longer
   counts), each command is looked up once per key press, and
-  `shopt -s nocasematch` no longer affects matching. An `expand` that
-  is only the cursor placeholder `{}` is now rejected at load time, like
-  an empty `expand`. Known remaining difference: under the C locale
-  Git Bash counts the cursor in bytes, so a line with multibyte text
-  before the cursor can still land the cursor differently.
+  `shopt -s nocasematch` no longer affects matching. An exact or
+  `{number}` rule whose `expand` is only the cursor placeholder `{}`
+  empties the token as on the other shells, instead of being treated as
+  no match. Known remaining difference: under the C locale Git Bash
+  counts the cursor in bytes, so a line with multibyte text before the
+  cursor can still land the cursor differently.
 - **clink: a buffer containing a zero-width or bidi character keeps
   it, and the cursor stays in place (#36).** `lua_quote_string` dropped
   NUL, the Unicode line separators (U+0085, U+2028, U+2029) and the

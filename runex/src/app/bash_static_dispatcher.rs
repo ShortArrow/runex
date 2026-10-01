@@ -232,6 +232,7 @@ __runex_abbr_patterns=({pattern_block})
 __runex_abbr_globs=({glob_block})
 __runex_cyg_render() {{
     local text="$1" pos
+    __runex_hit=1
     pos="${{text%%\{{\}}*}}"
     if [ "$pos" = "$text" ]; then
         __runex_out="$text"
@@ -249,7 +250,7 @@ __runex_cyg_conds_met() {{
     local IFS=':'
     for c in $conds; do
         if [ -z "${{__runex_cmd_seen[$c]-}}" ]; then
-            if type -P "$c" >/dev/null 2>&1; then __runex_cmd_seen[$c]=1; else __runex_cmd_seen[$c]=0; fi
+            if type -P -- "$c" >/dev/null 2>&1; then __runex_cmd_seen[$c]=1; else __runex_cmd_seen[$c]=0; fi
         fi
         [ "${{__runex_cmd_seen[$c]}}" = 1 ] || __runex_conds_met=0
     done
@@ -306,15 +307,6 @@ __runex_cyg_byte_len() {{
     __runex_len="${{#1}}"
 }}
 __runex_cyg_glob_lookup() {{
-    local restore_nocasematch=0
-    if shopt -q nocasematch; then
-        restore_nocasematch=1
-        shopt -u nocasematch
-    fi
-    __runex_cyg_glob_scan "$1"
-    if [ "$restore_nocasematch" -eq 1 ]; then shopt -s nocasematch; fi
-}}
-__runex_cyg_glob_scan() {{
     local token="$1" entry pattern head tail template conds rest left right
     __runex_out=""
     __runex_cursor_off=""
@@ -347,6 +339,7 @@ __runex_cyg_glob_scan() {{
             __runex_cursor_off=""
             continue
         fi
+        __runex_hit=1
         return
     done
 }}
@@ -416,11 +409,12 @@ __runex_cyg_expand() {{
         restore_nocasematch=1
         shopt -u nocasematch
     fi
+    __runex_hit=0
     __runex_cyg_lookup "$token"
-    if [ -z "$__runex_out" ]; then __runex_cyg_pattern_lookup "$token"; fi
-    if [ -z "$__runex_out" ]; then __runex_cyg_glob_lookup "$token"; fi
+    if [ "$__runex_hit" -eq 0 ]; then __runex_cyg_pattern_lookup "$token"; fi
+    if [ "$__runex_hit" -eq 0 ]; then __runex_cyg_glob_lookup "$token"; fi
     if [ "$restore_nocasematch" -eq 1 ]; then shopt -s nocasematch; fi
-    if [ -z "$__runex_out" ]; then
+    if [ "$__runex_hit" -eq 0 ]; then
         READLINE_LINE="${{left}} ${{right}}"
         READLINE_POINT=$((READLINE_POINT + 1))
         return
