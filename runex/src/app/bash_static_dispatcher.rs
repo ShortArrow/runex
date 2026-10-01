@@ -241,12 +241,18 @@ __runex_cyg_render() {{
         __runex_out="${{pos}}${{text#*\{{\}}}}"
     fi
 }}
+declare -gA __runex_cmd_seen=()
 __runex_cyg_conds_met() {{
     local conds="$1" c
     __runex_conds_met=1
     [ -z "$conds" ] && return
     local IFS=':'
-    for c in $conds; do command -v "$c" >/dev/null 2>&1 || __runex_conds_met=0; done
+    for c in $conds; do
+        if [ -z "${{__runex_cmd_seen[$c]-}}" ]; then
+            if type -P "$c" >/dev/null 2>&1; then __runex_cmd_seen[$c]=1; else __runex_cmd_seen[$c]=0; fi
+        fi
+        [ "${{__runex_cmd_seen[$c]}}" = 1 ] || __runex_conds_met=0
+    done
     IFS=$' \t\n'
 }}
 __runex_cyg_lookup() {{
@@ -309,19 +315,14 @@ __runex_cyg_glob_lookup() {{
     if [ "$restore_nocasematch" -eq 1 ]; then shopt -s nocasematch; fi
 }}
 __runex_cyg_glob_scan() {{
-    local token="$1" entry pattern head tail template conds rest left right c missing
+    local token="$1" entry pattern head tail template conds rest left right
     __runex_out=""
     __runex_cursor_off=""
     for entry in "${{__runex_abbr_globs[@]}}"; do
         IFS=$'\037' read -r pattern head tail template conds <<<"$entry"
         case "$token" in $pattern) ;; *) continue ;; esac
-        missing=0
-        if [ -n "$conds" ]; then
-            local IFS=':'
-            for c in $conds; do command -v "$c" >/dev/null 2>&1 || missing=1; done
-            IFS=$' \t\n'
-        fi
-        [ "$missing" -eq 1 ] && continue
+        __runex_cyg_conds_met "$conds"
+        [ "$__runex_conds_met" -eq 1 ] || continue
         rest="${{token#$head}}"
         rest="${{rest%$tail}}"
         if [[ "$template" == *"{{}}"* ]]; then
@@ -409,9 +410,16 @@ __runex_cyg_expand() {{
         READLINE_POINT=$((READLINE_POINT + 1))
         return
     fi
+    __runex_cmd_seen=()
+    local restore_nocasematch=0
+    if shopt -q nocasematch; then
+        restore_nocasematch=1
+        shopt -u nocasematch
+    fi
     __runex_cyg_lookup "$token"
     if [ -z "$__runex_out" ]; then __runex_cyg_pattern_lookup "$token"; fi
     if [ -z "$__runex_out" ]; then __runex_cyg_glob_lookup "$token"; fi
+    if [ "$restore_nocasematch" -eq 1 ]; then shopt -s nocasematch; fi
     if [ -z "$__runex_out" ]; then
         READLINE_LINE="${{left}} ${{right}}"
         READLINE_POINT=$((READLINE_POINT + 1))

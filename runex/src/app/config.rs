@@ -305,7 +305,7 @@ fn check_abbr_key(key: &str) -> Option<ValidationReason> {
 
 /// Validate a single expand string value.
 fn check_expand_value(expand: &str) -> Option<ValidationReason> {
-    if expand.is_empty() {
+    if expand.replace(crate::domain::model::CURSOR_PLACEHOLDER, "").is_empty() {
         return Some(ValidationReason::ExpandEmpty);
     }
     if expand.trim().is_empty() {
@@ -1516,6 +1516,17 @@ expand = "git commit -m"
     /// Both are rejected early so users get a clear error rather than silent breakage.
     mod expand_validation {
         use super::*;
+
+    /// An expand that is only the cursor placeholder would erase the
+    /// token; the Git Bash bake path cannot tell that from "no match"
+    /// (review of #48), and no rule needs it.
+    #[test]
+    fn parse_config_rejects_an_expand_that_is_only_the_cursor_placeholder() {
+        let exact = "version = 1\n[[abbr]]\nkey = \"a\"\nexpand = \"{}\"\n";
+        assert!(matches!(parse_config(exact), Err(ConfigError::ExpandEmpty(1))), "{:?}", parse_config(exact));
+        let number = "version = 1\n[[abbr]]\nkey = \"z{number}\"\nexpand = \"{}{}\"\nnumber = \"x\"\n";
+        assert!(matches!(parse_config(number), Err(ConfigError::ExpandEmpty(1))), "{:?}", parse_config(number));
+    }
 
     #[test]
     fn parse_config_rejects_empty_expand() {

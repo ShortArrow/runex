@@ -120,12 +120,20 @@ fn cygwin_family_bashes() -> Vec<(&'static str, PathBuf)> {
 /// and generate the cache file through `runex export bash --bin <...>`.
 /// Returns `(cache_path, runex_bin_path)`.
 fn build_cache(home: &Path) -> (PathBuf, String) {
+    build_cache_from(home, SHARED_CONFIG)
+}
+
+/// Write `config` under `home` and export the bash cache from it, the
+/// same way [`build_cache`] does for the shared config.
+fn build_cache_from(home: &Path, config: &str) -> (PathBuf, String) {
     let cfg_dir = home.join(".config").join("runex");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     let cfg = cfg_dir.join("config.toml");
-    std::fs::write(
-        &cfg,
-        r#"version = 1
+    std::fs::write(&cfg, config).unwrap();
+    export_bash_cache(home, &cfg)
+}
+
+const SHARED_CONFIG: &str = r#"version = 1
 
 [keybind.trigger]
 default = "space"
@@ -237,10 +245,9 @@ number = "ääääääääääääääää"
 key    = "{number}zp"
 expand = "NP{number}"
 number = "a"
-"#,
-    )
-    .unwrap();
+"#;
 
+fn export_bash_cache(home: &Path, cfg: &Path) -> (PathBuf, String) {
     let bin = runex_bin().to_string();
     let cache_path = home
         .join(".cache")
@@ -824,5 +831,72 @@ READLINE_LINE="3zp"; READLINE_POINT=3; __runex_expand; echo "NOPREFIX=[$READLINE
         for (needle, why) in expected {
             assert!(out.contains(needle), "[{label}] {why}: expected `{needle}`; got:\n{out}");
         }
+    });
+}
+
+/// Review of #48: `when_command_exists` looks only at PATH (a bash
+/// builtin such as `shopt` is not a command there, matching the exec
+/// path's `which`), `{number}` substitution ignores `nocasematch`, and a
+/// command missing from PATH is looked up once per expansion even when
+/// many rules name it.
+#[test]
+fn bake_conditions_and_number_rendering_match_the_exec_path_on_every_cygwin_bash() {
+    let mut config = String::from(
+        r#"version = 1
+
+[keybind.trigger]
+default = "space"
+
+[[abbr]]
+key    = "bi"
+expand = "builtin-wrong"
+when_command_exists = ["shopt"]
+
+[[abbr]]
+key    = "bi"
+expand = "bi2"
+
+[[abbr]]
+key    = "cn{number}"
+expand = "cn {number} {NUMBER}"
+number = "x"
+"#,
+    );
+    for i in 0..100 {
+        config.push_str(&format!(
+            "\n[[abbr]]\nkey    = \"pf\"\nexpand = \"never{i}\"\nwhen_command_exists = [\"runex-no-such-command\"]\n"
+        ));
+    }
+    config.push_str("\n[[abbr]]\nkey    = \"pf\"\nexpand = \"pfok\"\n");
+    for_each_cygwin_bash("bake_conditions_and_number_rendering", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache_from(dir.path(), &config);
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"export LC_ALL=C.UTF-8
+READLINE_LINE="bi"; READLINE_POINT=2; __runex_expand; echo "BI=[$READLINE_LINE]"
+shopt -s nocasematch
+READLINE_LINE="cn2"; READLINE_POINT=3; __runex_expand; echo "CN=[$READLINE_LINE]"
+shopt -q nocasematch && echo "NOCASE_RESTORED=on"
+shopt -u nocasematch
+start=${EPOCHREALTIME/./}
+READLINE_LINE="pf"; READLINE_POINT=2; __runex_expand
+end=${EPOCHREALTIME/./}
+echo "PF=[$READLINE_LINE] MS=$(( (end - start) / 1000 ))""#,
+        );
+        assert!(out.contains("BI=[bi2 ]"), "[{label}] a builtin is not a PATH command; got:\n{out}");
+        assert!(out.contains("CN=[cn xx {NUMBER} ]"), "[{label}] {{number}} substitution is case-sensitive; got:\n{out}");
+        assert!(out.contains("NOCASE_RESTORED=on"), "[{label}] the user's nocasematch is restored; got:\n{out}");
+        assert!(out.contains("PF=[pfok ]"), "[{label}] the fallback after 100 failing rules fires; got:\n{out}");
+        let ms: u64 = out
+            .split("MS=")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("[{label}] no timing in output:\n{out}"));
+        assert!(ms < 500, "[{label}] 100 rules naming one missing command took {ms} ms; got:\n{out}");
     });
 }
