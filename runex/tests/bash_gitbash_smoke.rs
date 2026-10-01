@@ -184,6 +184,11 @@ expand = "E2 {*}"
 key    = "l*"
 match  = "glob"
 expand = "{*}{*}{*}{*}"
+
+[[abbr]]
+key    = 'r(\w+)'
+match  = "regex"
+expand = "REGEX {1}"
 "#,
     )
     .unwrap();
@@ -728,5 +733,29 @@ READLINE_LINE="$tok"; READLINE_POINT=${#tok}; __runex_expand
             "[{label}] a glob rule that renders to nothing is skipped and the next glob rule is tried; got:\n{out}"
         );
         assert!(out.contains("BYTECAP=ok"), "[{label}] the 4096 cap counts bytes, as the exec path does; got:\n{out}");
+    });
+}
+
+/// Regex rules (issue #20) are not baked: on the bake path a token only
+/// a regex rule matches gets a plain space, never an expansion.
+#[test]
+fn bake_never_expands_a_regex_rule_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_regex_rule_not_baked", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="rab"
+READLINE_POINT=3
+__runex_expand
+echo "LINE=[$READLINE_LINE]""#,
+        );
+        assert!(
+            out.contains("LINE=[rab ]"),
+            "[{label}] a regex rule must not expand on the bake path; got:\n{out}"
+        );
     });
 }

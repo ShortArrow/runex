@@ -33,7 +33,7 @@
 //! `echo gst<Space>` would still expand `gst`) no longer applies.
 
 use crate::domain::expand::NUMBER_PLACEHOLDER;
-use crate::domain::model::{Config, Shell};
+use crate::domain::model::{Abbr, Config, MatchKind, Shell};
 
 /// Wrap `s` as a bash double-quoted string suitable for embedding inside
 /// an associative-array initializer like `["key"]="value"`.
@@ -66,11 +66,19 @@ fn bash_double_quote_for_assoc(s: &str) -> String {
     out
 }
 
+/// An exact rule: no `match` field and no `{number}` placeholder. Regex
+/// rules (issue #20) belong to no bake table; Git Bash never expands
+/// them.
+fn is_exact_rule(rule: &Abbr) -> bool {
+    rule.match_kind.is_none() && !rule.key.contains('{')
+}
+
 /// Build the `__runex_abbr_expand` associative-array body for the bake
 /// dispatcher: one `    ["key"]="expand"` line per non-pattern rule.
 ///
-/// Rules whose key contains `{` are skipped — they are pattern rules and
-/// are handled by [`pattern_table_lines`] further down. Rules without a
+/// Only [`is_exact_rule`] rules are listed: `{number}` rules go to
+/// [`pattern_table_lines`], glob rules to [`glob_table_lines`], and
+/// regex rules nowhere. Rules without a
 /// bash-applicable expansion (e.g. `pwsh`-only `ByShell` with no
 /// `default`) are dropped silently; the user already validated that the
 /// config makes sense for the shells they care about, and dropping is the
@@ -79,7 +87,7 @@ fn bash_double_quote_for_assoc(s: &str) -> String {
 fn exact_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
     for rule in &config.abbr {
-        if rule.key.contains('{') || rule.match_kind.is_some() {
+        if !is_exact_rule(rule) {
             continue;
         }
         let Some(expand) = rule.expand.for_shell(Shell::Bash) else {
@@ -106,7 +114,7 @@ fn exact_table_lines(config: &Config) -> String {
 fn cond_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
     for rule in &config.abbr {
-        if rule.key.contains('{') || rule.match_kind.is_some() {
+        if !is_exact_rule(rule) {
             continue;
         }
         let Some(cmds) = rule
@@ -146,7 +154,7 @@ fn cond_table_lines(config: &Config) -> String {
 /// `prefix` / `suffix` / `template` / `unit`.
 fn pattern_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
-    for rule in &config.abbr {
+    for rule in config.abbr.iter().filter(|rule| rule.match_kind.is_none()) {
         let Some(unit) = rule.number.as_deref() else {
             continue;
         };
@@ -187,7 +195,7 @@ fn pattern_table_lines(config: &Config) -> String {
 /// with `:` like [`cond_table_lines`].
 fn glob_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
-    for rule in config.abbr.iter().filter(|rule| rule.match_kind.is_some()) {
+    for rule in config.abbr.iter().filter(|rule| rule.match_kind == Some(MatchKind::Glob)) {
         let Some(template) = rule.expand.for_shell(Shell::Bash) else {
             continue;
         };
@@ -739,6 +747,38 @@ mod tests {
     fn glob_table_lines_skips_exact_and_number_rules() {
         let c = cfg(vec![plain_abbr("gst", "git status"), pattern_abbr("up{number}", "cd {number}", "../")]);
         assert_eq!(glob_table_lines(&c), "");
+    }
+
+    // ── regex rules (issue #20): not baked ─────────────────────────────
+
+    fn regex_abbr(key: &str, expand: &str) -> Abbr {
+        Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Regex),
+            ..plain_abbr(key, expand)
+        }
+    }
+
+    #[test]
+    fn regex_rules_go_into_no_bake_table() {
+        let regex_with_cond = Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Regex),
+            ..abbr_with_when_cmds(r"r(\w+)", "REGEX {1}", vec!["git"])
+        };
+        let regex_with_number_text = Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Regex),
+            ..pattern_abbr("up{number}", "cd {number}", "../")
+        };
+        let c = cfg(vec![
+            regex_with_cond,
+            regex_abbr("a{2}", "AA"),
+            regex_with_number_text,
+            glob_abbr("k*", "kubectl {*}"),
+        ]);
+        let glob_only = glob_table_lines(&cfg(vec![glob_abbr("k*", "kubectl {*}")]));
+        assert_eq!(glob_table_lines(&c), glob_only);
+        assert_eq!(exact_table_lines(&c), "");
+        assert_eq!(cond_table_lines(&c), "");
+        assert_eq!(pattern_table_lines(&c), "");
     }
 
     #[test]
