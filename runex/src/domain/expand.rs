@@ -312,9 +312,8 @@ fn is_exact_self_loop(abbr: &Abbr, template: &str) -> bool {
 
 /// A glob rule whose rendered text equals the token would rewrite the
 /// token to itself and hide later glob rules (ADR 0005). One that
-/// renders to nothing would erase the token; it is skipped too, which
-/// also keeps the Git Bash bake path (where an empty result means "no
-/// match") in step.
+/// renders to nothing would erase the token; it is skipped too. Exact
+/// and `{number}` rules that render to nothing still fire.
 fn is_glob_self_loop(abbr: &Abbr, rendered_text: &str, token: &str) -> bool {
     phase_of(abbr) == Phase::Glob && (rendered_text == token || rendered_text.is_empty())
 }
