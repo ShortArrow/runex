@@ -120,12 +120,20 @@ fn cygwin_family_bashes() -> Vec<(&'static str, PathBuf)> {
 /// and generate the cache file through `runex export bash --bin <...>`.
 /// Returns `(cache_path, runex_bin_path)`.
 fn build_cache(home: &Path) -> (PathBuf, String) {
+    build_cache_from(home, SHARED_CONFIG)
+}
+
+/// Write `config` under `home` and export the bash cache from it, the
+/// same way [`build_cache`] does for the shared config.
+fn build_cache_from(home: &Path, config: &str) -> (PathBuf, String) {
     let cfg_dir = home.join(".config").join("runex");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     let cfg = cfg_dir.join("config.toml");
-    std::fs::write(
-        &cfg,
-        r#"version = 1
+    std::fs::write(&cfg, config).unwrap();
+    export_bash_cache(home, &cfg)
+}
+
+const SHARED_CONFIG: &str = r#"version = 1
 
 [keybind.trigger]
 default = "space"
@@ -184,10 +192,62 @@ expand = "E2 {*}"
 key    = "l*"
 match  = "glob"
 expand = "{*}{*}{*}{*}"
-"#,
-    )
-    .unwrap();
 
+[[abbr]]
+key    = "dup"
+expand = "dup{}"
+
+[[abbr]]
+key    = "dup"
+expand = "second"
+
+[[abbr]]
+key    = "chn"
+expand = "first"
+when_command_exists = ["runex-no-such-command"]
+
+[[abbr]]
+key    = "chn"
+expand = "third {}end"
+
+[[abbr]]
+key    = "pwx"
+expand = "pwshexact"
+when_command_exists = { pwsh = ["git"] }
+
+[[abbr]]
+key    = "wn{number}"
+expand = "cond-number {number}"
+number = "a"
+when_command_exists = ["runex-no-such-command"]
+
+[[abbr]]
+key    = "amp{number}"
+expand = "A{number}B"
+number = "&"
+
+[[abbr]]
+key    = "bs{number}"
+expand = "S{number}{}E"
+number = '\'
+
+[[abbr]]
+key    = "oc{number}"
+expand = "O{number}"
+number = "x"
+
+[[abbr]]
+key    = "nb{number}"
+expand = "x{number}"
+number = "ääääääääääääääää"
+
+[[abbr]]
+key    = "{number}zp"
+expand = "NP{number}"
+number = "a"
+"#;
+
+fn export_bash_cache(home: &Path, cfg: &Path) -> (PathBuf, String) {
     let bin = runex_bin().to_string();
     let cache_path = home
         .join(".cache")
@@ -728,5 +788,143 @@ READLINE_LINE="$tok"; READLINE_POINT=${#tok}; __runex_expand
             "[{label}] a glob rule that renders to nothing is skipped and the next glob rule is tried; got:\n{out}"
         );
         assert!(out.contains("BYTECAP=ok"), "[{label}] the 4096 cap counts bytes, as the exec path does; got:\n{out}");
+    });
+}
+
+/// Issue #47: exact and `{number}` rules on the bake path follow the
+/// exec path's skip-and-fall-through semantics, per-rule conditions,
+/// decimal counts, literal units and the 4096-byte cap.
+#[test]
+fn bake_exact_and_number_rules_match_the_exec_path_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_exact_and_number_rules", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"export LC_ALL=C.UTF-8
+READLINE_LINE="dup"; READLINE_POINT=3; __runex_expand; echo "DUP=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="chn"; READLINE_POINT=3; __runex_expand; echo "CHN=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="pwx"; READLINE_POINT=3; __runex_expand; echo "PWX=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="wn2"; READLINE_POINT=3; __runex_expand; echo "WN=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="amp2"; READLINE_POINT=4; __runex_expand; echo "AMP=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="bs1"; READLINE_POINT=3; __runex_expand; echo "BS=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="oc010"; READLINE_POINT=5; __runex_expand; echo "OC10=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="oc08"; READLINE_POINT=4; __runex_expand; echo "OC8=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="nb128"; READLINE_POINT=5; __runex_expand; echo "NB=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="3zp"; READLINE_POINT=3; __runex_expand; echo "NOPREFIX=[$READLINE_LINE] P=$READLINE_POINT""#,
+        );
+        let expected = [
+            ("DUP=[dup] P=3", "the first of two rules with the same key wins; `dup{}` only adds a cursor and is not a self-loop"),
+            ("CHN=[third end] P=6", "a failed condition skips only its own rule"),
+            ("PWX=[pwx ] P=4", "an exact rule whose condition has no bash entry is skipped"),
+            ("WN=[wn2 ] P=4", "a {number} rule respects when_command_exists"),
+            ("AMP=[A&&B ] P=5", "an & unit is inserted literally"),
+            ("BS=[S\\E] P=2", "a backslash unit is inserted literally"),
+            ("OC10=[Oxxxxxxxxxx ] P=12", "a leading-zero count is decimal"),
+            ("OC8=[Oxxxxxxxx ] P=10", "08 is the decimal count 8"),
+            ("NB=[nb128 ] P=6", "the 4096 cap on a {number} rule counts bytes"),
+            ("NOPREFIX=[NPaaa ] P=6", "a {number} key with no prefix matches"),
+        ];
+        for (needle, why) in expected {
+            assert!(out.contains(needle), "[{label}] {why}: expected `{needle}`; got:\n{out}");
+        }
+    });
+}
+
+/// Review of #48: `when_command_exists` looks only at PATH (a bash
+/// builtin such as `shopt` is not a command there, matching the exec
+/// path's `which`), `{number}` substitution ignores `nocasematch`, and a
+/// command missing from PATH is looked up once per expansion even when
+/// many rules name it. A command name starting with `-` is a name, not an
+/// option to the lookup.
+#[test]
+fn bake_conditions_and_number_rendering_match_the_exec_path_on_every_cygwin_bash() {
+    let mut config = String::from(
+        r#"version = 1
+
+[keybind.trigger]
+default = "space"
+
+[[abbr]]
+key    = "bi"
+expand = "builtin-wrong"
+when_command_exists = ["shopt"]
+
+[[abbr]]
+key    = "bi"
+expand = "bi2"
+
+[[abbr]]
+key    = "da"
+expand = "dash-wrong"
+when_command_exists = ["-t"]
+
+[[abbr]]
+key    = "da"
+expand = "da2"
+
+[[abbr]]
+key    = "zz"
+expand = "{}"
+
+[[abbr]]
+key    = "ez{number}"
+expand = "{}"
+number = "x"
+
+[[abbr]]
+key    = "cn{number}"
+expand = "cn {number} {NUMBER}"
+number = "x"
+"#,
+    );
+    for i in 0..100 {
+        config.push_str(&format!(
+            "\n[[abbr]]\nkey    = \"pf\"\nexpand = \"never{i}\"\nwhen_command_exists = [\"runex-no-such-command\"]\n"
+        ));
+    }
+    config.push_str("\n[[abbr]]\nkey    = \"pf\"\nexpand = \"pfok\"\n");
+    for_each_cygwin_bash("bake_conditions_and_number_rendering", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache_from(dir.path(), &config);
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"export LC_ALL=C.UTF-8
+READLINE_LINE="bi"; READLINE_POINT=2; __runex_expand; echo "BI=[$READLINE_LINE]"
+READLINE_LINE="da"; READLINE_POINT=2; __runex_expand; echo "DA=[$READLINE_LINE]"
+READLINE_LINE="zz"; READLINE_POINT=2; __runex_expand; echo "ZZ=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="echo a; ez2"; READLINE_POINT=11; __runex_expand; echo "EZ=[$READLINE_LINE] P=$READLINE_POINT"
+shopt -s nocasematch
+READLINE_LINE="cn2"; READLINE_POINT=3; __runex_expand; echo "CN=[$READLINE_LINE]"
+shopt -q nocasematch && echo "NOCASE_RESTORED=on"
+shopt -u nocasematch
+start=${EPOCHREALTIME/./}
+READLINE_LINE="pf"; READLINE_POINT=2; __runex_expand
+end=${EPOCHREALTIME/./}
+echo "PF=[$READLINE_LINE] MS=$(( (end - start) / 1000 ))""#,
+        );
+        assert!(out.contains("BI=[bi2 ]"), "[{label}] a builtin is not a PATH command; got:\n{out}");
+        assert!(out.contains("DA=[da2 ]"), "[{label}] `-t` is a missing command, not an option; got:
+{out}");
+        assert!(out.contains("ZZ=[] P=0"), "[{label}] an expand of only {{}} empties the line like exec; got:
+{out}");
+        assert!(out.contains("EZ=[echo a; ] P=8"), "[{label}] a {{number}} rule rendering to nothing still fires, like exec; got:
+{out}");
+        assert!(out.contains("CN=[cn xx {NUMBER} ]"), "[{label}] {{number}} substitution is case-sensitive; got:\n{out}");
+        assert!(out.contains("NOCASE_RESTORED=on"), "[{label}] the user's nocasematch is restored; got:\n{out}");
+        assert!(out.contains("PF=[pfok ]"), "[{label}] the fallback after 100 failing rules fires; got:\n{out}");
+        let ms: u64 = out
+            .split("MS=")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("[{label}] no timing in output:\n{out}"));
+        assert!(ms < 500, "[{label}] 100 rules naming one missing command took {ms} ms; got:\n{out}");
     });
 }
