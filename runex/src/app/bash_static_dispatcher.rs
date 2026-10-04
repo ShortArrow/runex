@@ -92,7 +92,9 @@ fn bash_conditions(rule: &crate::domain::model::Abbr) -> Option<String> {
 /// skipped rule to the next one with the same key, as the exec path
 /// does. The third field is empty for an unconditional rule. Rules
 /// without a bash expansion, or whose condition has no bash entry (see
-/// [`bash_conditions`]), are omitted.
+/// [`bash_conditions`]), are omitted. `{number}` rules go to
+/// [`pattern_table_lines`], glob rules to [`glob_table_lines`], and regex
+/// rules (issue #20) to no table: Git Bash never expands them.
 fn exact_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
     for rule in &config.abbr {

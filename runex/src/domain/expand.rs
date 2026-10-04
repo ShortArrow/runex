@@ -1517,6 +1517,18 @@ mod tests {
     }
 
     #[test]
+    fn exact_and_number_rules_that_render_to_nothing_still_fire() {
+        let emptied = ExpandResult::Expanded { text: String::new(), cursor_offset: Some(0) };
+        let exact = cfg(vec![abbr("zz", "{}"), abbr("zz", "Z2")]);
+        assert_eq!(expand(&exact, "zz", Shell::Bash, |_| true), emptied);
+        let number = cfg(vec![
+            Abbr { number: Some("x".into()), ..abbr("ez{number}", "{}") },
+            Abbr { number: Some("x".into()), ..abbr("ez{number}", "E{number}") },
+        ]);
+        assert_eq!(expand(&number, "ez2", Shell::Bash, |_| true), emptied);
+    }
+
+    #[test]
     fn regex_rule_respects_when_command_exists() {
         let c = cfg(vec![Abbr {
             match_kind: Some(crate::domain::model::MatchKind::Regex),
