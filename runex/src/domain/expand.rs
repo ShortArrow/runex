@@ -434,8 +434,8 @@ fn is_exact_self_loop(abbr: &Abbr, template: &str) -> bool {
 /// A glob or regex rule whose rendered text equals the token would
 /// rewrite the token to itself and hide later rules of its phase
 /// (ADR 0005). One that renders to nothing would erase the token; it is
-/// skipped too, which also keeps the Git Bash bake path (where an empty
-/// result means "no match") in step.
+/// skipped too. Exact and `{number}` rules that render to nothing still
+/// fire.
 fn is_pattern_self_loop(abbr: &Abbr, rendered_text: &str, token: &str) -> bool {
     matches!(phase_of(abbr), Phase::Glob | Phase::Regex) && (rendered_text == token || rendered_text.is_empty())
 }

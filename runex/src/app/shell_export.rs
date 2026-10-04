@@ -660,7 +660,7 @@ mod tests {
             "bash script must define the cygwin bake dispatcher: {s}"
         );
         assert!(
-            s.contains("[\"gst\"]=\"git status\""),
+            s.contains("\"gst\"$'\\037'\"git status\"$'\\037'\"\""),
             "bash script must bake the abbreviation table for the cygwin path: {s}"
         );
     }
@@ -681,7 +681,7 @@ mod tests {
             "bash export without a config must not define the bake dispatcher function: {s}"
         );
         assert!(
-            !s.contains("__runex_abbr_expand"),
+            !s.contains("__runex_abbr_exact"),
             "bash export without a config must not bake the abbreviation table: {s}"
         );
     }
@@ -745,10 +745,10 @@ mod tests {
         // (quoting gcm's key into a `case` arm).
         //
         // The cygwin/msys bake path *does* embed tokens in
-        // `__runex_abbr_expand[...]` by design (issue #7 workaround), so we
+        // `__runex_abbr_exact` by design (issue #7 workaround), so we
         // only assert here that the legacy bash single-quote form (`'gcm'`)
         // and the historical helper name are absent. The bake path uses
-        // double quotes (`"gcm"`) inside an associative array, which is
+        // double quotes (`"gcm"`) inside an indexed array, which is
         // syntactically distinct.
         let config = Config {
             version: 1,
