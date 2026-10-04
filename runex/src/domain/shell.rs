@@ -88,6 +88,27 @@ pub(crate) fn bash_quote_string(value: &str) -> String {
     out
 }
 
+/// Quote a shell buffer for bash or zsh `eval`, keeping every character.
+///
+/// Unlike [`bash_quote_string`], nothing is dropped: the cursor that goes
+/// with the buffer is measured against the full text (issue #51). ASCII
+/// control characters leave the single quotes as `$'\xHH'`, which bash
+/// and zsh both decode, so the emitted text never carries a raw control
+/// byte. Single quotes are escaped as `'\''`; every other character,
+/// including U+2028 and U+2029, is literal inside single quotes.
+pub(crate) fn bash_quote_buffer(value: &str) -> String {
+    let mut out = String::from("'");
+    for ch in value.chars() {
+        match ch {
+            '\'' => out.push_str(r"'\''"),
+            c if c.is_ascii_control() => out.push_str(&format!(r"'$'\x{:02x}''", c as u32)),
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
+}
+
 
 /// Quote `token` as a PowerShell single-quoted string.
 ///

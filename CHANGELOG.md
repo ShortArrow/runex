@@ -64,6 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **bash, zsh: a tab or a line separator in the line survives a key
+  press (#51).** `runex hook` dropped ASCII control characters and
+  U+2028/U+2029 from the line it wrote back but kept the cursor
+  measured on the original line, so `echo<Tab>gst` became `echogst`
+  and the cursor landed past the end. Control characters are now
+  written as `$'\xHH'` and every other character is kept.
 - **Git Bash: exact and `{number}` rules follow the same rules as the
   other shells (#47).** The bake path kept only the last rule per exact key
   and shared one condition list between all rules with that key, so a
