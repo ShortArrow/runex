@@ -33,7 +33,7 @@
 //! `echo gst<Space>` would still expand `gst`) no longer applies.
 
 use crate::domain::expand::NUMBER_PLACEHOLDER;
-use crate::domain::model::{Config, Shell};
+use crate::domain::model::{Config, MatchKind, Shell};
 
 /// Wrap `s` as a bash double-quoted string suitable for embedding as a
 /// field of a baked table entry like `"key"$'\037'"value"`.
@@ -92,7 +92,9 @@ fn bash_conditions(rule: &crate::domain::model::Abbr) -> Option<String> {
 /// skipped rule to the next one with the same key, as the exec path
 /// does. The third field is empty for an unconditional rule. Rules
 /// without a bash expansion, or whose condition has no bash entry (see
-/// [`bash_conditions`]), are omitted.
+/// [`bash_conditions`]), are omitted. `{number}` rules go to
+/// [`pattern_table_lines`], glob rules to [`glob_table_lines`], and regex
+/// rules (issue #20) to no table: Git Bash never expands them.
 fn exact_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
     for rule in &config.abbr {
@@ -134,7 +136,7 @@ fn exact_table_lines(config: &Config) -> String {
 /// bash entry is omitted.
 fn pattern_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
-    for rule in &config.abbr {
+    for rule in config.abbr.iter().filter(|rule| rule.match_kind.is_none()) {
         let Some(unit) = rule.number.as_deref() else {
             continue;
         };
@@ -177,7 +179,7 @@ fn pattern_table_lines(config: &Config) -> String {
 /// token. The last field is the bash condition from [`bash_conditions`].
 fn glob_table_lines(config: &Config) -> String {
     let mut lines = Vec::new();
-    for rule in config.abbr.iter().filter(|rule| rule.match_kind.is_some()) {
+    for rule in config.abbr.iter().filter(|rule| rule.match_kind == Some(MatchKind::Glob)) {
         let Some(template) = rule.expand.for_shell(Shell::Bash) else {
             continue;
         };
@@ -709,6 +711,37 @@ mod tests {
     fn glob_table_lines_skips_exact_and_number_rules() {
         let c = cfg(vec![plain_abbr("gst", "git status"), pattern_abbr("up{number}", "cd {number}", "../")]);
         assert_eq!(glob_table_lines(&c), "");
+    }
+
+    // ── regex rules (issue #20): not baked ─────────────────────────────
+
+    fn regex_abbr(key: &str, expand: &str) -> Abbr {
+        Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Regex),
+            ..plain_abbr(key, expand)
+        }
+    }
+
+    #[test]
+    fn regex_rules_go_into_no_bake_table() {
+        let regex_with_cond = Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Regex),
+            ..abbr_with_when_cmds(r"r(\w+)", "REGEX {1}", vec!["git"])
+        };
+        let regex_with_number_text = Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Regex),
+            ..pattern_abbr("up{number}", "cd {number}", "../")
+        };
+        let c = cfg(vec![
+            regex_with_cond,
+            regex_abbr("a{2}", "AA"),
+            regex_with_number_text,
+            glob_abbr("k*", "kubectl {*}"),
+        ]);
+        let glob_only = glob_table_lines(&cfg(vec![glob_abbr("k*", "kubectl {*}")]));
+        assert_eq!(glob_table_lines(&c), glob_only);
+        assert_eq!(exact_table_lines(&c), "");
+        assert_eq!(pattern_table_lines(&c), "");
     }
 
     #[test]

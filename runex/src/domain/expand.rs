@@ -14,6 +14,9 @@ pub(crate) const NUMBER_PLACEHOLDER: &str = "{number}";
 /// (ADR 0005).
 pub(crate) const GLOB_CAPTURE_PLACEHOLDER: &str = "{*}";
 
+/// [`GLOB_CAPTURE_PLACEHOLDER`] without its braces.
+const GLOB_CAPTURE_NAME: &str = "*";
+
 /// Upper bound on the value captured by `{number}`. Above this the
 /// pattern simply fails to match — the user-visible effect is the
 /// same as typing an unknown token. Picked to bound the rendered
@@ -27,11 +30,22 @@ pub(crate) const MAX_NUMERIC_REPEAT: u32 = 128;
 pub(crate) const MAX_RENDERED_EXPAND_BYTES: usize = 4_096;
 
 /// Captures extracted from a token by [`match_rule`]: the digits of a
-/// `{number}` key, or the text a glob key's `*` matched.
+/// `{number}` key, the text a glob key's `*` matched, or the groups of
+/// a regex key.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Bindings {
     pub number: Option<u32>,
     pub glob: Option<String>,
+    /// Groups of a regex key in order, group 1 first.
+    pub regex: Option<Vec<RegexGroup>>,
+}
+
+/// One capture group of a regex key. `text` is `""` when the group did
+/// not take part in the match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegexGroup {
+    pub name: Option<String>,
+    pub text: String,
 }
 
 impl Bindings {
@@ -48,13 +62,15 @@ enum Phase {
     Exact,
     Number,
     Glob,
+    Regex,
 }
 
-const PHASES: [Phase; 3] = [Phase::Exact, Phase::Number, Phase::Glob];
+const PHASES: [Phase; 4] = [Phase::Exact, Phase::Number, Phase::Glob, Phase::Regex];
 
 fn phase_of(abbr: &Abbr) -> Phase {
     match abbr.match_kind {
         Some(MatchKind::Glob) => Phase::Glob,
+        Some(MatchKind::Regex) => Phase::Regex,
         None if abbr.key.contains('{') => Phase::Number,
         None => Phase::Exact,
     }
@@ -67,7 +83,76 @@ pub(crate) fn match_rule(abbr: &Abbr, token: &str) -> Option<Bindings> {
             let captured = match_glob_key(&abbr.key, token)?;
             Some(Bindings { glob: Some(captured), ..Bindings::empty() })
         }
+        Some(MatchKind::Regex) => {
+            let groups = match_regex_key(&abbr.key, token)?;
+            Some(Bindings { regex: Some(groups), ..Bindings::empty() })
+        }
         None => match_abbr_key(&abbr.key, token),
+    }
+}
+
+/// Upper bound on a compiled regex key. The config is re-read on every
+/// key press, and regex-lite's default limit (10 MiB) bounds only the
+/// NFA: a key under 1 KiB could still make each match allocate
+/// gigabytes for its capture slots. Abbreviation patterns compile to a
+/// few KiB.
+const REGEX_SIZE_LIMIT: usize = 64 * 1024;
+
+/// Upper bound on capture groups in a regex key; the capture slot table
+/// grows with this number times the compiled size.
+pub(crate) const MAX_REGEX_GROUPS: usize = 16;
+
+fn build_regex(pattern: &str) -> Result<regex_lite::Regex, regex_lite::Error> {
+    regex_lite::RegexBuilder::new(pattern).size_limit(REGEX_SIZE_LIMIT).build()
+}
+
+/// Compile a regex `key` so that it must match the whole token
+/// (`^(?:key)$`). The key must already have passed
+/// [`regex_key_group_count`].
+fn compile_regex_key(key: &str) -> Result<regex_lite::Regex, regex_lite::Error> {
+    build_regex(&format!("^(?:{key})$"))
+}
+
+/// Validate a regex `key` and return how many capture groups it has.
+/// The key must compile on its own (a key such as `a)|(b` compiles only
+/// once wrapped, and wrapping it would turn the anchors into
+/// alternatives) and wrapped as [`compile_regex_key`] does (a `(?x)`
+/// comment or the nesting limit can break only the wrapped form), within
+/// [`REGEX_SIZE_LIMIT`] and [`MAX_REGEX_GROUPS`]. Config validation runs
+/// this on every regex key, so the runtime compile cannot fail.
+pub(crate) fn regex_key_group_count(key: &str) -> Result<usize, String> {
+    let alone = build_regex(key).map_err(|error| error.to_string())?;
+    compile_regex_key(key).map_err(|error| error.to_string())?;
+    let groups = alone.captures_len() - 1;
+    if groups > MAX_REGEX_GROUPS {
+        return Err(format!("{groups} capture groups (at most {MAX_REGEX_GROUPS} are allowed)"));
+    }
+    Ok(groups)
+}
+
+/// Match a regex `key` against `token`. Returns every capture group,
+/// or `None` when the token does not match or the key does not compile
+/// (validation rejects the latter at load time).
+fn match_regex_key(key: &str, token: &str) -> Option<Vec<RegexGroup>> {
+    let regex = compile_regex_key(key).ok()?;
+    let captures = regex.captures(token)?;
+    let groups = regex
+        .capture_names()
+        .enumerate()
+        .skip(1)
+        .map(|(i, name)| RegexGroup {
+            name: name.map(str::to_string),
+            text: captures.get(i).map_or_else(String::new, |m| m.as_str().to_string()),
+        })
+        .collect();
+    Some(groups)
+}
+
+/// The group number written as `{1}`..`{9}` in a regex rule's `expand`.
+pub(crate) fn regex_group_number(placeholder_name: &str) -> Option<usize> {
+    match placeholder_name.as_bytes() {
+        [digit @ b'1'..=b'9'] => Some(usize::from(digit - b'0')),
+        _ => None,
     }
 }
 
@@ -123,7 +208,7 @@ pub(crate) fn match_abbr_key(key: &str, token: &str) -> Option<Bindings> {
     if n == 0 || n > MAX_NUMERIC_REPEAT {
         return None;
     }
-    Some(Bindings { number: Some(n), glob: None })
+    Some(Bindings { number: Some(n), ..Bindings::empty() })
 }
 
 /// Split `key` at the single `{number}` placeholder. Returns `None`
@@ -141,38 +226,74 @@ fn split_once_number_placeholder(key: &str) -> Option<(&str, &str)> {
 }
 
 /// Render the text to insert and the cursor offset. The cursor
-/// placeholder is located in the template before the glob capture is
-/// substituted, so a `{}` the user typed inside the capture stays
-/// literal text instead of being taken for the placeholder.
+/// placeholder is located in the template before the glob or regex
+/// captures are substituted, so a `{}` the user typed inside a capture
+/// stays literal text instead of being taken for the placeholder.
 fn render_with_cursor(abbr: &Abbr, shell: Shell, bindings: &Bindings) -> Option<(String, Option<usize>)> {
     let base = render_number(abbr, shell, bindings)?;
     let (text, cursor) = extract_cursor_placeholder(&base);
     let Some(pos) = cursor else {
-        return Some((substitute_glob_capture(&text, bindings)?, None));
+        return Some((substitute_captures(&text, bindings)?, None));
     };
-    let left = substitute_glob_capture(&text[..pos], bindings)?;
-    let right = substitute_glob_capture(&text[pos..], bindings)?;
+    let left = substitute_captures(&text[..pos], bindings)?;
+    let right = substitute_captures(&text[pos..], bindings)?;
     let cursor = left.len();
     let joined = left + &right;
     (joined.len() <= MAX_RENDERED_EXPAND_BYTES).then_some((joined, Some(cursor)))
 }
 
-/// Replace every `{*}` with the glob capture. The final length is
-/// computed first, so a template with many `{*}` and a long token is
-/// refused without building the oversized string.
-fn substitute_glob_capture(text: &str, bindings: &Bindings) -> Option<String> {
-    let Some(captured) = &bindings.glob else {
-        return Some(text.to_string());
-    };
-    let occurrences = text.matches(GLOB_CAPTURE_PLACEHOLDER).count();
-    let final_len = captured
-        .len()
-        .checked_mul(occurrences)?
-        .checked_add(text.len() - occurrences * GLOB_CAPTURE_PLACEHOLDER.len())?;
+/// Replace the capture placeholders in `text`: `{*}` with the glob
+/// capture, `{1}`..`{9}` and `{name}` with regex groups. A placeholder
+/// the bindings cannot resolve stays literal. The final length is
+/// computed first, so a template with many placeholders and a long
+/// token is refused without building the oversized string.
+fn substitute_captures(text: &str, bindings: &Bindings) -> Option<String> {
+    let mut final_len: usize = 0;
+    for_each_rendered_piece(text, bindings, |piece| final_len = final_len.saturating_add(piece.len()));
     if final_len > MAX_RENDERED_EXPAND_BYTES {
         return None;
     }
-    Some(text.replace(GLOB_CAPTURE_PLACEHOLDER, captured))
+    let mut rendered = String::with_capacity(final_len);
+    for_each_rendered_piece(text, bindings, |piece| rendered.push_str(piece));
+    Some(rendered)
+}
+
+/// Feed `text` to `emit` piece by piece, scanning left to right, with
+/// each `{...}` that [`resolve_capture`] knows replaced by its capture.
+fn for_each_rendered_piece<'a>(text: &'a str, bindings: &'a Bindings, mut emit: impl FnMut(&'a str)) {
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let after_open = &rest[open + 1..];
+        let resolved = after_open
+            .find('}')
+            .and_then(|close| Some((close, resolve_capture(&after_open[..close], bindings)?)));
+        match resolved {
+            Some((close, capture)) => {
+                emit(&rest[..open]);
+                emit(capture);
+                rest = &after_open[close + 1..];
+            }
+            None => {
+                emit(&rest[..=open]);
+                rest = after_open;
+            }
+        }
+    }
+    emit(rest);
+}
+
+/// The capture that the placeholder `{name}` stands for, or `None`
+/// when the bindings provide no such capture.
+fn resolve_capture<'a>(name: &str, bindings: &'a Bindings) -> Option<&'a str> {
+    if name == GLOB_CAPTURE_NAME {
+        return bindings.glob.as_deref();
+    }
+    let groups = bindings.regex.as_ref()?;
+    let group = match regex_group_number(name) {
+        Some(number) => groups.get(number - 1),
+        None => groups.iter().find(|group| group.name.as_deref() == Some(name)),
+    };
+    group.map(|group| group.text.as_str())
 }
 
 /// Apply the `{number}` repetition to the template for `shell`.
@@ -247,7 +368,7 @@ pub(crate) enum WhichResult {
 /// `command_exists` is injected for testability (DI).
 ///
 /// Matching runs in phases (issue #1, ADR 0005): exact rules, then
-/// `{number}` rules, then glob rules. Within each phase the config's
+/// `{number}` rules, then glob rules, then regex rules (issue #20). Within each phase the config's
 /// rule order is preserved (first match wins), so an exact rule always
 /// beats a pattern that would also accept the token, even when the
 /// pattern rule appears earlier in the config.
@@ -293,7 +414,7 @@ where
         }
     }
     let (text, cursor_offset) = render_with_cursor(abbr, shell, bindings)?;
-    if is_glob_self_loop(abbr, &text, token) {
+    if is_pattern_self_loop(abbr, &text, token) {
         return None;
     }
     Some(ExpandResult::Expanded { text, cursor_offset })
@@ -302,20 +423,21 @@ where
 /// An exact rule whose `expand` is its own `key` would rewrite the token
 /// to itself; it is skipped before its conditions are evaluated, so
 /// `which --why` reports it as a self-loop rather than a failed
-/// condition. Glob rules are checked after rendering instead
-/// ([`is_glob_self_loop`]), since their raw template never equals the
+/// condition. Glob and regex rules are checked after rendering instead
+/// ([`is_pattern_self_loop`]), since their raw template never equals the
 /// key. `{number}` rules and exact rules that only add a `{}` keep
 /// expanding, as they always have.
 fn is_exact_self_loop(abbr: &Abbr, template: &str) -> bool {
     phase_of(abbr) == Phase::Exact && abbr.key == template
 }
 
-/// A glob rule whose rendered text equals the token would rewrite the
-/// token to itself and hide later glob rules (ADR 0005). One that
-/// renders to nothing would erase the token; it is skipped too. Exact
-/// and `{number}` rules that render to nothing still fire.
-fn is_glob_self_loop(abbr: &Abbr, rendered_text: &str, token: &str) -> bool {
-    phase_of(abbr) == Phase::Glob && (rendered_text == token || rendered_text.is_empty())
+/// A glob or regex rule whose rendered text equals the token would
+/// rewrite the token to itself and hide later rules of its phase
+/// (ADR 0005). One that renders to nothing would erase the token; it is
+/// skipped too. Exact and `{number}` rules that render to nothing still
+/// fire.
+fn is_pattern_self_loop(abbr: &Abbr, rendered_text: &str, token: &str) -> bool {
+    matches!(phase_of(abbr), Phase::Glob | Phase::Regex) && (rendered_text == token || rendered_text.is_empty())
 }
 
 /// Extract cursor placeholder `{}` from expansion text.
@@ -376,7 +498,7 @@ where
 /// Look up a token and return why it expands (or doesn't).
 ///
 /// Scans rules in the same phase order as `expand()` (exact, then
-/// `{number}`, then glob) so `which_abbr` always agrees with the final
+/// `{number}`, then glob, then regex) so `which_abbr` always agrees with the final
 /// outcome of `expand`, even when multiple rules match.
 pub(crate) fn which_abbr<F>(config: &Config, token: &str, shell: Shell, command_exists: F) -> WhichResult
 where
@@ -459,7 +581,7 @@ where
         // added later if `which --why` needs to distinguish this case.
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     };
-    if is_glob_self_loop(abbr, &text, token) {
+    if is_pattern_self_loop(abbr, &text, token) {
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     }
     WhichOutcome::Hit { expansion: with_cursor_marker(text, cursor), satisfied }
@@ -896,7 +1018,7 @@ mod tests {
     fn match_abbr_key_pattern_captures_3() {
         assert_eq!(
             match_abbr_key("up{number}", "up3"),
-            Some(Bindings { number: Some(3), glob: None })
+            Some(Bindings { number: Some(3), glob: None, regex: None })
         );
     }
 
@@ -904,7 +1026,7 @@ mod tests {
     fn match_abbr_key_pattern_captures_10() {
         assert_eq!(
             match_abbr_key("up{number}", "up10"),
-            Some(Bindings { number: Some(10), glob: None })
+            Some(Bindings { number: Some(10), glob: None, regex: None })
         );
     }
 
@@ -926,7 +1048,7 @@ mod tests {
         // 128 still matches.
         assert_eq!(
             match_abbr_key("up{number}", "up128"),
-            Some(Bindings { number: Some(128), glob: None })
+            Some(Bindings { number: Some(128), glob: None, regex: None })
         );
     }
 
@@ -934,7 +1056,7 @@ mod tests {
     fn match_abbr_key_pattern_with_suffix() {
         assert_eq!(
             match_abbr_key("x{number}y", "x3y"),
-            Some(Bindings { number: Some(3), glob: None })
+            Some(Bindings { number: Some(3), glob: None, regex: None })
         );
         assert_eq!(match_abbr_key("x{number}y", "x3z"), None);
         assert_eq!(match_abbr_key("x{number}y", "x3"), None);
@@ -968,7 +1090,7 @@ mod tests {
     #[test]
     fn render_expansion_repeats_unit_three_times() {
         let a = abbr_with_number("up{number}", "cd {number}", "../");
-        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(3), glob: None });
+        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(3), glob: None, regex: None });
         assert_eq!(out.as_deref(), Some("cd ../../../"));
     }
 
@@ -976,7 +1098,7 @@ mod tests {
     fn render_expansion_rejects_when_total_repeat_exceeds_cap() {
         // unit = 50 bytes, n = 128 → 6400 > 4096
         let a = abbr_with_number("u{number}", "{number}", &"X".repeat(50));
-        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(128), glob: None });
+        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(128), glob: None, regex: None });
         assert_eq!(out, None);
     }
 
@@ -993,7 +1115,7 @@ mod tests {
         // catch this at parse; the runtime is defensive.
         let mut a = abbr("up{number}", "cd {number}");
         a.number = None;
-        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(3), glob: None });
+        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(3), glob: None, regex: None });
         assert_eq!(out, None);
     }
 
@@ -1309,5 +1431,140 @@ mod tests {
             matches!(which_abbr(&c, &token, Shell::Bash, |_| true), WhichResult::Expanded { .. }),
             "which must not report a rule that expand fires as skipped"
         );
+    }
+
+    // ── match = "regex" (issue #20) ────────────────────────────────────────
+
+    fn abbr_regex(key: &str, expand: &str) -> Abbr {
+        Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Regex),
+            ..abbr(key, expand)
+        }
+    }
+
+    fn passes(token: &str) -> ExpandResult {
+        ExpandResult::PassThrough(token.into())
+    }
+
+    #[test]
+    fn regex_numbered_group_is_substituted_into_expand() {
+        let c = cfg(vec![abbr_regex(r"k(\w+)", "kubectl {1}")]);
+        assert_eq!(expand(&c, "kgp", Shell::Bash, |_| true), expanded("kubectl gp"));
+    }
+
+    #[test]
+    fn regex_must_match_the_whole_token() {
+        let c = cfg(vec![abbr_regex(r"k(\w+)", "kubectl {1}")]);
+        assert_eq!(expand(&c, "xkgp", Shell::Bash, |_| true), passes("xkgp"));
+    }
+
+    #[test]
+    fn regex_named_group_is_substituted_by_name() {
+        let c = cfg(vec![abbr_regex("g(?P<rest>.+)", "git {rest}")]);
+        assert_eq!(expand(&c, "gco", Shell::Bash, |_| true), expanded("git co"));
+    }
+
+    #[test]
+    fn regex_counted_repetition_is_anchored_at_the_end() {
+        let c = cfg(vec![abbr_regex("d([a-z]{2})", "docker {1}")]);
+        assert_eq!(expand(&c, "dps", Shell::Bash, |_| true), expanded("docker ps"));
+        assert_eq!(expand(&c, "dpsx", Shell::Bash, |_| true), passes("dpsx"));
+    }
+
+    #[test]
+    fn regex_group_that_did_not_participate_renders_empty() {
+        let c = cfg(vec![abbr_regex("a(x)?b", "[{1}]")]);
+        assert_eq!(expand(&c, "ab", Shell::Bash, |_| true), expanded("[]"));
+    }
+
+    #[test]
+    fn regex_unknown_name_placeholder_stays_literal() {
+        let c = cfg(vec![abbr_regex(r"k(\w+)", "awk '{print}' {1}")]);
+        assert_eq!(expand(&c, "kz", Shell::Bash, |_| true), expanded("awk '{print}' z"));
+    }
+
+    #[test]
+    fn regex_capture_containing_braces_does_not_move_the_cursor_placeholder() {
+        let c = cfg(vec![abbr_regex("m(.+)", "git commit -m '{1}{}'")]);
+        assert_eq!(
+            expand(&c, "mA{}B", Shell::Bash, |_| true),
+            ExpandResult::Expanded { text: "git commit -m 'A{}B'".into(), cursor_offset: Some(19) }
+        );
+    }
+
+    #[test]
+    fn exact_rule_beats_an_earlier_regex_rule() {
+        let c = cfg(vec![abbr_regex(r"k(\w+)", "regex {1}"), abbr("kgp", "exact")]);
+        assert_eq!(expand(&c, "kgp", Shell::Bash, |_| true), expanded("exact"));
+    }
+
+    #[test]
+    fn glob_rule_beats_an_earlier_regex_rule() {
+        let c = cfg(vec![abbr_regex(r"k(\w+)", "regex {1}"), abbr_glob("k*", "glob {*}")]);
+        assert_eq!(expand(&c, "kgp", Shell::Bash, |_| true), expanded("glob gp"));
+    }
+
+    #[test]
+    fn regex_rule_whose_expansion_equals_the_token_is_skipped() {
+        let c = cfg(vec![abbr_regex("x(.*)", "x{1}")]);
+        assert_eq!(expand(&c, "xa", Shell::Bash, |_| true), passes("xa"));
+    }
+
+    #[test]
+    fn regex_rule_that_renders_to_nothing_is_skipped_for_the_next_one() {
+        let c = cfg(vec![abbr_regex("e(.*)", "{1}{}"), abbr_regex("e(.*)", "E2 {1}")]);
+        assert_eq!(expand(&c, "e", Shell::Bash, |_| true), expanded("E2 "));
+    }
+
+    #[test]
+    fn exact_and_number_rules_that_render_to_nothing_still_fire() {
+        let emptied = ExpandResult::Expanded { text: String::new(), cursor_offset: Some(0) };
+        let exact = cfg(vec![abbr("zz", "{}"), abbr("zz", "Z2")]);
+        assert_eq!(expand(&exact, "zz", Shell::Bash, |_| true), emptied);
+        let number = cfg(vec![
+            Abbr { number: Some("x".into()), ..abbr("ez{number}", "{}") },
+            Abbr { number: Some("x".into()), ..abbr("ez{number}", "E{number}") },
+        ]);
+        assert_eq!(expand(&number, "ez2", Shell::Bash, |_| true), emptied);
+    }
+
+    #[test]
+    fn regex_rule_respects_when_command_exists() {
+        let c = cfg(vec![Abbr {
+            match_kind: Some(crate::domain::model::MatchKind::Regex),
+            ..abbr_when(r"k(\w+)", "kubectl {1}", vec!["git"])
+        }]);
+        assert_eq!(expand(&c, "kgp", Shell::Bash, |_| false), passes("kgp"));
+        assert_eq!(expand(&c, "kgp", Shell::Bash, |_| true), expanded("kubectl gp"));
+    }
+
+    #[test]
+    fn regex_render_over_the_cap_passes_through() {
+        let c = cfg(vec![abbr_regex("l(.*)", &"{1}".repeat(5))]);
+        let token = format!("l{}", "a".repeat(900));
+        assert_eq!(expand(&c, &token, Shell::Bash, |_| true), passes(&token));
+        let at_cap = format!("l{}", "a".repeat(819));
+        assert!(matches!(expand(&c, &at_cap, Shell::Bash, |_| true), ExpandResult::Expanded { .. }));
+    }
+
+    /// Wrapped as `^(?:a)|(b)$`, this key would compile and match any
+    /// token starting with `a`, so the standalone check must refuse it.
+    #[test]
+    fn regex_key_that_only_compiles_once_wrapped_is_refused() {
+        assert!(regex_key_group_count("a)|(b").is_err());
+        assert_eq!(regex_key_group_count(r"k(\w+)(?P<x>.)?").ok(), Some(2));
+    }
+
+    #[test]
+    fn which_reports_the_regex_rule_and_its_rendered_expansion() {
+        let c = cfg(vec![abbr("x", "y"), abbr_regex(r"k(\w+)", "kubectl {1}")]);
+        match which_abbr(&c, "kgp", Shell::Bash, |_| true) {
+            WhichResult::Expanded { key, expansion, rule_index, .. } => {
+                assert_eq!(key, r"k(\w+)");
+                assert_eq!(expansion, "kubectl gp");
+                assert_eq!(rule_index, 1);
+            }
+            other => panic!("expected Expanded, got {other:?}"),
+        }
     }
 }

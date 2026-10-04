@@ -498,6 +498,31 @@ glob の key で特別な意味を持つのは `*` と `?` だけで、`*` は 1
 
 ---
 
+## 16. glob では書けないトークンを正規表現の key で扱う
+
+**用途:** `g.co`、`g.st`、`g.sw` などを `git <残り>` へ展開する。ただし残りが英数字の語である場合に限り、`g.` だけや `g.co-x` は打ったままにする。
+
+```toml
+[[abbr]]
+key    = 'g\.(?P<rest>\w+)'
+match  = "regex"
+expand = "git {rest}"
+```
+
+```
+g.co<Space>    # → git co
+g.<Space>      # g. のまま
+g.co-x<Space>  # g.co-x のまま
+```
+
+key はトークン全体と一致する必要があります。`expand` の `{1}` から `{9}` には番号付きのグループ、`{rest}` には `rest` という名前のグループの内容が入ります。`\.` や `\w` を TOML にそのまま渡すため、key は単一引用符で囲みます。
+
+試す順番は、完全一致、`{number}`、glob の各ルールの後。エンジンは regex-lite で、`\w` と `(?i)` の対象は ASCII だけです。
+
+Git Bash では、事前に作った表を使って bash が展開を行うため、正規表現の key は展開されません。ほかのシェルには影響なし。Windows では、設定に正規表現のルールがあると `runex doctor` が警告を出します。詳しくは [config-reference.md](config-reference.md#regex-keys-match--regex)（英語）を参照してください。
+
+---
+
 ## 次に読む
 
 - フィールドの一覧: [config-reference.md](config-reference.md)（英語。`[keybind]` と `[[abbr]]` の各フィールド、検証規則、`runex doctor` 各行の意味）

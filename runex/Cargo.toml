@@ -33,6 +33,10 @@ toml = "0.8"
 toml_edit = "0.22"
 dirs = "6"
 thiserror = "2"
+# Engine for `match = "regex"` keys (issue #20). Chosen over `regex`
+# for its small binary and compile-time footprint; the price is
+# ASCII-only Unicode classes.
+regex-lite = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

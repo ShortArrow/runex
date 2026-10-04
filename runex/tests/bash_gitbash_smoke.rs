@@ -245,6 +245,11 @@ number = "ääääääääääääääää"
 key    = "{number}zp"
 expand = "NP{number}"
 number = "a"
+
+[[abbr]]
+key    = 'r(\w+)'
+match  = "regex"
+expand = "REGEX {1}"
 "#;
 
 fn export_bash_cache(home: &Path, cfg: &Path) -> (PathBuf, String) {
@@ -926,5 +931,29 @@ echo "PF=[$READLINE_LINE] MS=$(( (end - start) / 1000 ))""#,
             .and_then(|n| n.parse().ok())
             .unwrap_or_else(|| panic!("[{label}] no timing in output:\n{out}"));
         assert!(ms < 500, "[{label}] 100 rules naming one missing command took {ms} ms; got:\n{out}");
+    });
+}
+
+/// Regex rules (issue #20) are not baked: on the bake path a token only
+/// a regex rule matches gets a plain space, never an expansion.
+#[test]
+fn bake_never_expands_a_regex_rule_on_every_cygwin_bash() {
+    for_each_cygwin_bash("bake_regex_rule_not_baked", |label, bash| {
+        let dir = tempdir().unwrap();
+        let (cache, _bin) = build_cache(dir.path());
+        let out = run_with_label(
+            label,
+            bash,
+            &cache,
+            "msys",
+            r#"READLINE_LINE="rab"
+READLINE_POINT=3
+__runex_expand
+echo "LINE=[$READLINE_LINE]""#,
+        );
+        assert!(
+            out.contains("LINE=[rab ]"),
+            "[{label}] a regex rule must not expand on the bake path; got:\n{out}"
+        );
     });
 }

@@ -636,6 +636,38 @@ for the exact rules.
 
 ---
 
+## 16. Regex keys for tokens a glob cannot describe
+
+**Use case:** `g.co`, `g.st`, `g.sw`… should become `git <rest>`, but
+only when the rest is a word, so `g.` alone or `g.co-x` stay as typed.
+
+```toml
+[[abbr]]
+key    = 'g\.(?P<rest>\w+)'
+match  = "regex"
+expand = "git {rest}"
+```
+
+```
+g.co<Space>    # → git co
+g.<Space>      # stays g.
+g.co-x<Space>  # stays g.co-x
+```
+
+The key must match the whole token. `{1}` to `{9}` in `expand` take
+the numbered groups and `{rest}` the group named `rest`. Write the key
+in single quotes so TOML leaves `\.` and `\w` alone.
+
+Regex rules are tried after exact, `{number}` and glob rules. The
+engine is regex-lite, where `\w` and `(?i)` cover ASCII only.
+
+Regex keys do not expand on Git Bash, where expansion runs in bash
+from a pre-built table; every other shell handles them. On Windows,
+`runex doctor` warns when the config has one. Details are in
+[config-reference.md](config-reference.md#regex-keys-match--regex).
+
+---
+
 ## Next steps
 
 - Full field reference: [config-reference.md](config-reference.md)

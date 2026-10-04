@@ -181,7 +181,8 @@ pub(crate) struct Abbr {
     pub number: Option<String>,
     /// How `key` is matched against a token (ADR 0005). `None` keeps
     /// the literal / `{number}` meaning every existing config relies
-    /// on; `Some(Glob)` reads `key` as a `*` / `?` pattern.
+    /// on; `Some(Glob)` reads `key` as a `*` / `?` pattern and
+    /// `Some(Regex)` as a whole-token regular expression.
     #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
     pub match_kind: Option<MatchKind>,
 }
@@ -192,6 +193,8 @@ pub(crate) struct Abbr {
 pub(crate) enum MatchKind {
     /// `*` matches zero or more characters, `?` exactly one.
     Glob,
+    /// `key` is a regex-lite pattern that must match the whole token.
+    Regex,
 }
 
 /// Precache configuration.
