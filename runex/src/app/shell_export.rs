@@ -1512,7 +1512,7 @@ mod tests {
             };
             let s = export_script(Shell::Nu, "runex", Some(&config));
             assert!(
-                s.contains("hook --shell nu --line $line --cursor $cursor"),
+                s.contains("hook --shell nu $'--line=($line)' --cursor $cursor"),
                 "Nu bootstrap must pass buffer state as separate --line/--cursor args: {s}"
             );
             assert!(s.contains("from json"), "Nu bootstrap must parse hook output via `from json`: {s}");

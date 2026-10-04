@@ -91,3 +91,23 @@ fn space_does_not_expand_after_echo_argument_position() {
     // round-trip — but that's flaky in CI. Keep the positive assert
     // and rely on the bake-side test for the negative side.
 }
+
+/// Issue #50: a line that starts with `-` reaches `runex hook` as the
+/// value of `--line`, not as a flag, so a rule whose key is `-n` expands.
+#[test]
+fn space_expands_a_line_that_starts_with_a_dash() {
+    if !bash4_available() {
+        eprintln!("skipping: bash not available");
+        return;
+    }
+    let config = write_simple_config("-n", "echo EXPANDED");
+    let mut session = PtySession::spawn(PtyShell::Bash, runex_bin_str(), config.path())
+        .expect("the shell is installed, so a PTY session that fails to bootstrap is a real failure, not a skip");
+
+    session.send("-n ");
+    session.send_line("");
+
+    session
+        .expect_regex(r"EXPANDED")
+        .expect("bash should have expanded -n<Space> to `echo EXPANDED`");
+}

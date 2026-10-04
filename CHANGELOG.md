@@ -64,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **bash, zsh, nu: a line that starts with `-` expands (#50).** The
+  templates passed the buffer as `--line <buffer>`, so `runex hook` read
+  a leading `-` as an option, failed, and the shell inserted a plain
+  space. `-x; gst` and a rule whose key is `-n` now expand. The buffer
+  is passed as one `--line=<buffer>` argument.
 - **Git Bash: exact and `{number}` rules follow the same rules as the
   other shells (#47).** The bake path kept only the last rule per exact key
   and shared one condition list between all rules with that key, so a
