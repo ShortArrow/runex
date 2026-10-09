@@ -6,7 +6,7 @@
 
 use crate::domain::expand::expand;
 use crate::domain::model::{Config, ExpandResult, Shell};
-use crate::domain::shell::{bash_quote_string, lua_quote_string, pwsh_double_quote_string};
+use crate::domain::shell::{bash_quote_buffer, lua_quote_string, pwsh_double_quote_string};
 
 /// Outcome of a hook call — what the shell adapter should do to its buffer.
 ///
@@ -154,12 +154,12 @@ pub(crate) fn render_action(shell: Shell, action: &HookAction) -> String {
     match shell {
         Shell::Bash => format!(
             "READLINE_LINE={}; READLINE_POINT={}",
-            bash_quote_string(line),
+            bash_quote_buffer(line),
             cursor,
         ),
         Shell::Zsh => {
             let (lb, rb) = line.split_at(*cursor);
-            format!("LBUFFER={}; RBUFFER={}", bash_quote_string(lb), bash_quote_string(rb))
+            format!("LBUFFER={}; RBUFFER={}", bash_quote_buffer(lb), bash_quote_buffer(rb))
         }
         Shell::Pwsh => format!(
             "$__RUNEX_LINE = {}\n$__RUNEX_CURSOR = {}",
@@ -459,7 +459,7 @@ mod tests {
             cursor: 17,
         };
         let out = render_action(Shell::Bash, &action);
-        // bash_quote_string wraps in single quotes and escapes embedded ones
+        // bash_quote_buffer wraps in single quotes and escapes embedded ones
         // with the `'\''` pattern.
         assert!(out.starts_with("READLINE_LINE="));
         assert!(out.contains("'\\''"), "render output should escape quotes: {}", out);

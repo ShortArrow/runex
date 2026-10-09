@@ -88,6 +88,27 @@ pub(crate) fn bash_quote_string(value: &str) -> String {
     out
 }
 
+/// Quote a shell buffer for bash or zsh `eval`, keeping every character.
+///
+/// Unlike [`bash_quote_string`], nothing is dropped: the cursor that goes
+/// with the buffer is measured against the full text (issue #51). ASCII
+/// control characters leave the single quotes as `$'\xHH'`, which bash
+/// and zsh both decode, so the emitted text never carries a raw control
+/// byte. Single quotes are escaped as `'\''`; every other character,
+/// including U+2028 and U+2029, is literal inside single quotes.
+pub(crate) fn bash_quote_buffer(value: &str) -> String {
+    let mut out = String::from("'");
+    for ch in value.chars() {
+        match ch {
+            '\'' => out.push_str(r"'\''"),
+            c if c.is_ascii_control() => out.push_str(&format!(r"'$'\x{:02x}''", c as u32)),
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
+}
+
 
 /// Quote `token` as a PowerShell single-quoted string.
 ///
@@ -424,6 +445,20 @@ mod tests {
         let line = bash_quote_string("runex\recho INJECTED");
         assert!(!line.contains('\r'), "literal CR must not appear: {line:?}");
         assert!(!line.contains("$'"), "dollar-quote ANSI-C form must not be used: {line:?}");
+    }
+
+    #[test]
+    fn bash_quote_buffer_writes_control_characters_as_hex_escapes() {
+        assert_eq!(bash_quote_buffer("a\tb"), r"'a'$'\x09''b'");
+        assert_eq!(bash_quote_buffer("x\n\u{7f}"), r"'x'$'\x0a'''$'\x7f'''");
+        let quoted = bash_quote_buffer("echo\r\u{1b}[31m");
+        assert!(!quoted.chars().any(|c| c.is_ascii_control()), "no raw control byte: {quoted:?}");
+    }
+
+    #[test]
+    fn bash_quote_buffer_keeps_separators_and_escapes_single_quotes() {
+        assert_eq!(bash_quote_buffer("a\u{2028}b\u{2029}c"), "'a\u{2028}b\u{2029}c'");
+        assert_eq!(bash_quote_buffer("it's"), r"'it'\''s'");
     }
 
     // bash_quote_pattern tests dropped — the helper and its callers (the

@@ -121,4 +121,14 @@ printf '%s|%s\n' "$LBUFFER" "$RBUFFER"
             "cargo install --path |"
         );
     }
+
+    /// Issue #51: a tab or a line separator the user typed comes back
+    /// unchanged, with the split between LBUFFER and RBUFFER at the end.
+    #[test]
+    fn control_and_separator_characters_survive_the_round_trip() {
+        if !zsh_available() { eprintln!("skipping: zsh not found on PATH"); return; }
+        let config = write_config();
+        assert_eq!(run_helper(&config, "echo\tgcm", ""), "echo\tgcm |");
+        assert_eq!(run_helper(&config, "foo\u{2028} gcm", ""), "foo\u{2028} gcm |");
+    }
 }

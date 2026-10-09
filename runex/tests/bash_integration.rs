@@ -156,4 +156,27 @@ mod bash {
         );
         assert_eq!(out, "<cargo install --path >");
     }
+
+    /// Issue #51: a tab or a line separator the user typed comes back
+    /// unchanged, and the cursor stays inside the line.
+    #[test]
+    fn test_control_and_separator_characters_survive_the_round_trip() {
+        if !bash_available() { return; }
+        let config = write_config();
+        for (line, expected) in [
+            ("\tgcm", "\tgcm "),
+            ("echo\tgcm", "echo\tgcm "),
+            ("foo\u{2028} gcm", "foo\u{2028} gcm "),
+        ] {
+            let snippet = format!(
+                r#"export LC_ALL=C.UTF-8
+READLINE_LINE=$'{}'; READLINE_POINT=${{#READLINE_LINE}}; __runex_expand
+printf '<%s> P=%s L=%s\n' "$READLINE_LINE" "$READLINE_POINT" "${{#READLINE_LINE}}""#,
+                line.replace('\t', r"\t").replace('\u{2028}', r"\u2028"),
+            );
+            let out = run_bash(&config, &snippet);
+            let len = expected.chars().count();
+            assert_eq!(out, format!("<{expected}> P={len} L={len}"), "line {line:?}");
+        }
+    }
 }
