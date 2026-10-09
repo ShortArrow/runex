@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A rule whose expansion is blank no longer erases the token (#52).**
+  An `expand` that is empty or only whitespace once the cursor
+  placeholder is removed, such as `"{}"` or `" {} "`, used to replace
+  the typed token with nothing on every shell but Git Bash. Such a rule
+  is now skipped in every phase: the next rule with a matching key is
+  tried, and otherwise the trigger key inserts a plain space. This also
+  covers a `{number}` rule whose unit is whitespace and a glob or regex
+  rule whose captures are whitespace. `runex doctor` warns about these
+  rules (`abbr[N].blank_expand`), and `runex which --why` reports them
+  as a blank expansion. ADR 0006 records the decision.
 - **Documentation rewritten against the current behaviour.**
   `docs/setup.md` now describes the static-cache layout that `runex
   init` actually writes (the versioned header, Windows and Unix cache
@@ -90,12 +100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`{number}x`) now matches on Git Bash too. `when_command_exists`
   looks only at PATH there as everywhere else (a bash builtin no longer
   counts), each command is looked up once per key press, and
-  `shopt -s nocasematch` no longer affects matching. An exact or
-  `{number}` rule whose `expand` is only the cursor placeholder `{}`
-  empties the token as on the other shells, instead of being treated as
-  no match. Known remaining difference: under the C locale Git Bash
-  counts the cursor in bytes, so a line with multibyte text before the
-  cursor can still land the cursor differently.
+  `shopt -s nocasematch` no longer affects matching. Known remaining
+  difference: under the C locale Git Bash counts the cursor in bytes,
+  so a line with multibyte text before the cursor can still land the
+  cursor differently.
 - **clink: a buffer containing a zero-width or bidi character keeps
   it, and the cursor stays in place (#36).** `lua_quote_string` dropped
   NUL, the Unicode line separators (U+0085, U+2028, U+2029) and the

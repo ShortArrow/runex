@@ -333,6 +333,9 @@ pub(crate) enum SkipReason {
     },
     /// No expand entry for this shell (and no default).
     NoShellEntry,
+    /// The rendered expansion is empty or whitespace once the cursor
+    /// placeholder is removed, so firing would only erase the token.
+    BlankExpansion,
 }
 
 /// Result of a `which` lookup — mirrors `expand()` scan order exactly.
@@ -414,10 +417,32 @@ where
         }
     }
     let (text, cursor_offset) = render_with_cursor(abbr, shell, bindings)?;
-    if is_pattern_self_loop(abbr, &text, token) {
+    if is_blank_expansion(&text) || is_pattern_self_loop(abbr, &text, token) {
         return None;
     }
     Some(ExpandResult::Expanded { text, cursor_offset })
+}
+
+/// A rendered expansion (cursor placeholder already removed) that is
+/// empty or whitespace would only erase the typed token, so the rule is
+/// skipped in every phase (issue #52), as an empty `expand` is rejected
+/// at load time.
+fn is_blank_expansion(rendered_text: &str) -> bool {
+    rendered_text.trim().is_empty()
+}
+
+/// Whether `template` renders blank for every token `abbr` matches, so
+/// the rule can never fire. The cursor placeholder is removed and, for a
+/// `{number}` rule, the unit stands in for the count (any count is at
+/// least 1, so one unit decides). A template with a capture placeholder
+/// is not whitespace, so a glob or regex rule is decided the same way.
+pub(crate) fn always_renders_blank(abbr: &Abbr, template: &str) -> bool {
+    let text = template.replace(crate::domain::model::CURSOR_PLACEHOLDER, "");
+    let text = match abbr.number.as_deref() {
+        Some(unit) if abbr.match_kind.is_none() => text.replace(NUMBER_PLACEHOLDER, unit),
+        _ => text,
+    };
+    is_blank_expansion(&text)
 }
 
 /// An exact rule whose `expand` is its own `key` would rewrite the token
@@ -433,11 +458,10 @@ fn is_exact_self_loop(abbr: &Abbr, template: &str) -> bool {
 
 /// A glob or regex rule whose rendered text equals the token would
 /// rewrite the token to itself and hide later rules of its phase
-/// (ADR 0005). One that renders to nothing would erase the token; it is
-/// skipped too. Exact and `{number}` rules that render to nothing still
-/// fire.
+/// (ADR 0005). A blank rendering is handled by [`is_blank_expansion`]
+/// for every phase.
 fn is_pattern_self_loop(abbr: &Abbr, rendered_text: &str, token: &str) -> bool {
-    matches!(phase_of(abbr), Phase::Glob | Phase::Regex) && (rendered_text == token || rendered_text.is_empty())
+    matches!(phase_of(abbr), Phase::Glob | Phase::Regex) && rendered_text == token
 }
 
 /// Extract cursor placeholder `{}` from expansion text.
@@ -581,6 +605,9 @@ where
         // added later if `which --why` needs to distinguish this case.
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     };
+    if is_blank_expansion(&text) {
+        return WhichOutcome::Skip(SkipReason::BlankExpansion);
+    }
     if is_pattern_self_loop(abbr, &text, token) {
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     }
@@ -1517,15 +1544,44 @@ mod tests {
     }
 
     #[test]
-    fn exact_and_number_rules_that_render_to_nothing_still_fire() {
-        let emptied = ExpandResult::Expanded { text: String::new(), cursor_offset: Some(0) };
-        let exact = cfg(vec![abbr("zz", "{}"), abbr("zz", "Z2")]);
-        assert_eq!(expand(&exact, "zz", Shell::Bash, |_| true), emptied);
-        let number = cfg(vec![
-            Abbr { number: Some("x".into()), ..abbr("ez{number}", "{}") },
+    fn exact_rule_that_renders_blank_is_skipped_for_the_next_one() {
+        for blank in ["{}", " {} ", "{}  ", "\u{3000}{}"] {
+            let c = cfg(vec![abbr("zz", blank), abbr("zz", "Z2")]);
+            assert_eq!(expand(&c, "zz", Shell::Bash, |_| true), expanded("Z2"), "expand {blank:?}");
+            let alone = cfg(vec![abbr("zz", blank)]);
+            assert_eq!(expand(&alone, "zz", Shell::Bash, |_| true), passes("zz"), "expand {blank:?}");
+        }
+    }
+
+    #[test]
+    fn number_rule_that_renders_blank_is_skipped_for_the_next_one() {
+        let c = cfg(vec![
+            Abbr { number: Some("x".into()), ..abbr("ez{number}", " {} ") },
+            Abbr { number: Some(" ".into()), ..abbr("ez{number}", "{number}{}") },
             Abbr { number: Some("x".into()), ..abbr("ez{number}", "E{number}") },
         ]);
-        assert_eq!(expand(&number, "ez2", Shell::Bash, |_| true), emptied);
+        assert_eq!(expand(&c, "ez2", Shell::Bash, |_| true), expanded("Exx"));
+    }
+
+    #[test]
+    fn glob_and_regex_rules_that_render_blank_are_skipped() {
+        let glob = cfg(vec![abbr_glob("e*", " {} "), abbr_glob("e*", "E{*}")]);
+        assert_eq!(expand(&glob, "ex", Shell::Bash, |_| true), expanded("Ex"));
+        let capture = cfg(vec![abbr_glob("*q", "{*}")]);
+        assert_eq!(expand(&capture, "\tq", Shell::Bash, |_| true), passes("\tq"));
+        let regex = cfg(vec![abbr_regex("e(.*)", " {1}{}"), abbr_regex("e(.*)", "E2 {1}")]);
+        assert_eq!(expand(&regex, "e", Shell::Bash, |_| true), expanded("E2 "));
+    }
+
+    #[test]
+    fn which_reports_a_blank_expansion_as_its_own_skip_reason() {
+        let c = cfg(vec![abbr("zz", " {} "), abbr("zz", "Z2")]);
+        match which_abbr(&c, "zz", Shell::Bash, |_| true) {
+            WhichResult::Expanded { skipped, .. } => {
+                assert_eq!(skipped, vec![(0, SkipReason::BlankExpansion)]);
+            }
+            other => panic!("expected Expanded, got {other:?}"),
+        }
     }
 
     #[test]

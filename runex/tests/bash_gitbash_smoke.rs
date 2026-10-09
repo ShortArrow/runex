@@ -873,12 +873,41 @@ expand = "da2"
 
 [[abbr]]
 key    = "zz"
-expand = "{}"
+expand = " {} "
+
+[[abbr]]
+key    = "zz"
+expand = "zz2"
 
 [[abbr]]
 key    = "ez{number}"
 expand = "{}"
 number = "x"
+
+[[abbr]]
+key    = "ez{number}"
+expand = "{number}"
+number = " "
+
+[[abbr]]
+key    = "ez{number}"
+expand = "E{number}"
+number = "x"
+
+[[abbr]]
+key    = "gb*"
+match  = "glob"
+expand = " {} "
+
+[[abbr]]
+key    = "gb*"
+match  = "glob"
+expand = "GB{*}"
+
+[[abbr]]
+key    = "*q"
+match  = "glob"
+expand = "{*}"
 
 [[abbr]]
 key    = "cn{number}"
@@ -905,6 +934,8 @@ READLINE_LINE="bi"; READLINE_POINT=2; __runex_expand; echo "BI=[$READLINE_LINE]"
 READLINE_LINE="da"; READLINE_POINT=2; __runex_expand; echo "DA=[$READLINE_LINE]"
 READLINE_LINE="zz"; READLINE_POINT=2; __runex_expand; echo "ZZ=[$READLINE_LINE] P=$READLINE_POINT"
 READLINE_LINE="echo a; ez2"; READLINE_POINT=11; __runex_expand; echo "EZ=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="gbx"; READLINE_POINT=3; __runex_expand; echo "GB=[$READLINE_LINE]"
+READLINE_LINE=$'\tq'; READLINE_POINT=2; __runex_expand; echo "TQ=[$READLINE_LINE] P=$READLINE_POINT"
 shopt -s nocasematch
 READLINE_LINE="cn2"; READLINE_POINT=3; __runex_expand; echo "CN=[$READLINE_LINE]"
 shopt -q nocasematch && echo "NOCASE_RESTORED=on"
@@ -915,12 +946,11 @@ end=${EPOCHREALTIME/./}
 echo "PF=[$READLINE_LINE] MS=$(( (end - start) / 1000 ))""#,
         );
         assert!(out.contains("BI=[bi2 ]"), "[{label}] a builtin is not a PATH command; got:\n{out}");
-        assert!(out.contains("DA=[da2 ]"), "[{label}] `-t` is a missing command, not an option; got:
-{out}");
-        assert!(out.contains("ZZ=[] P=0"), "[{label}] an expand of only {{}} empties the line like exec; got:
-{out}");
-        assert!(out.contains("EZ=[echo a; ] P=8"), "[{label}] a {{number}} rule rendering to nothing still fires, like exec; got:
-{out}");
+        assert!(out.contains("DA=[da2 ]"), "[{label}] `-t` is a missing command, not an option; got:\n{out}");
+        assert!(out.contains("ZZ=[zz2 ] P=4"), "[{label}] a blank exact rule is skipped for the next one; got:\n{out}");
+        assert!(out.contains("EZ=[echo a; Exx ] P=12"), "[{label}] blank {{number}} rules are skipped; got:\n{out}");
+        assert!(out.contains("GB=[GBx ]"), "[{label}] a blank glob template is skipped; got:\n{out}");
+        assert!(out.contains("TQ=[\tq ] P=3"), "[{label}] a glob whose capture renders blank is skipped; got:\n{out}");
         assert!(out.contains("CN=[cn xx {NUMBER} ]"), "[{label}] {{number}} substitution is case-sensitive; got:\n{out}");
         assert!(out.contains("NOCASE_RESTORED=on"), "[{label}] the user's nocasematch is restored; got:\n{out}");
         assert!(out.contains("PF=[pfok ]"), "[{label}] the fallback after 100 failing rules fires; got:\n{out}");

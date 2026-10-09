@@ -288,6 +288,8 @@ expand = "git commit -am '{}'"
 
 When `gcam` is expanded, the cursor will be placed between the quotes instead of at the end. If `{}` is absent, the cursor goes to the end of the expansion (default behaviour).
 
+A rule whose expansion is empty or only whitespace once `{}` is removed (`expand = "{}"`, `expand = " {} "`) never expands: firing it would only erase the typed token, the same reason an empty `expand` is rejected at load time. Such a rule is skipped like a rule whose condition fails, so a later rule with the same key is tried, and `runex doctor` warns about it (`abbr[N].blank_expand`). This holds for every kind of rule, including a `{number}` rule whose unit is whitespace and a glob or regex rule whose captures are whitespace.
+
 ### Numeric repetition `{number}` placeholder
 
 A `[[abbr]]` rule can use the `{number}` placeholder to capture trailing digits in the token and replicate a unit string in the expansion. Add a `number = "<unit>"` field on the rule to declare the unit:
@@ -338,7 +340,7 @@ expand = "kubectl {*}"
 
 - Glob rules are tried after every exact and `{number}` rule, so `gst` as an exact key still wins over a glob `g*` listed earlier.
 - Characters are compared, not bytes: `?` matches one `ä`. On Git Bash the match runs in bash instead: under the C locale `?` matches one byte, and MSYS bash counts a character outside the Basic Multilingual Plane (most emoji) as two.
-- A glob rule whose rendered text equals the token, or is empty, is skipped (for example `key = "g*"` with `expand = "g{*}"`).
+- A glob rule whose rendered text equals the token, or is empty or only whitespace, is skipped (for example `key = "g*"` with `expand = "g{*}"`).
 - The capture is inserted as typed. A `{}` inside it stays literal text; only the `{}` written in `expand` places the cursor.
 - `{*}` in a key with no `*` (only `?`) is replaced by nothing.
 - A pattern without a fixed part claims every token no earlier rule claims. `k*` also rewrites `kill` typed at command position; a separator such as `k.*` avoids real commands.
@@ -371,7 +373,7 @@ expand = "git {rest}"
 - A group that took no part in the match is replaced by nothing: `a(x)?b` with `expand = "[{1}]"` turns `ab` into `[]`.
 - `{name}` where `name` is not a group of the key stays literal text, so `awk '{print}' {1}` keeps its `{print}`.
 - The captures are inserted as typed. A `{}` inside one stays literal text; only the `{}` written in `expand` places the cursor.
-- A regex rule whose rendered text equals the token, or is empty, is skipped, as for glob rules. A rendering over 4096 bytes is skipped too.
+- A regex rule whose rendered text equals the token, or is empty or only whitespace, is skipped, as for glob rules. A rendering over 4096 bytes is skipped too.
 - **Regex keys do not expand on Git Bash.** The Git Bash bake path matches in bash, which has no regex engine compatible with runex, so regex rules are left out of its tables. bash on Linux and macOS, zsh, pwsh, nu and clink are unaffected. On Windows, `runex doctor` shows a WARN row `abbr.regex_git_bash` when the config has a regex rule.
 
 **Syntax:** runex uses [regex-lite](https://docs.rs/regex-lite). It accepts most of the syntax of the `regex` crate, with two gaps: `\w`, `\d`, `\s` and case-insensitive matching (`(?i)`) cover ASCII only, and Unicode classes such as `\p{L}` and class intersection such as `[a-z&&[^b]]` are rejected.
