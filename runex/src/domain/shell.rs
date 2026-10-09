@@ -447,6 +447,20 @@ mod tests {
         assert!(!line.contains("$'"), "dollar-quote ANSI-C form must not be used: {line:?}");
     }
 
+    #[test]
+    fn bash_quote_buffer_writes_control_characters_as_hex_escapes() {
+        assert_eq!(bash_quote_buffer("a\tb"), r"'a'$'\x09''b'");
+        assert_eq!(bash_quote_buffer("x\n\u{7f}"), r"'x'$'\x0a'''$'\x7f'''");
+        let quoted = bash_quote_buffer("echo\r\u{1b}[31m");
+        assert!(!quoted.chars().any(|c| c.is_ascii_control()), "no raw control byte: {quoted:?}");
+    }
+
+    #[test]
+    fn bash_quote_buffer_keeps_separators_and_escapes_single_quotes() {
+        assert_eq!(bash_quote_buffer("a\u{2028}b\u{2029}c"), "'a\u{2028}b\u{2029}c'");
+        assert_eq!(bash_quote_buffer("it's"), r"'it'\''s'");
+    }
+
     // bash_quote_pattern tests dropped — the helper and its callers (the
     // case-arm builder) are gone now that abbreviations aren't embedded in
     // shell code.
