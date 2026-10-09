@@ -146,12 +146,15 @@ hidden subcommand `runex hook`, passing the current buffer and cursor as
 arguments:
 
 ```
-runex hook --shell <shell> --line "<buffer>" --cursor <byte_offset>
+runex hook --shell <shell> --line=<buffer> --cursor <byte_offset>
 ```
 
-clink and pwsh pass the buffer as `--line-hex=<hex of the UTF-8 bytes>`
-instead of `--line`, because both reach runex through a layer that rewrites
-argument text: clink's only path is a cmd.exe command line, which cannot
+The buffer is joined to `--line` with `=`, so a buffer that starts with
+`-` is not read as an option.
+
+clink and pwsh pass the buffer hex-encoded with `--line-hex` (the UTF-8
+bytes as hex digits) instead of `--line`, because both reach runex
+through a layer that rewrites argument text: clink's only path is a cmd.exe command line, which cannot
 carry `"`, `%` or `!` inside an argument, and PowerShell rewrites a leading
 `~` while Windows PowerShell 5.1 re-splits an argument containing `"`
 (see `docs/decisions/0003`, `docs/decisions/0004`).

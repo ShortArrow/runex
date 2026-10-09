@@ -55,7 +55,7 @@ mod nu {
             r#"
 let line = "{line}"
 let cursor = {cursor}
-let out = (^"{bin}" hook --shell nu --line $line --cursor $cursor | complete | get stdout | str trim --right)
+let out = (^"{bin}" hook --shell nu $'--line=($line)' --cursor $cursor | complete | get stdout | str trim --right)
 if ($out | is-empty) {{
     print $"($line) |($cursor + 1)"
 }} else {{

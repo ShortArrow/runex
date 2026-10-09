@@ -5,7 +5,7 @@ function __runex_expand() {
     local line="$LBUFFER$RBUFFER"
     local cursor=${#LBUFFER}
     local out
-    if out=$({ZSH_BIN} hook --shell zsh --line "$line" --cursor "$cursor" 2>/dev/null) && [[ -n "$out" ]]; then
+    if out=$({ZSH_BIN} hook --shell zsh --line="$line" --cursor "$cursor" 2>/dev/null) && [[ -n "$out" ]]; then
         eval "$out"
     else
         LBUFFER+=" "

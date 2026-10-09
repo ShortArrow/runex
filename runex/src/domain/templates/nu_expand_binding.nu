@@ -8,7 +8,7 @@
         cmd: "
             let line = (commandline)
             let cursor = (commandline get-cursor)
-            let out = ({NU_BIN} hook --shell nu --line $line --cursor $cursor | complete | get stdout | str trim --right)
+            let out = ({NU_BIN} hook --shell nu $'--line=($line)' --cursor $cursor | complete | get stdout | str trim --right)
             if ($out | is-empty) {
                 commandline edit --insert ' '
             } else {

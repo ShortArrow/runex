@@ -41,3 +41,23 @@ fn space_triggers_expand_for_known_token() {
         .expect_regex(r"EXPANDED")
         .expect("nu should have echoed EXPANDED after the gcm<Space> expansion");
 }
+
+/// Issue #50: a line that starts with `-` reaches `runex hook` as the
+/// value of `--line`, not as a flag, so a rule whose key is `-n` expands.
+#[test]
+fn space_expands_a_line_that_starts_with_a_dash() {
+    if !shell_available("nu") {
+        eprintln!("skipping: nu not available");
+        return;
+    }
+    let config = write_simple_config("-n", "echo EXPANDED");
+    let mut session = PtySession::spawn(PtyShell::Nu, runex_bin_str(), config.path())
+        .expect("the shell is installed, so a PTY session that fails to bootstrap is a real failure, not a skip");
+
+    session.send("-n ");
+    session.send_line("");
+
+    session
+        .expect_regex(r"EXPANDED")
+        .expect("nu should have expanded -n<Space> to `echo EXPANDED`");
+}
