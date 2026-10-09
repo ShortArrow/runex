@@ -36,7 +36,7 @@ mod zsh {
         let script = r#"
 line="${RUNEX_LEFT}${RUNEX_RIGHT}"
 cursor=${#RUNEX_LEFT}
-out=$("$RUNEX_BIN" hook --shell zsh --line "$line" --cursor "$cursor" 2>/dev/null)
+out=$("$RUNEX_BIN" hook --shell zsh --line="$line" --cursor "$cursor" 2>/dev/null)
 LBUFFER=""
 RBUFFER=""
 if [[ -n "$out" ]]; then

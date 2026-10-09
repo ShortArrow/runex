@@ -14,7 +14,7 @@ esac
 # === Linux / WSL / generic bash exec dispatcher (legacy path) ==============
 __runex_exec_expand() {
     local out
-    if out=$({BASH_BIN} hook --shell bash --line "$READLINE_LINE" --cursor "$READLINE_POINT" 2>/dev/null) && [ -n "$out" ]; then
+    if out=$({BASH_BIN} hook --shell bash --line="$READLINE_LINE" --cursor "$READLINE_POINT" 2>/dev/null) && [ -n "$out" ]; then
         eval "$out"
     else
         READLINE_LINE="${READLINE_LINE:0:READLINE_POINT} ${READLINE_LINE:READLINE_POINT}"

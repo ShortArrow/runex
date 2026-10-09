@@ -64,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **bash, zsh, nu: a line that starts with `-` expands (#50).** The
+  templates passed the buffer as `--line <buffer>`, so `runex hook` read
+  a leading `-` as an option, failed, and the shell inserted a plain
+  space. `-x; gst` and a rule whose key is `-n` now expand. The buffer
+  is passed as one `--line=<buffer>` argument.
 - **bash, zsh: a tab or a line separator in the line survives a key
   press (#51).** `runex hook` dropped ASCII control characters and
   U+2028/U+2029 from the line it wrote back but kept the cursor
