@@ -31,13 +31,15 @@ A rule whose rendering is empty or whitespace once `{}` is removed
 and regex. Skipping works like a failed `when_command_exists`: the
 next rule with a matching key is tried, and when none fires the
 trigger key inserts its plain space. `runex which --why` reports the
-rule as `blank_expansion`, and `runex doctor` warns about a rule that
-renders blank for every token (`abbr[N].blank_expand`).
+skip (`blank_expansion` in its JSON output), and `runex doctor` warns
+about a rule that renders blank for every token
+(`abbr[N].blank_expand`).
 
-On the Git Bash bake path, exact and `{number}` rules that always
-render blank are left out of the tables at export time; a glob
-rendering is tested at key press time against the same set of
-whitespace characters Rust uses.
+On the Git Bash bake path, the rendering of every phase is tested at
+key press time against the same set of whitespace characters Rust
+uses. A `{number}` unit can form a `{}` once repeated, so whether a
+rule is blank can depend on the token, and the tables keep every
+rule.
 
 ## Alternatives
 

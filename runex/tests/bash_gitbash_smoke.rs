@@ -910,6 +910,29 @@ match  = "glob"
 expand = "{*}"
 
 [[abbr]]
+key    = "j*"
+match  = "glob"
+expand = "{*}"
+
+[[abbr]]
+key    = "dd"
+expand = "{}{}"
+
+[[abbr]]
+key    = "dd"
+expand = "dd2"
+
+[[abbr]]
+key    = "u{number}"
+expand = "{number}"
+number = "{}"
+
+[[abbr]]
+key    = "u{number}"
+expand = "U{number}"
+number = "x"
+
+[[abbr]]
 key    = "cn{number}"
 expand = "cn {number} {NUMBER}"
 number = "x"
@@ -936,6 +959,10 @@ READLINE_LINE="zz"; READLINE_POINT=2; __runex_expand; echo "ZZ=[$READLINE_LINE] 
 READLINE_LINE="echo a; ez2"; READLINE_POINT=11; __runex_expand; echo "EZ=[$READLINE_LINE] P=$READLINE_POINT"
 READLINE_LINE="gbx"; READLINE_POINT=3; __runex_expand; echo "GB=[$READLINE_LINE]"
 READLINE_LINE=$'\tq'; READLINE_POINT=2; __runex_expand; echo "TQ=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="dd"; READLINE_POINT=2; __runex_expand; echo "DD=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="u1"; READLINE_POINT=2; __runex_expand; echo "U1=[$READLINE_LINE] P=$READLINE_POINT"
+READLINE_LINE="u2"; READLINE_POINT=2; __runex_expand; echo "U2=[$READLINE_LINE] P=$READLINE_POINT"
+(LC_ALL=C; READLINE_LINE=$'j\xe3\x81\x82'; READLINE_POINT=4; __runex_expand; echo "JA=[$READLINE_LINE]")
 shopt -s nocasematch
 READLINE_LINE="cn2"; READLINE_POINT=3; __runex_expand; echo "CN=[$READLINE_LINE]"
 shopt -q nocasematch && echo "NOCASE_RESTORED=on"
@@ -951,6 +978,10 @@ echo "PF=[$READLINE_LINE] MS=$(( (end - start) / 1000 ))""#,
         assert!(out.contains("EZ=[echo a; Exx ] P=12"), "[{label}] blank {{number}} rules are skipped; got:\n{out}");
         assert!(out.contains("GB=[GBx ]"), "[{label}] a blank glob template is skipped; got:\n{out}");
         assert!(out.contains("TQ=[\tq ] P=3"), "[{label}] a glob whose capture renders blank is skipped; got:\n{out}");
+        assert!(out.contains("DD=[{}] P=0"), "[{label}] only the first {{}} is the cursor; got:\n{out}");
+        assert!(out.contains("U1=[Ux ] P=3"), "[{label}] a unit that forms {{}} renders blank for 1; got:\n{out}");
+        assert!(out.contains("U2=[{}] P=0"), "[{label}] the same unit renders {{}} for 2; got:\n{out}");
+        assert!(out.contains("JA=[\u{3042} ]"), "[{label}] multibyte text is not blank in the C locale; got:\n{out}");
         assert!(out.contains("CN=[cn xx {NUMBER} ]"), "[{label}] {{number}} substitution is case-sensitive; got:\n{out}");
         assert!(out.contains("NOCASE_RESTORED=on"), "[{label}] the user's nocasematch is restored; got:\n{out}");
         assert!(out.contains("PF=[pfok ]"), "[{label}] the fallback after 100 failing rules fires; got:\n{out}");

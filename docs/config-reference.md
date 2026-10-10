@@ -288,7 +288,7 @@ expand = "git commit -am '{}'"
 
 When `gcam` is expanded, the cursor will be placed between the quotes instead of at the end. If `{}` is absent, the cursor goes to the end of the expansion (default behaviour).
 
-A rule whose expansion is empty or only whitespace once `{}` is removed (`expand = "{}"`, `expand = " {} "`) never expands: firing it would only erase the typed token, the same reason an empty `expand` is rejected at load time. Such a rule is skipped like a rule whose condition fails, so a later rule with the same key is tried, and `runex doctor` warns about it (`abbr[N].blank_expand`). This holds for every kind of rule, including a `{number}` rule whose unit is whitespace and a glob or regex rule whose captures are whitespace.
+A rule whose expansion is empty or only whitespace once `{}` is removed (`expand = "{}"`, `expand = " {} "`) never expands: firing it would only erase the typed token, the same reason an empty `expand` is rejected at load time. Such a rule is skipped like a rule whose condition fails, so a later rule with the same key is tried. This holds for every kind of rule, including a `{number}` rule whose unit is whitespace and a glob or regex rule whose captures are whitespace. Only the first `{}` is the cursor, so `expand = "{}{}"` renders `{}` and is not blank. `runex doctor` warns about a rule that is blank for every token it matches (`abbr[N].blank_expand`); a rule that is blank only for some tokens, such as a glob whose capture may be whitespace, is not reported.
 
 ### Numeric repetition `{number}` placeholder
 

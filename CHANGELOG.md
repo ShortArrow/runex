@@ -16,9 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is now skipped in every phase: the next rule with a matching key is
   tried, and otherwise the trigger key inserts a plain space. This also
   covers a `{number}` rule whose unit is whitespace and a glob or regex
-  rule whose captures are whitespace. `runex doctor` warns about these
-  rules (`abbr[N].blank_expand`), and `runex which --why` reports them
-  as a blank expansion. ADR 0006 records the decision.
+  rule whose captures are whitespace. `runex doctor` warns about a rule
+  that is blank for every token it matches (`abbr[N].blank_expand`),
+  and `runex which --why` says when a rule was skipped because its
+  expansion is blank. ADR 0006 records the decision.
 - **Documentation rewritten against the current behaviour.**
   `docs/setup.md` now describes the static-cache layout that `runex
   init` actually writes (the versioned header, Windows and Unix cache

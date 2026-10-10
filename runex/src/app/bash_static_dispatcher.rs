@@ -32,7 +32,7 @@
 //! Git Bash expanded any trailing token regardless of context (e.g.
 //! `echo gst<Space>` would still expand `gst`) no longer applies.
 
-use crate::domain::expand::{always_renders_blank, NUMBER_PLACEHOLDER};
+use crate::domain::expand::NUMBER_PLACEHOLDER;
 use crate::domain::model::{Config, MatchKind, Shell};
 
 /// Wrap `s` as a bash double-quoted string suitable for embedding as a
@@ -104,9 +104,6 @@ fn exact_table_lines(config: &Config) -> String {
         let Some(template) = rule.expand.for_shell(Shell::Bash) else {
             continue;
         };
-        if always_renders_blank(rule, template) {
-            continue;
-        }
         let Some(conds) = bash_conditions(rule) else {
             continue;
         };
@@ -149,9 +146,6 @@ fn pattern_table_lines(config: &Config) -> String {
         let Some(template) = rule.expand.for_shell(Shell::Bash) else {
             continue;
         };
-        if always_renders_blank(rule, template) {
-            continue;
-        }
         let Some(conds) = bash_conditions(rule) else {
             continue;
         };
@@ -189,9 +183,6 @@ fn glob_table_lines(config: &Config) -> String {
         let Some(template) = rule.expand.for_shell(Shell::Bash) else {
             continue;
         };
-        if always_renders_blank(rule, template) {
-            continue;
-        }
         let (head, tail) = rule.key.split_once('*').unwrap_or((rule.key.as_str(), ""));
         let Some(conds) = bash_conditions(rule) else {
             continue;
@@ -209,22 +200,22 @@ fn glob_table_lines(config: &Config) -> String {
     lines.join("\n")
 }
 
-/// Every character Rust's `char::is_whitespace` accepts, as a bash word
-/// for a `[...]` bracket expression: the ASCII ones ANSI-C quoted, the
-/// rest as literal UTF-8 in double quotes. The glob scan strips these to
-/// test a rendering for blankness the way the exec path does (issue #52).
-fn bash_blank_chars() -> String {
-    let (ascii, other): (Vec<char>, Vec<char>) =
-        (0..=0x10FFFF).filter_map(char::from_u32).filter(|c| c.is_whitespace()).partition(char::is_ascii);
-    let ascii: String = ascii
-        .iter()
-        .map(|c| match c {
-            ' ' => " ".to_string(),
-            c => format!("\\x{:02x}", *c as u32),
-        })
-        .collect();
-    let other: String = other.into_iter().collect();
-    format!("$'{ascii}'\"{other}\"")
+/// The non-ASCII characters Rust's `char::is_whitespace` accepts. The
+/// ASCII ones (`\t` to `\r` and space) are written into the dispatcher
+/// directly.
+const MULTIBYTE_WHITESPACE: [char; 19] = [
+    '\u{85}', '\u{a0}', '\u{1680}', '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}',
+    '\u{2006}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}',
+    '\u{3000}',
+];
+
+/// [`MULTIBYTE_WHITESPACE`] as the body of a bash array, each character
+/// as literal UTF-8 in double quotes. `__runex_cyg_is_blank` removes
+/// them one string at a time rather than in a `[...]` bracket
+/// expression, which outside a UTF-8 locale matches single bytes and
+/// would take part of another character for whitespace.
+fn bash_multibyte_blank_words() -> String {
+    MULTIBYTE_WHITESPACE.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(" ")
 }
 
 /// Generate the full cygwin/msys bake-mode dispatcher block:
@@ -255,15 +246,19 @@ pub(crate) fn generate_cygwin_dispatcher(config: &Config) -> String {
     let pattern_block = if patterns.is_empty() { String::new() } else { format!("\n{patterns}\n") };
     let globs = glob_table_lines(config);
     let glob_block = if globs.is_empty() { String::new() } else { format!("\n{globs}\n") };
-    let blank_chars = bash_blank_chars();
+    let multibyte_blank = bash_multibyte_blank_words();
     format!(
         r#"__runex_abbr_exact=({exact_block})
 __runex_abbr_patterns=({pattern_block})
 __runex_abbr_globs=({glob_block})
-__runex_blank_chars={blank_chars}
+__runex_blank_multibyte=({multibyte_blank})
+__runex_cyg_is_blank() {{
+    local rest="${{1//[$'\t\n\v\f\r ']/}}" c
+    for c in "${{__runex_blank_multibyte[@]}}"; do rest="${{rest//"$c"/}}"; done
+    [ -z "$rest" ]
+}}
 __runex_cyg_render() {{
     local text="$1" pos
-    __runex_hit=1
     pos="${{text%%\{{\}}*}}"
     if [ "$pos" = "$text" ]; then
         __runex_out="$text"
@@ -272,6 +267,12 @@ __runex_cyg_render() {{
         __runex_cursor_off="${{#pos}}"
         __runex_out="${{pos}}${{text#*\{{\}}}}"
     fi
+    if __runex_cyg_is_blank "$__runex_out"; then
+        __runex_out=""
+        __runex_cursor_off=""
+        return 1
+    fi
+    __runex_hit=1
 }}
 declare -gA __runex_cmd_seen=()
 __runex_cyg_conds_met() {{
@@ -297,8 +298,7 @@ __runex_cyg_lookup() {{
         [ "$template" = "$key" ] && continue
         __runex_cyg_conds_met "$conds"
         [ "$__runex_conds_met" -eq 1 ] || continue
-        __runex_cyg_render "$template"
-        return
+        __runex_cyg_render "$template" && return
     done
 }}
 __runex_cyg_pattern_lookup() {{
@@ -329,8 +329,7 @@ __runex_cyg_pattern_lookup() {{
         rendered="${{template//"{{number}}"/"$repeated"}}"
         __runex_cyg_byte_len "$rendered"
         [ "$__runex_len" -gt 4096 ] && continue
-        __runex_cyg_render "$rendered"
-        return
+        __runex_cyg_render "$rendered" && return
     done
 }}
 __runex_cyg_byte_len() {{
@@ -365,7 +364,7 @@ __runex_cyg_glob_lookup() {{
             __runex_cursor_off=""
             continue
         fi
-        if [ -z "${{__runex_out//[$__runex_blank_chars]/}}" ] || [ "$__runex_out" = "$token" ]; then
+        if __runex_cyg_is_blank "$__runex_out" || [ "$__runex_out" = "$token" ]; then
             __runex_out=""
             __runex_cursor_off=""
             continue
@@ -806,31 +805,22 @@ mod tests {
         );
     }
 
+    /// The bake path tests blankness against the same characters
+    /// `str::trim` removes on the exec path (issue #52).
     #[test]
-    fn bash_blank_chars_lists_ascii_and_unicode_whitespace() {
-        let s = bash_blank_chars();
-        assert!(s.starts_with(r"$'\x09\x0a\x0b\x0c\x0d '"), "{s:?}");
-        for c in ['\u{85}', '\u{a0}', '\u{2028}', '\u{3000}'] {
-            assert!(s.contains(c), "missing U+{:04X}: {s:?}", c as u32);
-        }
-        assert!(!s.contains('\u{200b}'), "zero-width space is not whitespace: {s:?}");
+    fn multibyte_whitespace_is_every_non_ascii_whitespace_char() {
+        let (ascii, other): (Vec<char>, Vec<char>) =
+            (0..=0x10FFFF).filter_map(char::from_u32).filter(|c| c.is_whitespace()).partition(char::is_ascii);
+        assert_eq!(ascii, ['\t', '\n', '\u{b}', '\u{c}', '\r', ' ']);
+        assert_eq!(other, MULTIBYTE_WHITESPACE);
     }
 
-    /// Issue #52: a rule whose bash expansion is blank once `{}` is
-    /// removed never fires, so the bake tables leave it out.
     #[test]
-    fn exact_and_pattern_tables_omit_rules_that_always_render_blank() {
-        let c = cfg(vec![
-            plain_abbr("zz", "{}"),
-            plain_abbr("zz", " {} "),
-            plain_abbr("zz", "zz2"),
-            pattern_abbr("ez{number}", "{}", "x"),
-            pattern_abbr("ez{number}", "{number}", " "),
-            pattern_abbr("ez{number}", "E{number}", "x"),
-        ]);
-        let kept = cfg(vec![plain_abbr("zz", "zz2"), pattern_abbr("ez{number}", "E{number}", "x")]);
-        assert_eq!(exact_table_lines(&c), exact_table_lines(&kept));
-        assert_eq!(pattern_table_lines(&c), pattern_table_lines(&kept));
+    fn dispatcher_tests_blankness_on_every_whitespace_char() {
+        let out = generate_cygwin_dispatcher(&cfg(vec![plain_abbr("zz", "zz2")]));
+        assert!(out.contains(r#"local rest="${1//[$'\t\n\v\f\r ']/}" c"#), "{out}");
+        let words = MULTIBYTE_WHITESPACE.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(" ");
+        assert!(out.contains(&format!("__runex_blank_multibyte=({words})")), "{out}");
     }
 
     #[test]

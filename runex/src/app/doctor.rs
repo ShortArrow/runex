@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::domain::expand::{blankness, Blankness};
 use crate::domain::model::{Config, TriggerKey};
 use crate::domain::sanitize::{sanitize_for_display, sanitize_multiline_for_display};
 use serde::Serialize;
@@ -176,7 +177,7 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
                 detail_verbose: None,
             });
         }
-        let blank = abbr.expand.all_values().iter().any(|&v| crate::domain::expand::always_renders_blank(abbr, v));
+        let blank = abbr.expand.all_values().iter().any(|&v| blankness(abbr, v) == Blankness::Always);
         if blank {
             checks.push(Check {
                 name: format!("abbr[{i}].blank_expand"),
@@ -200,7 +201,7 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
 /// render literally and change the token); a glob whose `expand` merely
 /// equals its key text does expand. A regex rule (issue #20) cannot be
 /// decided statically and is never reported. A blank template is
-/// reported separately ([`crate::domain::expand::always_renders_blank`]).
+/// reported separately ([`crate::domain::expand::blankness`]).
 fn rewrites_token_to_itself(abbr: &crate::domain::model::Abbr, template: &str) -> bool {
     match abbr.match_kind {
         None => template == abbr.key,
@@ -213,40 +214,20 @@ fn rewrites_token_to_itself(abbr: &crate::domain::model::Abbr, template: &str) -
     }
 }
 
-/// Whether the runtime skips `abbr` for every token when `template` is
-/// the expansion: a self-loop or a blank rendering (issue #52).
-fn skips_every_token(abbr: &crate::domain::model::Abbr, template: &str) -> bool {
-    rewrites_token_to_itself(abbr, template) || crate::domain::expand::always_renders_blank(abbr, template)
-}
-
 /// Whether `abbr`, once it matches, always fires and so hides every
-/// later rule with the same key. An exact or `{number}` rule does when
-/// no shell's expansion is skipped. A glob or regex rule is skipped at
-/// runtime when its rendered text is blank or equals the token, which
-/// depends on the captures; only an expansion with a space (which no
-/// token has) and other text outside every `{...}` placeholder, in
-/// every shell, is sure to fire.
+/// later rule with the same key: in every shell its rendering is never
+/// blank ([`crate::domain::expand::blankness`]) and never the token. An
+/// exact or `{number}` rule renders the token only as a self-loop. A
+/// glob or regex rendering depends on the captures, so it is sure to
+/// differ from the token only when the `expand` has a space, which no
+/// token has.
 fn always_fires_when_matched(abbr: &crate::domain::model::Abbr) -> bool {
-    match abbr.match_kind {
-        None => !abbr.expand.all_values().iter().any(|v| skips_every_token(abbr, v)),
-        Some(_) => abbr.expand.all_values().iter().all(|v| v.contains(' ') && has_text_outside_placeholders(v)),
-    }
-}
-
-/// Whether `template` keeps a non-whitespace character once every
-/// `{...}` placeholder is taken out, so no capture can make it blank.
-fn has_text_outside_placeholders(template: &str) -> bool {
-    let mut depth = 0usize;
-    template.chars().any(|c| match c {
-        '{' => {
-            depth += 1;
-            false
-        }
-        '}' if depth > 0 => {
-            depth -= 1;
-            false
-        }
-        c => depth == 0 && !c.is_whitespace(),
+    abbr.expand.all_values().iter().all(|&v| {
+        let differs_from_token = match abbr.match_kind {
+            None => !rewrites_token_to_itself(abbr, v),
+            Some(_) => v.contains(' '),
+        };
+        differs_from_token && blankness(abbr, v) == Blankness::Never
     })
 }
 
@@ -919,6 +900,33 @@ mod tests {
             let cfg = test_config(vec![first, second]);
             assert!(check_unreachable_duplicates(&cfg).is_empty(), "{:?}", check_unreachable_duplicates(&cfg));
         }
+    }
+
+    /// Only the first `{}` is the cursor, so `{}{}` renders `{}` and
+    /// fires: no blank warning, and the rule behind it is unreachable.
+    #[test]
+    fn doctor_treats_a_second_cursor_placeholder_as_text() {
+        let cfg = test_config(vec![abbr("dd", "{}{}"), abbr("dd", "second")]);
+        assert!(!blank_expand_warned(&cfg));
+        assert_eq!(check_unreachable_duplicates(&cfg).len(), 1);
+    }
+
+    /// A unit can form a `{}` once repeated, so a `{number}` rule may
+    /// render blank for one count and not another; it neither gets the
+    /// blank warning nor shadows the next rule.
+    #[test]
+    fn doctor_does_not_decide_a_number_rule_whose_unit_has_braces() {
+        let braces = Abbr { number: Some("{}".into()), ..abbr("u{number}", "{number}") };
+        let next = Abbr { number: Some("x".into()), ..abbr("u{number}", "U{number}") };
+        let cfg = test_config(vec![braces, next]);
+        assert!(!blank_expand_warned(&cfg));
+        assert!(check_unreachable_duplicates(&cfg).is_empty(), "{:?}", check_unreachable_duplicates(&cfg));
+    }
+
+    /// A glob key without `*` binds `{*}` to "" for every token.
+    #[test]
+    fn doctor_warns_blank_expand_for_a_capture_a_key_without_star_leaves_empty() {
+        assert!(blank_expand_warned(&test_config(vec![glob("q?", "{*}")])));
     }
 
     /// A rule the runtime always skips cannot shadow a later rule.
