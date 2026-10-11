@@ -3,8 +3,7 @@
 - **Status**: Accepted
 - **Phase**: 0.1.21 candidate
 - **Issue**: #52
-- **Authors**: ShortArrow, with Claude Code collaboration on the
-  alternatives analysis
+- **Authors**: ShortArrow
 - **Date**: 2026-10-09
 
 ---
