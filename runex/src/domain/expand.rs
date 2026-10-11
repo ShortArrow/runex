@@ -229,8 +229,8 @@ fn split_once_number_placeholder(key: &str) -> Option<(&str, &str)> {
 /// placeholder is located in the template before the glob or regex
 /// captures are substituted, so a `{}` the user typed inside a capture
 /// stays literal text instead of being taken for the placeholder.
-fn render_with_cursor(abbr: &Abbr, shell: Shell, bindings: &Bindings) -> Option<(String, Option<usize>)> {
-    let base = render_number(abbr, shell, bindings)?;
+fn render_with_cursor(abbr: &Abbr, template: &str, bindings: &Bindings) -> Option<(String, Option<usize>)> {
+    let base = render_number(abbr, template, bindings)?;
     let (text, cursor) = extract_cursor_placeholder(&base);
     let Some(pos) = cursor else {
         return Some((substitute_captures(&text, bindings)?, None));
@@ -296,9 +296,8 @@ fn resolve_capture<'a>(name: &str, bindings: &'a Bindings) -> Option<&'a str> {
     group.map(|group| group.text.as_str())
 }
 
-/// Apply the `{number}` repetition to the template for `shell`.
-fn render_number(abbr: &Abbr, shell: Shell, bindings: &Bindings) -> Option<String> {
-    let template = abbr.expand.for_shell(shell)?;
+/// Apply the `{number}` repetition to `template`.
+fn render_number(abbr: &Abbr, template: &str, bindings: &Bindings) -> Option<String> {
     let rendered = match bindings.number {
         None => template.to_string(),
         Some(n) => {
@@ -333,6 +332,9 @@ pub(crate) enum SkipReason {
     },
     /// No expand entry for this shell (and no default).
     NoShellEntry,
+    /// The rendered expansion is empty or whitespace once the cursor
+    /// placeholder is removed, so firing would only erase the token.
+    BlankExpansion,
 }
 
 /// Result of a `which` lookup — mirrors `expand()` scan order exactly.
@@ -413,11 +415,97 @@ where
             return None;
         }
     }
-    let (text, cursor_offset) = render_with_cursor(abbr, shell, bindings)?;
-    if is_pattern_self_loop(abbr, &text, token) {
+    let (text, cursor_offset) = render_with_cursor(abbr, template, bindings)?;
+    if is_blank_expansion(&text) || is_pattern_self_loop(abbr, &text, token) {
         return None;
     }
     Some(ExpandResult::Expanded { text, cursor_offset })
+}
+
+/// A rendered expansion (cursor placeholder already removed) that is
+/// empty or whitespace would only erase the typed token, so the rule is
+/// skipped in every phase (issue #52), as an empty `expand` is rejected
+/// at load time.
+fn is_blank_expansion(rendered_text: &str) -> bool {
+    rendered_text.trim().is_empty()
+}
+
+/// Whether a rule's rendering of one `expand` is blank, over every
+/// token the rule matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Blankness {
+    /// Blank for every token: the rule never fires with this `expand`.
+    Always,
+    /// Never blank.
+    Never,
+    /// Blank for some tokens, or not decidable without one.
+    DependsOnToken,
+}
+
+/// Decide [`Blankness`] for `template` without a token, by rendering it
+/// the way `expand` does.
+///
+/// - An exact rule renders the same text for every token.
+/// - A `{number}` rule is rendered for a count of 1. A unit without
+///   braces cannot form or break a `{}`, so more repeats only add copies
+///   of the unit and blankness stays the same. A unit with braces can,
+///   so the answer depends on the count.
+/// - A glob or regex rule is rendered with every capture empty. Captures
+///   only add text, so text that remains is never blank. When nothing
+///   remains, the answer is `Always` if the template has no capture
+///   placeholder, or the glob key has no `*` (its `{*}` is always
+///   empty), and depends on the token otherwise.
+pub(crate) fn blankness(abbr: &Abbr, template: &str) -> Blankness {
+    let renders_blank = |bindings: &Bindings| {
+        render_with_cursor(abbr, template, bindings).map(|(text, _)| is_blank_expansion(&text))
+    };
+    let decided = |blank: Option<bool>| match blank {
+        Some(true) => Blankness::Always,
+        Some(false) => Blankness::Never,
+        None => Blankness::DependsOnToken,
+    };
+    match phase_of(abbr) {
+        Phase::Exact => decided(renders_blank(&Bindings::empty())),
+        Phase::Number => match abbr.number.as_deref() {
+            Some(unit) if !unit.contains(['{', '}']) => {
+                decided(renders_blank(&Bindings { number: Some(1), ..Bindings::empty() }))
+            }
+            _ => Blankness::DependsOnToken,
+        },
+        Phase::Glob | Phase::Regex => {
+            let Some(empty) = empty_captures(abbr) else {
+                return Blankness::DependsOnToken;
+            };
+            match renders_blank(&empty) {
+                Some(false) => Blankness::Never,
+                Some(true) if abbr.match_kind == Some(MatchKind::Glob) && !abbr.key.contains('*') => {
+                    Blankness::Always
+                }
+                Some(true) => match renders_blank(&Bindings::empty()) {
+                    Some(true) => Blankness::Always,
+                    _ => Blankness::DependsOnToken,
+                },
+                None => Blankness::DependsOnToken,
+            }
+        }
+    }
+}
+
+/// Bindings for a glob or regex rule with every capture empty, or
+/// `None` when the regex key does not compile.
+fn empty_captures(abbr: &Abbr) -> Option<Bindings> {
+    match abbr.match_kind {
+        Some(MatchKind::Regex) => {
+            let regex = compile_regex_key(&abbr.key).ok()?;
+            let groups = regex
+                .capture_names()
+                .skip(1)
+                .map(|name| RegexGroup { name: name.map(str::to_string), text: String::new() })
+                .collect();
+            Some(Bindings { regex: Some(groups), ..Bindings::empty() })
+        }
+        _ => Some(Bindings { glob: Some(String::new()), ..Bindings::empty() }),
+    }
 }
 
 /// An exact rule whose `expand` is its own `key` would rewrite the token
@@ -433,11 +521,10 @@ fn is_exact_self_loop(abbr: &Abbr, template: &str) -> bool {
 
 /// A glob or regex rule whose rendered text equals the token would
 /// rewrite the token to itself and hide later rules of its phase
-/// (ADR 0005). One that renders to nothing would erase the token; it is
-/// skipped too. Exact and `{number}` rules that render to nothing still
-/// fire.
+/// (ADR 0005). A blank rendering is handled by [`is_blank_expansion`]
+/// for every phase.
 fn is_pattern_self_loop(abbr: &Abbr, rendered_text: &str, token: &str) -> bool {
-    matches!(phase_of(abbr), Phase::Glob | Phase::Regex) && (rendered_text == token || rendered_text.is_empty())
+    matches!(phase_of(abbr), Phase::Glob | Phase::Regex) && rendered_text == token
 }
 
 /// Extract cursor placeholder `{}` from expansion text.
@@ -575,12 +662,15 @@ where
     } else {
         Vec::new()
     };
-    let Some((text, cursor)) = render_with_cursor(abbr, shell, bindings) else {
+    let Some((text, cursor)) = render_with_cursor(abbr, template, bindings) else {
         // Render-time guard tripped (length cap, missing unit) — treat as
         // SelfLoop-equivalent skip for now. A dedicated SkipReason can be
         // added later if `which --why` needs to distinguish this case.
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     };
+    if is_blank_expansion(&text) {
+        return WhichOutcome::Skip(SkipReason::BlankExpansion);
+    }
     if is_pattern_self_loop(abbr, &text, token) {
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     }
@@ -1090,7 +1180,7 @@ mod tests {
     #[test]
     fn render_expansion_repeats_unit_three_times() {
         let a = abbr_with_number("up{number}", "cd {number}", "../");
-        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(3), glob: None, regex: None });
+        let out = render_number(&a, a.expand.for_shell(Shell::Bash).unwrap(), &Bindings { number: Some(3), glob: None, regex: None });
         assert_eq!(out.as_deref(), Some("cd ../../../"));
     }
 
@@ -1098,14 +1188,14 @@ mod tests {
     fn render_expansion_rejects_when_total_repeat_exceeds_cap() {
         // unit = 50 bytes, n = 128 → 6400 > 4096
         let a = abbr_with_number("u{number}", "{number}", &"X".repeat(50));
-        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(128), glob: None, regex: None });
+        let out = render_number(&a, a.expand.for_shell(Shell::Bash).unwrap(), &Bindings { number: Some(128), glob: None, regex: None });
         assert_eq!(out, None);
     }
 
     #[test]
     fn render_expansion_without_bindings_returns_template() {
         let a = abbr("gcm", "git commit -m");
-        let out = render_number(&a, Shell::Bash, &Bindings::empty());
+        let out = render_number(&a, a.expand.for_shell(Shell::Bash).unwrap(), &Bindings::empty());
         assert_eq!(out.as_deref(), Some("git commit -m"));
     }
 
@@ -1115,7 +1205,7 @@ mod tests {
         // catch this at parse; the runtime is defensive.
         let mut a = abbr("up{number}", "cd {number}");
         a.number = None;
-        let out = render_number(&a, Shell::Bash, &Bindings { number: Some(3), glob: None, regex: None });
+        let out = render_number(&a, a.expand.for_shell(Shell::Bash).unwrap(), &Bindings { number: Some(3), glob: None, regex: None });
         assert_eq!(out, None);
     }
 
@@ -1517,15 +1607,73 @@ mod tests {
     }
 
     #[test]
-    fn exact_and_number_rules_that_render_to_nothing_still_fire() {
-        let emptied = ExpandResult::Expanded { text: String::new(), cursor_offset: Some(0) };
-        let exact = cfg(vec![abbr("zz", "{}"), abbr("zz", "Z2")]);
-        assert_eq!(expand(&exact, "zz", Shell::Bash, |_| true), emptied);
-        let number = cfg(vec![
-            Abbr { number: Some("x".into()), ..abbr("ez{number}", "{}") },
+    fn exact_rule_that_renders_blank_is_skipped_for_the_next_one() {
+        for blank in ["{}", " {} ", "{}  ", "\u{3000}{}"] {
+            let c = cfg(vec![abbr("zz", blank), abbr("zz", "Z2")]);
+            assert_eq!(expand(&c, "zz", Shell::Bash, |_| true), expanded("Z2"), "expand {blank:?}");
+            let alone = cfg(vec![abbr("zz", blank)]);
+            assert_eq!(expand(&alone, "zz", Shell::Bash, |_| true), passes("zz"), "expand {blank:?}");
+        }
+    }
+
+    #[test]
+    fn number_rule_that_renders_blank_is_skipped_for_the_next_one() {
+        let c = cfg(vec![
+            Abbr { number: Some("x".into()), ..abbr("ez{number}", " {} ") },
+            Abbr { number: Some(" ".into()), ..abbr("ez{number}", "{number}{}") },
             Abbr { number: Some("x".into()), ..abbr("ez{number}", "E{number}") },
         ]);
-        assert_eq!(expand(&number, "ez2", Shell::Bash, |_| true), emptied);
+        assert_eq!(expand(&c, "ez2", Shell::Bash, |_| true), expanded("Exx"));
+    }
+
+    #[test]
+    fn glob_and_regex_rules_that_render_blank_are_skipped() {
+        let glob = cfg(vec![abbr_glob("e*", " {} "), abbr_glob("e*", "E{*}")]);
+        assert_eq!(expand(&glob, "ex", Shell::Bash, |_| true), expanded("Ex"));
+        let capture = cfg(vec![abbr_glob("*q", "{*}")]);
+        assert_eq!(expand(&capture, "\tq", Shell::Bash, |_| true), passes("\tq"));
+        let regex = cfg(vec![abbr_regex("e(.*)", " {1}{}"), abbr_regex("e(.*)", "E2 {1}")]);
+        assert_eq!(expand(&regex, "e", Shell::Bash, |_| true), expanded("E2 "));
+    }
+
+    #[test]
+    fn which_reports_a_blank_expansion_as_its_own_skip_reason() {
+        let c = cfg(vec![abbr("zz", " {} "), abbr("zz", "Z2")]);
+        match which_abbr(&c, "zz", Shell::Bash, |_| true) {
+            WhichResult::Expanded { skipped, .. } => {
+                assert_eq!(skipped, vec![(0, SkipReason::BlankExpansion)]);
+            }
+            other => panic!("expected Expanded, got {other:?}"),
+        }
+    }
+
+    /// The static answer must agree with what `expand` does: only the
+    /// first `{}` is the cursor, and the `{number}` unit goes in before
+    /// the cursor is taken out.
+    #[test]
+    fn blankness_follows_the_runtime_rendering() {
+        let cases = [
+            (abbr("dd", "{}{}"), Blankness::Never),
+            (abbr("dd", " {} "), Blankness::Always),
+            (abbr("dd", "a{}"), Blankness::Never),
+            (abbr_with_number("u{number}", "{number}", "{}"), Blankness::DependsOnToken),
+            (abbr_with_number("u{number}", "{num{}ber}", " "), Blankness::Never),
+            (abbr_with_number("u{number}", "{number}", " "), Blankness::Always),
+            (abbr_with_number("u{number}", "{}", "x"), Blankness::Always),
+            (abbr_with_number("u{number}", "E{number}", "x"), Blankness::Never),
+            (abbr_glob("q?", "{*}"), Blankness::Always),
+            (abbr_glob("gb*", " {} "), Blankness::Always),
+            (abbr_glob("g*", "{}{}"), Blankness::Never),
+            (abbr_glob("*q", "{*}"), Blankness::DependsOnToken),
+            (abbr_glob("a*", "x{*}"), Blankness::Never),
+            (abbr_regex("r()", "{1}"), Blankness::DependsOnToken),
+            (abbr_regex("r(.)", " {} "), Blankness::Always),
+            (abbr_regex("r(?<w>.)", "x{w}"), Blankness::Never),
+        ];
+        for (rule, want) in cases {
+            let template = rule.expand.for_shell(Shell::Bash).unwrap().to_string();
+            assert_eq!(blankness(&rule, &template), want, "{} -> {template:?}", rule.key);
+        }
     }
 
     #[test]

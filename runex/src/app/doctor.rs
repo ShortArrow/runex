@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::domain::expand::{blankness, Blankness};
 use crate::domain::model::{Config, TriggerKey};
 use crate::domain::sanitize::{sanitize_for_display, sanitize_multiline_for_display};
 use serde::Serialize;
@@ -176,47 +177,58 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
                 detail_verbose: None,
             });
         }
+        let blank = abbr.expand.all_values().iter().any(|&v| blankness(abbr, v) == Blankness::Always);
+        if blank {
+            checks.push(Check {
+                name: format!("abbr[{i}].blank_expand"),
+                status: CheckStatus::Warn,
+                detail: format!(
+                    "rule #{n} ('{key}') has an expand that is blank once {{}} is removed — that expand never fires",
+                    n = i + 1,
+                    key = sanitize_for_display(&abbr.key)
+                ),
+                detail_verbose: None,
+            });
+        }
     }
     checks
 }
 
 /// Whether `template` makes the runtime skip `abbr` for every token it
-/// matches. For an exact rule that is `expand == key`. For a glob rule
-/// (ADR 0005) it is a template that, with the cursor placeholder `{}`
-/// removed, is empty, or is the key with its `*` turned into `{*}` (a
-/// `?` would render literally and change the token); a glob whose
-/// `expand` merely equals its key text does expand. A regex rule
-/// (issue #20) cannot be decided statically and is never reported.
+/// matches as a self-loop. For an exact rule that is `expand == key`.
+/// For a glob rule (ADR 0005) it is the key with its `*` turned into
+/// `{*}`, once the cursor placeholder `{}` is removed (a `?` would
+/// render literally and change the token); a glob whose `expand` merely
+/// equals its key text does expand. A regex rule (issue #20) cannot be
+/// decided statically and is never reported. A blank template is
+/// reported separately ([`crate::domain::expand::blankness`]).
 fn rewrites_token_to_itself(abbr: &crate::domain::model::Abbr, template: &str) -> bool {
     match abbr.match_kind {
         None => template == abbr.key,
         Some(crate::domain::model::MatchKind::Glob) => {
             let text = template.replace(crate::domain::model::CURSOR_PLACEHOLDER, "");
-            text.is_empty()
-                || (!abbr.key.contains('?')
-                    && text == abbr.key.replacen('*', crate::domain::expand::GLOB_CAPTURE_PLACEHOLDER, 1))
+            !abbr.key.contains('?')
+                && text == abbr.key.replacen('*', crate::domain::expand::GLOB_CAPTURE_PLACEHOLDER, 1)
         }
         Some(crate::domain::model::MatchKind::Regex) => false,
     }
 }
 
-/// A rule the runtime skips for every shell never matches first, so it
-/// cannot make a later rule unreachable.
-fn is_always_skipped(abbr: &crate::domain::model::Abbr) -> bool {
-    abbr.expand.all_values().iter().all(|v| rewrites_token_to_itself(abbr, v))
-}
-
 /// Whether `abbr`, once it matches, always fires and so hides every
-/// later rule with the same key. An exact rule does unless it is a
-/// self-loop. A glob or regex rule is skipped at runtime when its
-/// rendered text is empty or equals the token, which depends on the
-/// token; only an expansion that contains a space in every shell, which
-/// no token does, is sure to fire.
+/// later rule with the same key: in every shell its rendering is never
+/// blank ([`crate::domain::expand::blankness`]) and never the token. An
+/// exact or `{number}` rule renders the token only as a self-loop. A
+/// glob or regex rendering depends on the captures, so it is sure to
+/// differ from the token only when the `expand` has a space, which no
+/// token has.
 fn always_fires_when_matched(abbr: &crate::domain::model::Abbr) -> bool {
-    match abbr.match_kind {
-        None => !is_always_skipped(abbr),
-        Some(_) => abbr.expand.all_values().iter().all(|v| v.contains(' ')),
-    }
+    abbr.expand.all_values().iter().all(|&v| {
+        let differs_from_token = match abbr.match_kind {
+            None => !rewrites_token_to_itself(abbr, v),
+            Some(_) => v.contains(' '),
+        };
+        differs_from_token && blankness(abbr, v) == Blankness::Never
+    })
 }
 
 fn check_when_command_exists<F>(config: &Config, command_exists: &F) -> Vec<Check>
@@ -840,9 +852,81 @@ mod tests {
         assert!(self_loop_warned(&test_config(vec![glob("h*", "h{*}{}")])));
     }
 
+    fn blank_expand_warned(cfg: &Config) -> bool {
+        let path = std::path::PathBuf::from("/nonexistent/config.toml");
+        let result = diagnose(&path, Some(cfg), None, &DoctorEnvInfo::default(), |_| true);
+        result.checks.iter().any(|c| c.name.contains("blank_expand") && c.status == CheckStatus::Warn)
+    }
+
+    /// Issue #52: a rule whose `expand` is blank once `{}` is removed
+    /// never fires, in every phase.
     #[test]
-    fn doctor_warns_self_loop_for_a_glob_that_always_renders_to_nothing() {
-        assert!(self_loop_warned(&test_config(vec![glob("e*", "{}")])));
+    fn doctor_warns_blank_expand_for_a_rule_that_always_renders_blank() {
+        let blank_unit = Abbr { number: Some(" ".into()), ..abbr("s{number}", "{number}{}") };
+        for rule in [
+            abbr("zz", "{}"),
+            abbr("zz", " {} "),
+            blank_unit,
+            glob("e*", "{}"),
+            glob("e*", "  {}"),
+            regex("e(.)", " {} "),
+        ] {
+            let key = rule.key.clone();
+            assert!(blank_expand_warned(&test_config(vec![rule])), "rule {key}");
+        }
+    }
+
+    #[test]
+    fn doctor_does_not_warn_blank_expand_when_text_remains() {
+        let unit = Abbr { number: Some("x".into()), ..abbr("s{number}", " {number}{} ") };
+        for rule in [abbr("zz", "x{}"), unit, glob("e*", " {*} "), regex("e(.)", "{1}")] {
+            let key = rule.key.clone();
+            assert!(!blank_expand_warned(&test_config(vec![rule])), "rule {key}");
+        }
+    }
+
+    #[test]
+    fn doctor_reports_a_glob_that_always_renders_to_nothing_as_blank_not_self_loop() {
+        let cfg = test_config(vec![glob("e*", "{}")]);
+        assert!(blank_expand_warned(&cfg));
+        assert!(!self_loop_warned(&cfg));
+    }
+
+    /// A blank rule is always skipped, so it cannot shadow the next rule.
+    #[test]
+    fn doctor_does_not_report_a_rule_unreachable_behind_a_blank_rule() {
+        for first in [abbr("zz", " {} "), glob("z*", "  {}")] {
+            let second = if first.match_kind.is_some() { glob("z*", "zed {*}") } else { abbr("zz", "zed") };
+            let cfg = test_config(vec![first, second]);
+            assert!(check_unreachable_duplicates(&cfg).is_empty(), "{:?}", check_unreachable_duplicates(&cfg));
+        }
+    }
+
+    /// Only the first `{}` is the cursor, so `{}{}` renders `{}` and
+    /// fires: no blank warning, and the rule behind it is unreachable.
+    #[test]
+    fn doctor_treats_a_second_cursor_placeholder_as_text() {
+        let cfg = test_config(vec![abbr("dd", "{}{}"), abbr("dd", "second")]);
+        assert!(!blank_expand_warned(&cfg));
+        assert_eq!(check_unreachable_duplicates(&cfg).len(), 1);
+    }
+
+    /// A unit can form a `{}` once repeated, so a `{number}` rule may
+    /// render blank for one count and not another; it neither gets the
+    /// blank warning nor shadows the next rule.
+    #[test]
+    fn doctor_does_not_decide_a_number_rule_whose_unit_has_braces() {
+        let braces = Abbr { number: Some("{}".into()), ..abbr("u{number}", "{number}") };
+        let next = Abbr { number: Some("x".into()), ..abbr("u{number}", "U{number}") };
+        let cfg = test_config(vec![braces, next]);
+        assert!(!blank_expand_warned(&cfg));
+        assert!(check_unreachable_duplicates(&cfg).is_empty(), "{:?}", check_unreachable_duplicates(&cfg));
+    }
+
+    /// A glob key without `*` binds `{*}` to "" for every token.
+    #[test]
+    fn doctor_warns_blank_expand_for_a_capture_a_key_without_star_leaves_empty() {
+        assert!(blank_expand_warned(&test_config(vec![glob("q?", "{*}")])));
     }
 
     /// A rule the runtime always skips cannot shadow a later rule.

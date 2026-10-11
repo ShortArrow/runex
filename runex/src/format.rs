@@ -59,6 +59,9 @@ pub(crate) fn format_skip_reason(i: usize, reason: &expand::SkipReason, why: boo
         expand::SkipReason::NoShellEntry => {
             format!("\n  rule #{} skipped: no expand entry for current shell", i + 1)
         }
+        expand::SkipReason::BlankExpansion => {
+            format!("\n  rule #{} skipped: expand is blank once {{}} is removed", i + 1)
+        }
     }
 }
 
@@ -216,6 +219,9 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
                     expand::SkipReason::NoShellEntry => {
                         out.push_str(&format!("rule #{} skipped: no entry for current shell\n", i + 1));
                     }
+                    expand::SkipReason::BlankExpansion => {
+                        out.push_str(&format!("rule #{} skipped: blank expansion\n", i + 1));
+                    }
                 }
             }
             out.push_str(&format!(
@@ -256,6 +262,9 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
                     }
                     expand::SkipReason::NoShellEntry => {
                         out.push_str(&format!("rule #{} skipped: no entry for current shell\n", i + 1));
+                    }
+                    expand::SkipReason::BlankExpansion => {
+                        out.push_str(&format!("rule #{} skipped: blank expansion\n", i + 1));
                     }
                 }
             }
