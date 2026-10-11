@@ -272,6 +272,8 @@ Use `--path-prepend <dir>` to inject a directory into the command existence chec
 $ runex --path-prepend /tmp/fake-bins which ls
 ```
 
+The check asks whether the shell you are typing in can run the command, so the same rule can differ between shells on one machine. Git Bash does not call runex on a key press; it checks each command with bash's own `type -P` and keeps the answer until the shell exits. A command that exists only as `foo.cmd` or `foo.bat` is therefore missing in Git Bash, which cannot run it as `foo`, and found in pwsh. An extensionless `#!` script is found in Git Bash and missing in pwsh.
+
 ### Expansion text
 
 `expand` is inserted verbatim as shell-native text. Runex does not re-escape or reinterpret it. Shell quoting and special characters are passed through as-is.

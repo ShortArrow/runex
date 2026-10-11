@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   facts and now carry the sections they were missing (recipes 6b and
   6c, badges, the cache layout). `runex config --help` mentions
   `reload`.
+- **`docs/config-reference.md` says how Git Bash checks
+  `when_command_exists` (#53).** Git Bash uses bash's `type -P` for the
+  session, so a `.cmd`-only command counts as missing there and an
+  extensionless `#!` script as found, the reverse of pwsh. Each answer
+  matches what that shell can run.
 
 ### Added
 
