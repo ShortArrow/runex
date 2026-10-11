@@ -75,6 +75,8 @@ pub struct PtySession {
     /// Monotonic counter for the per-line sync token in
     /// [`Self::send_line_synced`].
     sync_counter: u64,
+    /// How long [`Self::send_line_synced`] waits for a line to finish.
+    sync_timeout: Duration,
     /// The last `DSR_QUERY.len() - 1` bytes read, carried across
     /// `try_read` calls so a query split over two reads is still
     /// recognised and answered.
@@ -165,6 +167,7 @@ impl PtySession {
             inner: session,
             seen: String::new(),
             sync_counter: 0,
+            sync_timeout: DEFAULT_TIMEOUT,
             dsr_carry: Vec::new(),
             started,
             transcript: String::new(),
@@ -234,7 +237,7 @@ impl PtySession {
         };
         self.write_line(&format!("{s}{sep}{printer}"))
             .map_err(|e| self.failure(s, Cause::Write(e.to_string())))?;
-        self.read_until(&joined, DEFAULT_TIMEOUT).map_err(|cause| self.failure(s, cause))
+        self.read_until(&joined, self.sync_timeout).map_err(|cause| self.failure(s, cause))
     }
 
     /// Send `s` *without* a trailing Enter. Used when a test wants to
@@ -484,13 +487,17 @@ mod bootstrap_error_tests {
 
     #[test]
     fn a_line_that_never_finishes_reports_the_line_the_cause_and_the_output() {
+        // Short, so this test does not load the runner while the shell
+        // tests in the same binary are starting their shells.
+        let deadline = Duration::from_millis(200);
         let mut session = PtySession::launch("cat").expect("cat runs under a PTY");
+        session.sync_timeout = deadline;
         let err = session
             .send_line_synced("true", "; ", "echo ")
             .expect_err("cat echoes the halves but never prints the joined sync token");
         assert_eq!(err.step, "true");
-        assert!(matches!(err.cause, Cause::Timeout(d) if d == DEFAULT_TIMEOUT), "{err:?}");
-        assert!(err.elapsed >= DEFAULT_TIMEOUT, "{err:?}");
+        assert!(matches!(err.cause, Cause::Timeout(d) if d == deadline), "{err:?}");
+        assert!(err.elapsed >= deadline, "{err:?}");
         assert!(err.output.contains("RXSYN"), "{err:?}");
     }
 
