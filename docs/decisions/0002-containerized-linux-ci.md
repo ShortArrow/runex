@@ -5,8 +5,6 @@
 - **Supersedes**: the implicit `apt-get install zsh` + reliance on
   `ubuntu-latest` having pwsh / nu for the `test-linux` job in
   0.1.13–0.1.14.
-- **Authors**: ShortArrow, with Claude Code collaboration on
-  alternatives analysis (and Codex-driven review).
 - **Date**: 2026-05-10
 
 ---

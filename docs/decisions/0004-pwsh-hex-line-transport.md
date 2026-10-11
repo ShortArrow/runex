@@ -4,8 +4,6 @@
 - **Phase**: 0.1.21 candidate
 - **Supersedes**: the joined `--line=<value>` token in
   `templates/pwsh.ps1` shipped for issue #18
-- **Authors**: ShortArrow, with Claude Code collaboration on the
-  alternatives analysis
 - **Date**: 2026-09-17
 
 ---
