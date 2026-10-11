@@ -4,8 +4,6 @@
 - **Phase**: G (0.1.16 candidate, develop branch)
 - **Supersedes**: the `eval "$(runex export <shell>)"` rcfile-line
   installation pattern shipped in 0.1.13–0.1.14
-- **Authors**: ShortArrow, with ChatGPT (Claude Code) collaboration
-  on alternatives analysis
 - **Date**: 2026-05-10
 
 ---

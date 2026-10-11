@@ -3,8 +3,6 @@
 - **Status**: Accepted
 - **Phase**: 0.1.22 candidate
 - **Issues**: #19 (wildcard), #20 (regex)
-- **Authors**: ShortArrow, with Claude Code collaboration on the
-  alternatives analysis
 - **Date**: 2026-09-30
 
 ---

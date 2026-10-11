@@ -4,8 +4,6 @@
 - **Phase**: 0.1.21 candidate
 - **Supersedes**: the `runex_is_safe_line` gate plus `\"` escaping in
   `templates/clink.lua` shipped in 0.1.15–0.1.20
-- **Authors**: ShortArrow, with Claude Code collaboration on the
-  alternatives analysis
 - **Date**: 2026-09-09
 
 ---
