@@ -75,8 +75,9 @@ pub struct PtySession {
     /// Monotonic counter for the per-line sync token in
     /// [`Self::send_line_synced`].
     sync_counter: u64,
-    /// How long [`Self::send_line_synced`] waits for a line to finish.
-    sync_timeout: Duration,
+    /// How long each bootstrap step may take: the shell starting up, or
+    /// [`Self::send_line_synced`] waiting for a line to finish.
+    step_timeout: Duration,
     /// The last `DSR_QUERY.len() - 1` bytes read, carried across
     /// `try_read` calls so a query split over two reads is still
     /// recognised and answered.
@@ -171,7 +172,7 @@ impl PtySession {
             inner: session,
             seen: String::new(),
             sync_counter: 0,
-            sync_timeout: DEFAULT_TIMEOUT,
+            step_timeout: DEFAULT_TIMEOUT,
             dsr_carry: Vec::new(),
             dsr_answered: 0,
             last_output: None,
@@ -243,7 +244,7 @@ impl PtySession {
         };
         self.write_line(&format!("{s}{sep}{printer}"))
             .map_err(|e| self.failure(s, Cause::Write(e.to_string())))?;
-        self.read_until(&joined, self.sync_timeout).map_err(|cause| self.failure(s, cause))
+        self.read_until(&joined, self.step_timeout).map_err(|cause| self.failure(s, cause))
     }
 
     /// Send `s` *without* a trailing Enter. Used when a test wants to
@@ -348,8 +349,8 @@ impl PtySession {
                 self.seen.clear();
                 return Ok(());
             }
-            if start.elapsed() > DEFAULT_TIMEOUT {
-                return Err(self.failure("startup", Cause::Timeout(DEFAULT_TIMEOUT)));
+            if start.elapsed() > self.step_timeout {
+                return Err(self.failure("startup", Cause::Timeout(self.step_timeout)));
             }
         }
     }
@@ -570,7 +571,7 @@ mod bootstrap_error_tests {
         // tests in the same binary are starting their shells.
         let deadline = Duration::from_millis(200);
         let mut session = PtySession::launch("cat").expect("cat runs under a PTY");
-        session.sync_timeout = deadline;
+        session.step_timeout = deadline;
         let err = session
             .send_line_synced("true", "; ", "echo ")
             .expect_err("cat echoes the halves but never prints the joined sync token");
