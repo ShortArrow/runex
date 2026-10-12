@@ -81,6 +81,10 @@ pub struct PtySession {
     /// `try_read` calls so a query split over two reads is still
     /// recognised and answered.
     dsr_carry: Vec<u8>,
+    /// How many DSR queries have been answered since launch.
+    dsr_answered: usize,
+    /// When the child last printed anything; `None` until it has.
+    last_output: Option<Instant>,
     /// When the shell was launched, so a failure can say how long the
     /// whole bootstrap had taken.
     started: Instant,
@@ -143,7 +147,7 @@ impl PtySession {
         // sending anything: reedline / PSReadLine emit a DSR query on
         // startup and block until it is answered, and the first
         // bootstrap line would otherwise race the editor's init.
-        this.settle_startup();
+        this.settle_startup(shell)?;
         bootstrap(&mut this, shell, runex_bin, config)?;
         // Drop the bootstrap chatter so a test's first `expect` matches
         // only what its own keystrokes produce.
@@ -169,6 +173,8 @@ impl PtySession {
             sync_counter: 0,
             sync_timeout: DEFAULT_TIMEOUT,
             dsr_carry: Vec::new(),
+            dsr_answered: 0,
+            last_output: None,
             started,
             transcript: String::new(),
         })
@@ -308,7 +314,9 @@ impl PtySession {
                     if dsr_query_completes(&mut self.dsr_carry, chunk) {
                         let _ = self.inner.write_all(DSR_ANSWER);
                         let _ = self.inner.flush();
+                        self.dsr_answered += 1;
                     }
+                    self.last_output = Some(Instant::now());
                     let text = String::from_utf8_lossy(chunk);
                     self.seen.push_str(&text);
                     self.transcript.push_str(&text);
@@ -321,20 +329,29 @@ impl PtySession {
         }
     }
 
-    /// Let the shell's startup output settle before the bootstrap
-    /// lines are sent, answering the DSR cursor-position query that
-    /// reedline / PSReadLine emit on startup and block on. We can't
-    /// wait for a known prompt (each shell's default prompt differs and
-    /// isn't ours yet), so we drain for a short fixed window, replying
-    /// to any DSR query, which is enough for the line editor to reach
-    /// its first interactive prompt. `read_until` on a needle that
-    /// never arrives is exactly this drain-with-DSR loop, bounded by
-    /// the deadline.
-    fn settle_startup(&mut self) {
-        // Deliberately wait on a sentinel that never comes so the loop
-        // spends its whole (short) budget draining + answering DSR.
-        let _ = self.read_until("\u{0}__never__\u{0}", Duration::from_millis(600));
-        self.seen.clear();
+    /// Wait until the shell's line editor reads keystrokes, answering
+    /// the DSR queries it sends on the way (see [`startup_is_ready`]).
+    /// A line sent earlier can reach the editor before it is ready: on
+    /// a slow macOS runner pwsh then rendered the first bootstrap line
+    /// but never ran it.
+    fn settle_startup(&mut self, shell: PtyShell) -> Result<(), BootstrapError> {
+        let start = Instant::now();
+        loop {
+            // A needle that never arrives makes `read_until` a drain
+            // that answers DSR queries for one poll interval.
+            match self.read_until("\u{0}__never__\u{0}", STARTUP_POLL) {
+                Ok(()) | Err(Cause::Timeout(_)) => {}
+                Err(cause) => return Err(self.failure("startup", cause)),
+            }
+            let quiet = self.last_output.map_or(Duration::ZERO, |t| t.elapsed());
+            if startup_is_ready(shell, self.last_output.is_some(), self.dsr_answered, quiet) {
+                self.seen.clear();
+                return Ok(());
+            }
+            if start.elapsed() > DEFAULT_TIMEOUT {
+                return Err(self.failure("startup", Cause::Timeout(DEFAULT_TIMEOUT)));
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -350,6 +367,33 @@ impl PtySession {
     pub fn quit(mut self) {
         let _ = self.send_line("exit");
     }
+}
+
+/// How long the shell must print nothing after its ready signal
+/// before the first bootstrap line is sent.
+const STARTUP_QUIET: Duration = Duration::from_millis(100);
+
+/// How often [`PtySession::settle_startup`] re-checks readiness.
+const STARTUP_POLL: Duration = Duration::from_millis(20);
+
+/// Whether a freshly launched `shell` reads keystrokes, given whether
+/// it has printed anything, how many DSR queries it has had answered,
+/// and how long it has printed nothing.
+///
+/// The DSR count is the ready signal for the shells that query: the
+/// editor sends its query when it starts reading input and blocks until
+/// it is answered, so the queries arrive one at a time and can be
+/// counted. pwsh sends two, the first while .NET sets up the console
+/// and the second from PSReadLine after the `PS>` prompt; nu's reedline
+/// sends one. bash and zsh never query, so their prompt is the signal.
+/// The quiet period lets the redraw that follows the answer finish.
+fn startup_is_ready(shell: PtyShell, printed: bool, dsr_answered: usize, quiet: Duration) -> bool {
+    let editor_queries = match shell {
+        PtyShell::Bash | PtyShell::Zsh => 0,
+        PtyShell::Nu => 1,
+        PtyShell::Pwsh => 2,
+    };
+    printed && dsr_answered >= editor_queries && quiet >= STARTUP_QUIET
 }
 
 fn launch_command(shell: PtyShell, _runex_bin: &str) -> String {
@@ -479,6 +523,41 @@ fn dsr_query_completes(carry: &mut Vec<u8>, chunk: &[u8]) -> bool {
     let keep = window.len().saturating_sub(DSR_QUERY.len() - 1);
     *carry = window[keep..].to_vec();
     found
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+
+    const QUIET: Duration = STARTUP_QUIET;
+    const BUSY: Duration = Duration::from_millis(10);
+
+    #[test]
+    fn pwsh_is_ready_only_after_psreadline_has_asked_for_the_cursor() {
+        assert!(!startup_is_ready(PtyShell::Pwsh, true, 1, QUIET));
+        assert!(startup_is_ready(PtyShell::Pwsh, true, 2, QUIET));
+    }
+
+    #[test]
+    fn nu_is_ready_after_reedline_has_asked_for_the_cursor() {
+        assert!(!startup_is_ready(PtyShell::Nu, true, 0, QUIET));
+        assert!(startup_is_ready(PtyShell::Nu, true, 1, QUIET));
+    }
+
+    #[test]
+    fn bash_and_zsh_are_ready_once_they_have_printed_a_prompt() {
+        for shell in [PtyShell::Bash, PtyShell::Zsh] {
+            assert!(!startup_is_ready(shell, false, 0, QUIET), "{shell:?}");
+            assert!(startup_is_ready(shell, true, 0, QUIET), "{shell:?}");
+        }
+    }
+
+    #[test]
+    fn no_shell_is_ready_while_it_is_still_printing() {
+        for shell in [PtyShell::Bash, PtyShell::Zsh, PtyShell::Pwsh, PtyShell::Nu] {
+            assert!(!startup_is_ready(shell, true, 2, BUSY), "{shell:?}");
+        }
+    }
 }
 
 #[cfg(test)]
