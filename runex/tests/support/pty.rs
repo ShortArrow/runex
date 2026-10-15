@@ -595,7 +595,7 @@ mod startup_tests {
     /// While the PTY is canonical, ICRNL turns a typed CR into LF, and
     /// PSReadLine does not run an LF-terminated line. Like pwsh, this
     /// shell prints a terminal mode sequence first, leaves canonical mode
-    /// 800 ms after launch, and only then prints its prompt; it reports
+    /// 800 ms after that, and only then prints its prompt; it reports
     /// the byte it reads.
     #[test]
     fn a_return_typed_after_the_prompt_reaches_a_slow_shell_as_cr() {
