@@ -591,6 +591,28 @@ mod startup_tests {
             .expect_err("echo prints a line and exits without a prompt");
         assert_eq!(err.step, "startup", "{err:?}");
     }
+
+    /// While the PTY is canonical, ICRNL turns a typed CR into LF, and
+    /// PSReadLine does not run an LF-terminated line. Like pwsh, this
+    /// shell prints a terminal mode sequence first, leaves canonical mode
+    /// 800 ms after that, and only then prints its prompt; it reports
+    /// the byte it reads.
+    #[test]
+    fn a_return_typed_after_the_prompt_reaches_a_slow_shell_as_cr() {
+        let script = std::env::temp_dir().join(format!("runex-pty-slow-shell-{}.sh", std::process::id()));
+        std::fs::write(
+            &script,
+            "printf '\\033[?1h'; sleep 0.8; stty raw -echo; printf '$ '; head -c 1 | od -An -c\n",
+        )
+        .expect("the temp dir is writable");
+        let launched = PtySession::launch(&format!("sh {}", script.display()));
+        let settled = launched.map(|mut session| (session.settle_startup(PtyShell::Bash), session));
+        let _ = std::fs::remove_file(&script);
+        let (settled, mut session) = settled.expect("sh runs under a PTY");
+        settled.expect("the shell prints its prompt");
+        session.enter().expect("the PTY accepts a key");
+        assert!(session.read_until("\\r", Duration::from_secs(2)).is_ok(), "{:?}", session.transcript);
+    }
 }
 
 #[cfg(test)]
