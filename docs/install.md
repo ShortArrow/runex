@@ -13,6 +13,7 @@ Pick the channel that matches your platform and package manager. Every channel i
 | AUR | Arch Linux | `paru -S runex-bin` |
 | winget | Windows | `winget install ShortArrow.runex` |
 | GitHub release archive | see the target list below | download, extract, put `runex` on `PATH` |
+| Debian package | Debian, Ubuntu (amd64, arm64) | download, `sudo apt install ./runex_<version>-1_<arch>.deb` |
 
 ## Homebrew
 
@@ -55,6 +56,16 @@ Each [GitHub release](https://github.com/ShortArrow/runex/releases) attaches one
 Extract `runex` from the archive and place it in a directory on your `PATH`.
 
 On Linux, prefer the `linux-musl` archives. They are statically linked and start on any distribution, Ubuntu 22.04 and Debian 12 included. The `linux-gnu` archives are linked against the glibc of the build runner, 2.39 at present, and need that version or newer.
+
+## Debian package
+
+Releases after v0.1.20 also attach `runex_<version>-1_amd64.deb` and `runex_<version>-1_arm64.deb`, which hold the musl binary as `/usr/bin/runex` and depend on no other package. Download the one for your architecture and install it with apt, which records it so `apt remove runex` takes it out again:
+
+```bash
+sudo apt install ./runex_<version>-1_amd64.deb
+```
+
+Each release is installed this way on Debian 12, Ubuntu 22.04 and Ubuntu 24.04 before it is published.
 
 ## After installing
 

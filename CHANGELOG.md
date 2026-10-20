@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Debian packages (#65).** Each release attaches
+  `runex_<version>-1_amd64.deb` and `runex_<version>-1_arm64.deb`,
+  built from the musl binaries with no `Depends`, and a `SHA256SUMS`
+  covering every asset. The release workflow installs each package with
+  apt, from a signed repository and as a lone file, on Debian 12,
+  Ubuntu 22.04 and Ubuntu 24.04 before publishing; CI does the same on
+  every pull request. These packages are what the APT repository at
+  pkg.shortarrow.jp will serve.
 - **Regex keys: `match = "regex"` (#20).** A rule can read its `key`
   as a regular expression, compiled with the regex-lite crate and
   anchored so it must match the whole token (`^(?:key)$`).
