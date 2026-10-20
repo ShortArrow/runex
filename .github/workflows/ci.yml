@@ -72,6 +72,17 @@ jobs:
             if [ "$status" -ne 0 ] || [ -s stderr.txt ]; then exit 1; fi
           done
 
+  deb-scripts:
+    name: Debian package scripts
+    # The release workflow only runs on a tag, so the scripts it builds
+    # the Debian package with are exercised here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: bash packaging/apt/test-build-deb.sh
+
   test-macos:
     name: Test (macOS)
     runs-on: macos-latest
