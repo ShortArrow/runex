@@ -407,7 +407,7 @@ https://github.com/ShortArrow/runex/releases/tag/vX.Y.Z.
   The second argument is the tap clone (`git clone
   https://github.com/ShortArrow/homebrew-runex.git` anywhere; the
   path above is where it lives on the Windows workstation). The
-  script fetches the macOS arm64/x86_64 and Linux arm64/x86_64
+  script fetches the macOS arm64/x86_64 and Linux musl arm64/x86_64
   tarball sha256s, rewrites `Formula/runex.rb`, and stages a commit
   in the tap clone. Push manually:
 

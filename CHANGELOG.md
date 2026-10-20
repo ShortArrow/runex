@@ -94,7 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GLIBC_2.39' not found``. Each release now also ships statically
   linked `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`
   archives, which start on any distribution. CI runs both on Ubuntu
-  22.04 and Debian 12 and fails on any loader message.
+  22.04 and Debian 12 and fails on any loader message. The Homebrew
+  tap installs the musl archives on Linux.
 - **bash, zsh, nu: a line that starts with `-` expands (#50).** The
   templates passed the buffer as `--line <buffer>`, so `runex hook` read
   a leading `-` as an option, failed, and the shell inserted a plain
