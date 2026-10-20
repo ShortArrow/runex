@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-10-20
+
 ### Changed
 
 - **A rule whose expansion is blank no longer erases the token (#52).**
@@ -231,6 +233,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that points at a file runex would not accept is left alone. Hard
   links are not preserved (the rename replaces one name); use a
   symlink.
+
+### Internal
+
+- `cargo update` clears RUSTSEC-2026-0190 (anyhow) and
+  RUSTSEC-2026-0205 (scc, dropped with serial_test 3.5.0).
+- CI fails on clippy warnings on Linux, macOS and Windows, and the
+  existing warnings are fixed.
+- The ungated `init` tests no longer append to the developer's real
+  `~/.bashrc` on Windows (#37).
+- The PTY tests for zsh, Nushell and PowerShell now run their
+  keystrokes for real, wait for the shell's prompt instead of a fixed
+  600 ms, say which bootstrap step failed, and pin that a return
+  reaches a slow shell as CR (#58).
+- Release tags are signed (`git tag -s`).
 
 ## [0.1.20] - 2026-07-09
 
