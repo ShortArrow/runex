@@ -66,8 +66,10 @@ jobs:
           for image in ubuntu:22.04 debian:12; do
             echo "== $image"
             docker pull -q "$image" >/dev/null
-            docker run --rm -v "$PWD/target/$TARGET/release:/b:ro" "$image" /b/runex version 2>stderr.txt
-            if [ -s stderr.txt ]; then cat stderr.txt; exit 1; fi
+            status=0
+            docker run --rm -v "$PWD/target/$TARGET/release:/b:ro" "$image" /b/runex version 2>stderr.txt || status=$?
+            cat stderr.txt
+            if [ "$status" -ne 0 ] || [ -s stderr.txt ]; then exit 1; fi
           done
 
   test-macos:
