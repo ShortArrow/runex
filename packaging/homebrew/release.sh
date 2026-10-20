@@ -39,7 +39,9 @@ sha_of() {
     curl -fsSL "$url" | sha256sum | awk '{print $1}'
 }
 
-BASE="https://github.com/ShortArrow/runex/releases/download/v${VERSION}"
+# RUNEX_RELEASE_BASE points the checksums at other assets, such as a
+# file:// directory in a test.
+BASE="${RUNEX_RELEASE_BASE:-https://github.com/ShortArrow/runex/releases/download/v${VERSION}}"
 
 echo "Fetching SHA256 checksums for v${VERSION}..."
 SHA_MAC_ARM=$(sha_of "${BASE}/runex-aarch64-apple-darwin.tar.gz")
