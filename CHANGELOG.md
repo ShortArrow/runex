@@ -80,6 +80,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Linux release binaries that start on Ubuntu 22.04 and Debian 12
+  (#64).** The `linux-gnu` archives are built on a runner with glibc
+  2.39 and refused to start on older distributions with ``version
+  `GLIBC_2.39' not found``. Each release now also ships statically
+  linked `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`
+  archives, which start on any distribution. CI runs both on Ubuntu
+  22.04 and Debian 12 and fails on any loader message.
 - **bash, zsh, nu: a line that starts with `-` expands (#50).** The
   templates passed the buffer as `--line <buffer>`, so `runex hook` read
   a leading `-` as an option, failed, and the shell inserted a plain

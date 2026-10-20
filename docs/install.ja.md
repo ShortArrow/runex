@@ -46,11 +46,15 @@ paru -S runex-bin   # または yay -S runex-bin
 | `x86_64-pc-windows-msvc` | zip |
 | `x86_64-unknown-linux-gnu` | tar.gz |
 | `aarch64-unknown-linux-gnu` | tar.gz |
+| `x86_64-unknown-linux-musl` | tar.gz |
+| `aarch64-unknown-linux-musl` | tar.gz |
 | `x86_64-apple-darwin` | tar.gz |
 | `aarch64-apple-darwin` | tar.gz |
 | `aarch64-linux-android`（Termux） | tar.gz |
 
 アーカイブから `runex` を取り出し、`PATH` の通ったディレクトリに置いてください。
+
+Linux では `linux-musl` のアーカイブを選んでください。静的リンクなので、Ubuntu 22.04 や Debian 12 を含むどのディストリビューションでも起動します。`linux-gnu` のアーカイブはビルドしたランナーの glibc（現在は 2.39）にリンクしているので、それ以上の glibc が必要です。
 
 ## インストール後の確認
 

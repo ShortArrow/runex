@@ -46,11 +46,15 @@ Each [GitHub release](https://github.com/ShortArrow/runex/releases) attaches one
 | `x86_64-pc-windows-msvc` | zip |
 | `x86_64-unknown-linux-gnu` | tar.gz |
 | `aarch64-unknown-linux-gnu` | tar.gz |
+| `x86_64-unknown-linux-musl` | tar.gz |
+| `aarch64-unknown-linux-musl` | tar.gz |
 | `x86_64-apple-darwin` | tar.gz |
 | `aarch64-apple-darwin` | tar.gz |
 | `aarch64-linux-android` (Termux) | tar.gz |
 
 Extract `runex` from the archive and place it in a directory on your `PATH`.
+
+On Linux, prefer the `linux-musl` archives. They are statically linked and start on any distribution, Ubuntu 22.04 and Debian 12 included. The `linux-gnu` archives are linked against the glibc of the build runner, 2.39 at present, and need that version or newer.
 
 ## After installing
 
