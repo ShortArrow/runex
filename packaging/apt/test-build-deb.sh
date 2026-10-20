@@ -48,7 +48,8 @@ field() { dpkg-deb --field "$deb" "$1"; }
 check "Package is runex" test "$(field Package)" = runex
 check "Version carries Debian revision 1" test "$(field Version)" = 0.2.0-1
 check "Architecture is the one asked for" test "$(field Architecture)" = amd64
-check "the statically linked executable depends on nothing" test -z "$(field Depends)"
+no_depends() { dpkg-deb --field "$deb" Package >/dev/null && test -z "$(field Depends)"; }
+check "the statically linked executable depends on nothing" no_depends
 check "Installed-Size is set" test -n "$(field Installed-Size)"
 
 contents="$(dpkg-deb --contents "$deb")"
