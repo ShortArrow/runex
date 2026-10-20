@@ -54,9 +54,11 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.gz
+            deb: amd64
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
             archive: tar.gz
+            deb: arm64
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.gz
@@ -112,11 +114,27 @@ jobs:
         run: |
           Compress-Archive -Path target/${{ matrix.target }}/release/runex.exe -DestinationPath runex-${{ matrix.target }}.zip
 
+      - name: Package (deb) and install it with apt
+        # The package is what pkg.shortarrow.jp indexes from this
+        # release, so it is installed and run here before it is published.
+        if: matrix.deb
+        env:
+          ARCH: ${{ matrix.deb }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq apt-utils
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' runex/Cargo.toml | head -n 1)"
+          deb_version="$(sh packaging/apt/deb-version.sh "$version" "$GITHUB_REF_NAME")"
+          sh packaging/apt/build-deb.sh "target/$TARGET/release/runex" "$deb_version" "$ARCH" .
+          sh packaging/apt/install-test.sh . "$version" "$ARCH"
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runex-${{ matrix.target }}
-          path: runex-${{ matrix.target }}.*
+          path: |
+            runex-${{ matrix.target }}.*
+            runex_*.deb
 
   release:
     name: Create Release
@@ -133,6 +151,15 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Write SHA256SUMS
+        # pkg.shortarrow.jp checks each package against this file before
+        # indexing it, and refuses a release that has packages without it.
+        working-directory: artifacts
+        run: |
+          find . -maxdepth 1 -type f -printf '%P\n' | LC_ALL=C sort | xargs sha256sum >../SHA256SUMS
+          mv ../SHA256SUMS .
+          cat SHA256SUMS
 
       - name: Attest build provenance
         # Generates a signed SLSA provenance statement for every release

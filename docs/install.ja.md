@@ -13,6 +13,7 @@
 | AUR | Arch Linux | `paru -S runex-bin` |
 | winget | Windows | `winget install ShortArrow.runex` |
 | GitHub リリースのアーカイブ | 下のターゲット一覧を参照 | 展開して `runex` を `PATH` 上に置く |
+| Debian パッケージ | Debian、Ubuntu（amd64、arm64） | ダウンロードして `sudo apt install ./runex_<version>-1_<arch>.deb` |
 
 ## Homebrew
 
@@ -55,6 +56,16 @@ paru -S runex-bin   # または yay -S runex-bin
 アーカイブから `runex` を取り出し、`PATH` の通ったディレクトリに置いてください。
 
 Linux では `linux-musl` のアーカイブを選んでください。静的リンクなので、Ubuntu 22.04 や Debian 12 を含むどのディストリビューションでも起動します。`linux-gnu` のアーカイブはビルドしたランナーの glibc（現在は 2.39）にリンクしているので、それ以上の glibc が必要です。
+
+## Debian パッケージ
+
+v0.1.20 より後のリリースには、`runex_<version>-1_amd64.deb` と `runex_<version>-1_arm64.deb` も添付します。中身は musl 版のバイナリ（`/usr/bin/runex`）だけで、ほかのパッケージには依存しません。アーキテクチャに合うものをダウンロードし、apt で入れてください。apt が記録するので、`apt remove runex` で削除できます。
+
+```bash
+sudo apt install ./runex_<version>-1_amd64.deb
+```
+
+リリースのたびに、公開する前に Debian 12、Ubuntu 22.04、Ubuntu 24.04 でこの方法のインストールを確かめています。
 
 ## インストール後の確認
 
