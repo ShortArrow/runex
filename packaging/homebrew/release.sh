@@ -8,7 +8,7 @@
 #   packaging/homebrew/release.sh 0.1.12 /v/github.com/ShortArrow/homebrew-runex
 #
 # What it does:
-#   1. Fetches SHA256 of the macOS/Linux (x86_64/aarch64) release tarballs
+#   1. Fetches SHA256 of the macOS and Linux musl (x86_64/aarch64) release tarballs
 #   2. Rewrites version and sha256 values in Formula/runex.rb
 #   3. Commits the change (push is left to the user)
 
@@ -39,13 +39,15 @@ sha_of() {
     curl -fsSL "$url" | sha256sum | awk '{print $1}'
 }
 
-BASE="https://github.com/ShortArrow/runex/releases/download/v${VERSION}"
+# RUNEX_RELEASE_BASE points the checksums at other assets, such as a
+# file:// directory in a test.
+BASE="${RUNEX_RELEASE_BASE:-https://github.com/ShortArrow/runex/releases/download/v${VERSION}}"
 
 echo "Fetching SHA256 checksums for v${VERSION}..."
 SHA_MAC_ARM=$(sha_of "${BASE}/runex-aarch64-apple-darwin.tar.gz")
 SHA_MAC_X64=$(sha_of "${BASE}/runex-x86_64-apple-darwin.tar.gz")
-SHA_LINUX_ARM=$(sha_of "${BASE}/runex-aarch64-unknown-linux-gnu.tar.gz")
-SHA_LINUX_X64=$(sha_of "${BASE}/runex-x86_64-unknown-linux-gnu.tar.gz")
+SHA_LINUX_ARM=$(sha_of "${BASE}/runex-aarch64-unknown-linux-musl.tar.gz")
+SHA_LINUX_X64=$(sha_of "${BASE}/runex-x86_64-unknown-linux-musl.tar.gz")
 
 echo "  macOS arm64:   $SHA_MAC_ARM"
 echo "  macOS x86_64:  $SHA_MAC_X64"
@@ -72,10 +74,14 @@ def sub_sha(src, url_substr, sha):
     )
     return pattern.sub(rf'\1"{sha}"', src, count=1)
 
+# Linux installs the statically linked musl archives, which start on any
+# glibc; a formula still naming the gnu archives is moved over.
+src = src.replace("-unknown-linux-gnu.tar.gz", "-unknown-linux-musl.tar.gz")
+
 src = sub_sha(src, "aarch64-apple-darwin", mac_arm)
 src = sub_sha(src, "x86_64-apple-darwin", mac_x64)
-src = sub_sha(src, "aarch64-unknown-linux-gnu", linux_arm)
-src = sub_sha(src, "x86_64-unknown-linux-gnu", linux_x64)
+src = sub_sha(src, "aarch64-unknown-linux-musl", linux_arm)
+src = sub_sha(src, "x86_64-unknown-linux-musl", linux_x64)
 
 open(path, "w").write(src)
 PY
