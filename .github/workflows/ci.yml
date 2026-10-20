@@ -71,7 +71,7 @@ jobs:
         run: |
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' runex/Cargo.toml | head -n 1)"
           sh packaging/apt/build-deb.sh "target/$TARGET/release/runex" "$version" "$ARCH" deb
-          sh packaging/apt/install-test.sh deb "$version" "$ARCH"
+          sh packaging/apt/install-test.sh deb 9.9.9 "$ARCH"
 
   deb-scripts:
     name: Debian package scripts
