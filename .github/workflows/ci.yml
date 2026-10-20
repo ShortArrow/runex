@@ -37,7 +37,9 @@ jobs:
     name: Linux binary (${{ matrix.target }})
     # The release binaries must start on the oldest distributions we
     # support, whatever glibc the runner image ships. Each target is
-    # built natively and run in those distributions' containers.
+    # built natively and run in those distributions' containers. A
+    # loader warning on stderr fails too: the shell hook runs runex on
+    # every key press.
     strategy:
       fail-fast: false
       matrix:
@@ -63,7 +65,9 @@ jobs:
         run: |
           for image in ubuntu:22.04 debian:12; do
             echo "== $image"
-            docker run --rm -v "$PWD/target/$TARGET/release:/b:ro" "$image" /b/runex version
+            docker pull -q "$image" >/dev/null
+            docker run --rm -v "$PWD/target/$TARGET/release:/b:ro" "$image" /b/runex version 2>stderr.txt
+            if [ -s stderr.txt ]; then cat stderr.txt; exit 1; fi
           done
 
   test-macos:
