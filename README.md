@@ -60,10 +60,11 @@ The config written by `runex init` contains one sample rule, `gst` to `git statu
 cargo install runex                       # Rust toolchain
 brew install shortarrow/runex/runex       # macOS / Linux
 paru -S runex-bin                         # Arch Linux (AUR)
+sudo apt install runex                    # Debian / Ubuntu (add the APT repository first)
 winget install ShortArrow.runex           # Windows
 ```
 
-mise, release archives and the full target list are in [docs/install.md](docs/install.md).
+The APT repository setup, mise, release archives and the full target list are in [docs/install.md](docs/install.md).
 
 ## Setup
 

@@ -13,6 +13,7 @@
 | AUR | Arch Linux | `paru -S runex-bin` |
 | winget | Windows | `winget install ShortArrow.runex` |
 | GitHub リリースのアーカイブ | 下のターゲット一覧を参照 | 展開して `runex` を `PATH` 上に置く |
+| APT リポジトリ | Debian、Ubuntu（amd64、arm64） | pkg.shortarrow.jp を追加して `sudo apt install runex` |
 | Debian パッケージ | Debian、Ubuntu（amd64、arm64） | ダウンロードして `sudo apt install ./runex_<version>-1_<arch>.deb` |
 
 ## Homebrew
@@ -57,9 +58,24 @@ paru -S runex-bin   # または yay -S runex-bin
 
 Linux では `linux-musl` のアーカイブを選んでください。静的リンクなので、Ubuntu 22.04 や Debian 12 を含むどのディストリビューションでも起動します。`linux-gnu` のアーカイブはビルドしたランナーの glibc（現在は 2.39）にリンクしているので、それ以上の glibc が必要です。
 
+## APT リポジトリ
+
+Debian と Ubuntu（amd64、arm64）では、APT リポジトリ `https://pkg.shortarrow.jp/apt` から入れられます。ShortArrow のプロジェクトのパッケージを配布しているリポジトリです。最初に 1 回だけ、鍵とソースを追加します。
+
+```bash
+sudo curl -fsSL https://pkg.shortarrow.jp/apt/shortarrow-archive-keyring.gpg -o /usr/share/keyrings/shortarrow-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/shortarrow-archive-keyring.gpg] https://pkg.shortarrow.jp/apt stable main" | sudo tee /etc/apt/sources.list.d/shortarrow.list
+sudo apt update
+sudo apt install shortarrow-archive-keyring runex
+```
+
+`shortarrow-archive-keyring` は鍵を収めたパッケージです。上のように名前を指定して入れてください。依存として入っただけだと、`apt autoremove` で削除されることがあります。以後は `sudo apt upgrade` でほかのパッケージと一緒に runex も更新されます。
+
+新しいリリースがリポジトリに載るのは、リポジトリの管理者が公開を承認した後です。そのため GitHub のリリースより遅れることがあります。
+
 ## Debian パッケージ
 
-v0.1.20 より後のリリースには、`runex_<version>-1_amd64.deb` と `runex_<version>-1_arm64.deb` も添付します。中身は musl 版のバイナリ（`/usr/bin/runex`）だけで、ほかのパッケージには依存しません。アーキテクチャに合うものをダウンロードし、apt で入れてください。apt が記録するので、`apt remove runex` で削除できます。
+リポジトリを追加せずに入れる場合は、リリースからパッケージをダウンロードします。v0.1.20 より後のリリースには、`runex_<version>-1_amd64.deb` と `runex_<version>-1_arm64.deb` も添付します。中身は musl 版のバイナリ（`/usr/bin/runex`）だけで、ほかのパッケージには依存しません。アーキテクチャに合うものをダウンロードし、apt で入れてください。apt が記録するので、`apt remove runex` で削除できます。
 
 ```bash
 sudo apt install ./runex_<version>-1_amd64.deb
