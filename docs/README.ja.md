@@ -60,10 +60,11 @@ gst<Space>                         # 4. git status に展開される
 cargo install runex                       # Rust ツールチェーン
 brew install shortarrow/runex/runex       # macOS / Linux
 paru -S runex-bin                         # Arch Linux (AUR)
+sudo apt install runex                    # Debian / Ubuntu (APT リポジトリを追加した後)
 winget install ShortArrow.runex           # Windows
 ```
 
-mise、リリースアーカイブ、対応ターゲットの一覧は [docs/install.ja.md](install.ja.md) にあります。
+APT リポジトリの追加手順、mise、リリースアーカイブ、対応ターゲットの一覧は [docs/install.ja.md](install.ja.md) にあります。
 
 ## セットアップ
 
