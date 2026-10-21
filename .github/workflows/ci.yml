@@ -95,6 +95,17 @@ jobs:
           persist-credentials: false
       - run: bash packaging/homebrew/test-release.sh
 
+  hadolint:
+    name: Dockerfile lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: hadolint
+        run: |
+          git ls-files -z '*Dockerfile' | xargs -0 docker run --rm             -v "$PWD:/repo:ro" -w /repo             hadolint/hadolint@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d             hadolint
+
   test-macos:
     name: Test (macOS)
     runs-on: macos-latest

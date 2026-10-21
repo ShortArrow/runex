@@ -20,6 +20,9 @@
 # a fresh digest with `docker buildx imagetools inspect ubuntu:24.04`.
 FROM ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
 
+# A failed download fails its RUN even when piped into another command.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # ---- Build-time arguments ---------------------------------------------------
 # Tool versions are explicit so a bump shows up in `git log -p`. Bumping
 # any of these triggers an image rebuild via the path filter on
