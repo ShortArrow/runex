@@ -174,7 +174,7 @@ The roadmap lives in [docs/PRD.md](docs/PRD.md#9-roadmap). Ideas not yet schedul
 
 ## Acknowledgements
 
-runex is inspired by [fish shell's abbreviation system](https://fishshell.com/docs/current/cmds/abbr.html) and [zsh-abbr](https://github.com/olets/zsh-abbr). Real-time token expansion originated there; runex brings it to every shell with a single config file.
+runex is inspired by [fish shell's abbreviation system](https://fishshell.com/docs/current/cmds/abbr.html) and [zsh-abbr](https://github.com/olets/zsh-abbr). Real-time token expansion originated in fish; runex brings it to every shell with a single config file. [docs/prior-art.md](docs/prior-art.md) traces that lineage.
 
 ## License
 

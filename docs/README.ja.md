@@ -174,7 +174,7 @@ alias は実行時に置換されるので、履歴には短い形が残り、�
 
 ## 謝辞
 
-runex は [fish shell の略語機能](https://fishshell.com/docs/current/cmds/abbr.html) と [zsh-abbr](https://github.com/olets/zsh-abbr) に着想を得ています。リアルタイムなトークン展開はそこで生まれました。runex はそれを 1 つの設定ファイルで全シェルに広げます。
+runex は [fish shell の略語機能](https://fishshell.com/docs/current/cmds/abbr.html) と [zsh-abbr](https://github.com/olets/zsh-abbr) に着想を得ています。リアルタイムなトークン展開は fish で生まれました。runex はそれを 1 つの設定ファイルで全シェルに広げます。この系譜は [prior-art.ja.md](prior-art.ja.md) にまとめています。
 
 ## ライセンス
 
