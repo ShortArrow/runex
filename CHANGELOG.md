@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository at `pkg.shortarrow.jp`, which serves runex 0.1.21 and
   later for amd64 and arm64 (#65).
 
+### Internal
+
+- CI lints the Dockerfiles with hadolint. Both Dockerfiles run their
+  `RUN` steps under `pipefail`, so a failed download fails the build,
+  and the VHS demo image is pinned to v0.12.1.
+
 ## [0.1.21] - 2026-10-20
 
 ### Changed
