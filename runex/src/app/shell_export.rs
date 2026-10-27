@@ -413,7 +413,7 @@ mod tests {
     /// `$HOME` (issue #18) and Windows PowerShell 5.1 re-splits an
     /// argument containing `"` (issue #35). The buffer therefore travels
     /// as hex of its UTF-8 bytes, joined to the option with `=` because
-    /// 5.1 drops a separate empty argument (ADR 0004).
+    /// 5.1 drops a separate empty argument.
     #[test]
     fn pwsh_script_passes_buffer_as_joined_line_hex_token() {
         let s = export_script(Shell::Pwsh, "runex", None);

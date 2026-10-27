@@ -247,7 +247,7 @@ pub(crate) fn byte_cursor_to_utf16(line: &str, byte_cursor: usize) -> usize {
 ///
 /// clink's only route to runex is a cmd.exe command line, which cannot
 /// carry `"`, `%` or `!` inside an argument, so the lua template sends
-/// the buffer as hex of its UTF-8 bytes (ADR 0003). Accepts either
+/// the buffer as hex of its UTF-8 bytes. Accepts either
 /// digit case. Rejects odd length, non-hex digits and byte sequences
 /// that are not UTF-8; the caller turns the error into a non-zero exit,
 /// which the template treats as "insert a literal space".

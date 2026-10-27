@@ -167,7 +167,7 @@ runex init clink
 
 This writes `runex.lua` into clink's scripts directory and asks before overwriting a file that differs from the current output. Open a new cmd window afterwards.
 
-clink reaches runex through a cmd.exe command line, which cannot carry `"`, `%` or `!` inside an argument. The lua file therefore sends the buffer hex-encoded. cmd.exe accepts at most 8158 characters after `cmd /c` (measured on Windows 11), so buffers above roughly 3900 bytes are not expanded and the trigger key inserts a plain space. The reasoning is recorded in [ADR 0003](decisions/0003-clink-hex-line-transport.md).
+clink reaches runex through a cmd.exe command line, which cannot carry `"`, `%` or `!` inside an argument. The lua file therefore sends the buffer hex-encoded. cmd.exe accepts at most 8158 characters after `cmd /c` (measured on Windows 11), so buffers above roughly 3900 bytes are not expanded and the trigger key inserts a plain space. [design.md](design.md#the-buffer-travels-as-hex-where-a-host-rewrites-arguments) explains why the buffer travels as hex.
 
 ## Check the result with `runex doctor`
 

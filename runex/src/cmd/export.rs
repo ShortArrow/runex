@@ -61,9 +61,9 @@ pub(crate) fn validate_bin(bin: &str) -> Result<(), String> {
 ///   that source the same exported script across multiple
 ///   machines with different installations.
 ///
-/// See [`docs/decisions/0001-static-integration-cache.md`] for the
-/// design rationale (why `current_exe()` over rcfile-baked
-/// absolute paths or doctor-WARN-only).
+/// `docs/design.md`, "Shell integration is a static cache", gives
+/// the reasons for baking `current_exe()` into the cache rather than
+/// into the rc file.
 pub(crate) fn handle(shell: String, bin: Option<String>, config_flag: Option<&Path>) -> CmdResult {
     // Static-cache layout: --bin is Option<String>. None means
     // "use current_exe()", which bakes an absolute path into the

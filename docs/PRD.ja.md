@@ -81,7 +81,7 @@ shell adapters
 
 依存の方向は `cmd → app → domain`、`cmd → util/infra`、`infra → domain` で、一方向かつ循環なし。0.1.14 より前は同じコードを 2 つの crate（`runex-core` と `runex`）に分けていました。`pub` 境界に外部の利用者がいない事実に基づき、Phase C で単一 crate にしました。
 
-各シェルのアダプタは薄いテンプレートです。ラインエディタのバッファを読み、`runex hook` を呼び、返された eval 用テキストを適用するだけで、キー押下ごとの判断はすべて Rust 側で行います。アダプタは静的キャッシュファイルとして導入します（[ADR 0001](decisions/0001-static-integration-cache.md)）。clink のバッファ転送方式は [ADR 0003](decisions/0003-clink-hex-line-transport.md) に記録しています。
+各シェルのアダプタは薄いテンプレートです。ラインエディタのバッファを読み、`runex hook` を呼び、返された eval 用テキストを適用するだけで、キー押下ごとの判断はすべて Rust 側で行います。アダプタは静的キャッシュファイルとして導入します。clink と PowerShell はバッファを 16 進数で送ります。どちらも理由は [design.md](design.md)（英語）にあります。
 
 ---
 
@@ -188,13 +188,13 @@ expand = "git commit -m"
 ### 完了（0.1.11 以降）
 
 - キー押下ごとのロジックを `runex hook` サブコマンドに集約し、シェルテンプレートを薄いラッパーにした
-- bash / zsh / pwsh / nu 向けの静的連携キャッシュ。rc ファイルから絶対パスで source する（ADR 0001）。手編集後は `runex config reload` で再生成する
+- bash / zsh / pwsh / nu 向けの静的連携キャッシュ。rc ファイルから絶対パスで source する。手編集後は `runex config reload` で再生成する
 - `runex doctor` が環境の状態を表示する。Windows の `effective_search_path` の内訳、`integration:<shell>` の rc ファイルマーカー確認、`integration:<shell>:cache` のヘッダー確認、clink lua の差分検知
 - `runex init <shell>` がシェル引数を受け、clink の lua も直接書き出す。既定の設定に動作サンプル（`gst → git status`）を含め、`init` 後にシェル別の "Next steps" を表示する
 - crates.io への publish を OIDC Trusted Publishing で CI 化した。長寿命の `CARGO_REGISTRY_TOKEN` はどこにも置かない。テストが通らないコミットからはタグ push でもバイナリを作らない
-- digest で固定したイメージによる Linux CI のコンテナ化（ADR 0002）
+- digest で固定したイメージによる Linux CI のコンテナ化
 - 配布経路: 6 ターゲットの GitHub Releases、crates.io、AUR（`runex-bin` と `runex`）、Homebrew tap、winget、`mise github:`
-- clink はバッファを 16 進数で送る。`"`、`%`、`!` を含むバッファでも展開できる（ADR 0003）
+- clink はバッファを 16 進数で送る。`"`、`%`、`!` を含むバッファでも展開できる
 - bash、zsh、pwsh、nu の PTY 経由キー押下テスト（`runex/tests/*_pty_integration.rs`）と、`runex init` の rc ファイル書き込みに関するプロパティテスト（`runex/tests/cli_integration.rs`）
 - `docs/recipes.md`（用途別の `config.toml` スニペット集）
 

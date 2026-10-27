@@ -91,8 +91,8 @@ served no external consumer.
 Each shell adapter is a thin template that reads the live buffer,
 calls `runex hook`, and applies the returned eval text. Every
 per-keystroke decision is made in Rust. The adapter is installed
-as a static cache file recorded in [ADR 0001](decisions/0001-static-integration-cache.md);
-clink's transport is recorded in [ADR 0003](decisions/0003-clink-hex-line-transport.md).
+as a static cache file, and clink and PowerShell send the buffer
+hex-encoded; [design.md](design.md) gives the reasons for both.
 
 ---
 
@@ -206,7 +206,7 @@ See `docs/config-reference.md` for the full field reference.
 - Per-keystroke logic centralised in the `runex hook` subcommand;
   shell templates reduced to thin wrappers.
 - Static integration cache for bash / zsh / pwsh / nu, sourced from
-  the rc file by absolute path (ADR 0001). `runex config reload`
+  the rc file by absolute path. `runex config reload`
   regenerates it after a hand edit.
 - `runex doctor` reports environment-level health: Windows
   `effective_search_path` breakdown, `integration:<shell>` rc file
@@ -219,11 +219,11 @@ See `docs/config-reference.md` for the full field reference.
   long-lived `CARGO_REGISTRY_TOKEN` anywhere. Test gate added so a
   tag push can never ship binaries from a commit whose tests didn't
   finish.
-- Containerized Linux CI with a digest-pinned image (ADR 0002).
+- Containerized Linux CI with a digest-pinned image.
 - Distribution: GitHub Releases for six targets, crates.io, AUR
   (`runex-bin` and `runex`), Homebrew tap, winget, `mise github:`.
 - clink sends the buffer hex-encoded, so `"`, `%` and `!` in the
-  buffer no longer break expansion (ADR 0003).
+  buffer no longer break expansion.
 - PTY-driven keystroke tests for bash, zsh, pwsh and nu
   (`runex/tests/*_pty_integration.rs`), plus rc-file-write property
   tests for `runex init` (`runex/tests/cli_integration.rs`).

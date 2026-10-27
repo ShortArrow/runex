@@ -777,7 +777,7 @@ mod tests {
         let s = generate_cygwin_dispatcher(&cfg(vec![glob_abbr("k*", "kubectl {*}")]));
         let number = s.find("__runex_cyg_pattern_lookup \"$token\"; fi").expect("number lookup call");
         let glob = s.find("__runex_cyg_glob_lookup \"$token\"; fi").expect("glob lookup call");
-        assert!(number < glob, "glob rules come after {{number}} rules (ADR 0005)");
+        assert!(number < glob, "glob rules come after {{number}} rules");
     }
 
     // ── pattern_table_lines ────────────────────────────────────────────

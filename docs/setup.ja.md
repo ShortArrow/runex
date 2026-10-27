@@ -167,7 +167,7 @@ runex init clink
 
 clink のスクリプトディレクトリに `runex.lua` を書きます。現在の出力と異なるファイルが既にあるときは、上書き前に確認を求めます。実行後は新しい cmd ウィンドウを開いてください。
 
-clink から runex への経路は cmd.exe のコマンドラインだけです。cmd.exe の引数には `"`、`%`、`!` を安全に含められないため、lua ファイルはバッファを 16 進数に変換して渡します。cmd.exe が `cmd /c` の後ろに受け付けるのは最大 8158 文字です（Windows 11 で計測）。このため、およそ 3900 バイトを超えるバッファは展開されず、トリガーキーは通常のスペースを入れます。経緯は [ADR 0003](decisions/0003-clink-hex-line-transport.md)（英語）に記録しています。
+clink から runex への経路は cmd.exe のコマンドラインだけです。cmd.exe の引数には `"`、`%`、`!` を安全に含められないため、lua ファイルはバッファを 16 進数に変換して渡します。cmd.exe が `cmd /c` の後ろに受け付けるのは最大 8158 文字です（Windows 11 で計測）。このため、およそ 3900 バイトを超えるバッファは展開されず、トリガーキーは通常のスペースを入れます。16 進数で送る理由は [design.md](design.md#the-buffer-travels-as-hex-where-a-host-rewrites-arguments)（英語）にあります。
 
 ## `runex doctor` で確認する
 

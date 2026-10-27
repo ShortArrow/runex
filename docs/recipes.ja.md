@@ -179,7 +179,7 @@ nu      = "shift-space"
 - `.bashrc` に `runex init` が書いた `eval "$(runex export bash)"` がある。
 - `$PATH` で `~/.local/share/mise/shims` が `~/.cargo/bin` より前にある（`mise activate` の標準的な配置）。
 - `mise install` が `~/.local/share/mise/shims/runex` に shim を置いている。
-- Space を押すたびに `__runex_expand` が `'runex' hook ...` を呼ぶ。PATH は `runex` を mise の shim に解決し、shim が `mise` 本体を起動し、`mise` が本物の runex を `exec` する。WSL の Arch Linux で `time runex hook --shell bash --line ls --cursor 2` を 1 回ずつ計ると、shim 経由で 0.474 秒、バイナリ直接で 0.002 秒でした（2026-05-10、ADR 0001 に記録）。
+- Space を押すたびに `__runex_expand` が `'runex' hook ...` を呼ぶ。PATH は `runex` を mise の shim に解決し、shim が `mise` 本体を起動し、`mise` が本物の runex を `exec` する。WSL の Arch Linux で `time runex hook --shell bash --line ls --cursor 2` を 1 回ずつ計ると、shim 経由で 0.474 秒、バイナリ直接で 0.002 秒でした（2026-05-10）。
 
 **対処:** `runex init <shell>` を一度実行し直します。
 

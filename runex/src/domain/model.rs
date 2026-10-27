@@ -179,7 +179,7 @@ pub(crate) struct Abbr {
     /// without a `{number}` in the key (and vice versa).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number: Option<String>,
-    /// How `key` is matched against a token (ADR 0005). `None` keeps
+    /// How `key` is matched against a token. `None` keeps
     /// the literal / `{number}` meaning every existing config relies
     /// on; `Some(Glob)` reads `key` as a `*` / `?` pattern and
     /// `Some(Regex)` as a whole-token regular expression.
