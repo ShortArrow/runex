@@ -271,7 +271,7 @@ enum Commands {
         /// only path is a cmd.exe command line, which cannot carry `"`,
         /// `%` or `!` inside an argument, and PowerShell rewrites a
         /// leading `~` while Windows PowerShell 5.1 re-splits an
-        /// argument containing `"` (see ADR 0003, ADR 0004).
+        /// argument containing `"`.
         #[arg(long, value_name = "HEX", group = "buffer")]
         line_hex: Option<String>,
         /// Current cursor position. Shells pass this in their own native

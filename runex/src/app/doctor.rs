@@ -196,7 +196,7 @@ fn check_abbr_quality(config: &Config) -> Vec<Check> {
 
 /// Whether `template` makes the runtime skip `abbr` for every token it
 /// matches as a self-loop. For an exact rule that is `expand == key`.
-/// For a glob rule (ADR 0005) it is the key with its `*` turned into
+/// For a glob rule it is the key with its `*` turned into
 /// `{*}`, once the cursor placeholder `{}` is removed (a `?` would
 /// render literally and change the token); a glob whose `expand` merely
 /// equals its key text does expand. A regex rule (issue #20) cannot be
@@ -531,7 +531,7 @@ pub(crate) fn check_unknown_fields(config_source: &str) -> Vec<Check> {
 /// same `match` kind has no `when_command_exists` condition — it will
 /// always match first, making all later such rules dead code. Rules of
 /// different kinds never shadow each other: an exact `k*` is tried
-/// before any glob `k*` (ADR 0005).
+/// before any glob `k*`.
 pub(crate) fn check_unreachable_duplicates(config: &Config) -> Vec<Check> {
     let mut checks = Vec::new();
     let mut unconditional_keys: std::collections::HashMap<(Option<crate::domain::model::MatchKind>, &str), usize> =

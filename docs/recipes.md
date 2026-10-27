@@ -247,7 +247,7 @@ cache (the modern `runex init` layout) fixes this at the source.
   `'runex' hook ...`. PATH resolves `runex` to the mise shim,
   which spawns the real `mise` binary, which then `exec`s the
   actual runex. One `time runex hook --shell bash --line ls --cursor 2`
-  run on WSL Arch Linux (2026-05-10, recorded in ADR 0001) took
+  run on WSL Arch Linux (2026-05-10) took
   0.474 s through the shim and 0.002 s when the binary was called
   directly.
 

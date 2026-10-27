@@ -4,5 +4,6 @@ failure-threshold: warning
 ignored:
   # Apt package versions are not pinned: a pinned version disappears
   # from the archive and the image no longer builds. The CI image is
-  # reproducible through its digest-pinned base image instead (ADR 0002).
+  # reproducible through its digest-pinned base image instead
+  # (docs/design.md, "Linux CI runs in one digest-pinned image").
   - DL3008

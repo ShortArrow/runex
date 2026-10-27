@@ -100,7 +100,7 @@ pub(crate) enum ConfigError {
     #[error("abbr rule #{0}: `number` unit exceeds maximum length of {MAX_NUMBER_UNIT_BYTES} bytes")]
     NumberUnitTooLong(usize),
 
-    // match = "glob" (issue #19, ADR 0005)
+    // match = "glob" (issue #19)
     #[error("abbr rule #{0}: glob key has no `*` or `?` (use an exact key instead)")]
     GlobKeyWithoutWildcard(usize),
     #[error("abbr rule #{0}: glob key contains more than one `*` (only one is allowed)")]
@@ -554,7 +554,7 @@ fn visit_validation_issues(
 
 /// Characters a glob key must not contain. The Git Bash bake dispatcher
 /// hands the key to a bash `case` pattern, where these would take on
-/// meanings the Rust matcher does not share (ADR 0005).
+/// meanings the Rust matcher does not share.
 const GLOB_KEY_FORBIDDEN_CHARS: &[char] = &['[', ']', '{', '}', '(', ')', '\\'];
 
 /// Validate a `match = "glob"` key (issue #19): only `*` and `?` are
@@ -2139,7 +2139,7 @@ expand = "git commit -m"
     }
 
     mod glob_match {
-        //! Validation of `match = "glob"` rules (issue #19, ADR 0005).
+        //! Validation of `match = "glob"` rules (issue #19).
         use super::*;
 
         fn glob_rule(key: &str) -> String {

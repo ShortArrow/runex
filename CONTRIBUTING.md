@@ -156,6 +156,8 @@ The rule: if new code does not need to spawn a process or write to stdout, it be
 
 **Dependency injection at the boundary.** Environment-querying closures (command existence checks, PATH resolution) are constructed once in the `cmd/` layer from user-supplied flags, then passed down into `app/` and `domain/` functions. Those functions never reach into the environment themselves.
 
+**Design intent.** `docs/design.md` states why the shell integration, the buffer transport, pattern keys, blank expansions and the Linux CI image are built as they are, and what each refuses. A change that alters one of those forces edits its section in the same pull request.
+
 **Testability follows from the architecture.** A function that accepts an injected closure can be tested without touching the filesystem or PATH. Design for this — it is not an afterthought.
 
 ### Shell templates: what stays in the shell
@@ -174,7 +176,7 @@ shell process holds:
   `_queuedKeys` reflection for paste detection); transport encoding
   that the shell's only IPC channel forces on us (clink hex-encodes the
   buffer because the cmd.exe command line behind `io.popen` cannot carry
-  `"`, `%` or `!`, see ADR 0003).
+  `"`, `%` or `!`; see `docs/design.md`).
 - **Belongs in Rust** — everything else. Token extraction,
   command-position detection, cursor placeholder substitution, shell
   escaping, output formatting, command-existence checks. New rules

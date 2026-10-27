@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   later for amd64 and arm64 (#65).
 - `docs/prior-art.md` describes the fish and zsh-abbr abbreviations
   that runex reinvents, and what it adds to them.
+- `docs/design.md` states the reasons behind the shell integration
+  cache, the hex buffer transport, pattern keys, blank expansions and
+  the Linux CI image in the present tense, and the user guides, PRD
+  and source comments point there instead of at the decision records.
 
 ### Internal
 

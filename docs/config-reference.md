@@ -156,8 +156,7 @@ clink and pwsh pass the buffer hex-encoded with `--line-hex` (the UTF-8
 bytes as hex digits) instead of `--line`, because both reach runex
 through a layer that rewrites argument text: clink's only path is a cmd.exe command line, which cannot
 carry `"`, `%` or `!` inside an argument, and PowerShell rewrites a leading
-`~` while Windows PowerShell 5.1 re-splits an argument containing `"`
-(see `docs/decisions/0003`, `docs/decisions/0004`).
+`~` while Windows PowerShell 5.1 re-splits an argument containing `"`.
 
 The Rust core decides whether to expand (command-position detection,
 known-token check, `when_command_exists`, cursor-placeholder handling) and
@@ -353,7 +352,7 @@ expand = "kubectl {*}"
 - `[`, `]`, `{`, `}`, `(`, `)` and `\` are rejected in a glob key. On Git Bash the key is matched by a bash `case` pattern, where these characters would change meaning.
 - Any other `match` value is rejected. `runex add` does not write glob rules; add them by hand.
 
-The design is recorded in [ADR 0005](decisions/0005-pattern-keys-glob-and-regex.md).
+Why pattern keys are opt-in and why the glob syntax is this small: [design.md](design.md#pattern-keys-are-opt-in).
 
 ### Regex keys (`match = "regex"`)
 

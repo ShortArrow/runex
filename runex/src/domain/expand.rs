@@ -10,8 +10,7 @@ use crate::domain::timings::{CommandExistsCall, Timings};
 /// `{number}` placeholder marker (issue #1).
 pub(crate) const NUMBER_PLACEHOLDER: &str = "{number}";
 
-/// Placeholder in `expand` for the text a glob key's `*` matched
-/// (ADR 0005).
+/// Placeholder in `expand` for the text a glob key's `*` matched.
 pub(crate) const GLOB_CAPTURE_PLACEHOLDER: &str = "{*}";
 
 /// [`GLOB_CAPTURE_PLACEHOLDER`] without its braces.
@@ -56,7 +55,7 @@ impl Bindings {
 
 /// Matching phase of a rule. Phases run in declaration order and a rule
 /// in an earlier phase always beats one in a later phase, whatever the
-/// config order (ADR 0005).
+/// config order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Exact,
@@ -369,7 +368,7 @@ pub(crate) enum WhichResult {
 /// `shell` selects the per-shell expand/when_command_exists entry.
 /// `command_exists` is injected for testability (DI).
 ///
-/// Matching runs in phases (issue #1, ADR 0005): exact rules, then
+/// Matching runs in phases (issue #1): exact rules, then
 /// `{number}` rules, then glob rules, then regex rules (issue #20). Within each phase the config's
 /// rule order is preserved (first match wins), so an exact rule always
 /// beats a pattern that would also accept the token, even when the
@@ -520,8 +519,8 @@ fn is_exact_self_loop(abbr: &Abbr, template: &str) -> bool {
 }
 
 /// A glob or regex rule whose rendered text equals the token would
-/// rewrite the token to itself and hide later rules of its phase
-/// (ADR 0005). A blank rendering is handled by [`is_blank_expansion`]
+/// rewrite the token to itself and hide later rules of its phase.
+/// A blank rendering is handled by [`is_blank_expansion`]
 /// for every phase.
 fn is_pattern_self_loop(abbr: &Abbr, rendered_text: &str, token: &str) -> bool {
     matches!(phase_of(abbr), Phase::Glob | Phase::Regex) && rendered_text == token
@@ -1312,7 +1311,7 @@ mod tests {
         }
     }
 
-    // ── match = "glob" (issue #19, ADR 0005) ───────────────────────────────
+    // ── match = "glob" (issue #19) ──────────────────────────────────────────
 
     fn abbr_glob(key: &str, expand: &str) -> Abbr {
         Abbr {
