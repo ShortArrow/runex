@@ -1,5 +1,4 @@
-//! Per-keystroke hook logic, centralising what each shell template used to
-//! re-implement in bash/zsh/pwsh/clink/nu. The goal is that shells provide a
+//! Per-keystroke hook logic shared by every shell. Shells provide a
 //! thin "buffer + cursor in, eval-able string out" adapter and all the real
 //! expansion logic — command-position detection, token extraction, cursor
 //! placeholder handling, shell escaping — lives here in Rust.
@@ -50,7 +49,7 @@ where
 
     // If the cursor is not at a space boundary (mid-word), treat this like any
     // other printable key: insert a space at the cursor and don't try to
-    // expand. This matches what each shell's template did historically.
+    // expand.
     if cursor < line.len() && !line[cursor..].starts_with(' ') {
         return insert_space(line, cursor);
     }

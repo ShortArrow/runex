@@ -662,9 +662,8 @@ where
         Vec::new()
     };
     let Some((text, cursor)) = render_with_cursor(abbr, template, bindings) else {
-        // Render-time guard tripped (length cap, missing unit) — treat as
-        // SelfLoop-equivalent skip for now. A dedicated SkipReason can be
-        // added later if `which --why` needs to distinguish this case.
+        // Render-time guard tripped (length cap, missing unit). Reported
+        // as SelfLoop, so `which --why` does not distinguish this case.
         return WhichOutcome::Skip(SkipReason::SelfLoop);
     };
     if is_blank_expansion(&text) {

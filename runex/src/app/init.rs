@@ -526,14 +526,9 @@ mod tests {
     } // mod integration_line
 
     /// Pin RLO / BOM / ZWSP / control-char / `$` injection-safety
-    /// of `integration_line(Shell::Nu, ...)`, which quotes through
-    /// `domain::shell::nu_quote_string`, so a regression in
-    /// `nu_quote_string`'s drop-char policy or the integration_line
-    /// formatter shows up immediately.
-    ///
-    /// Lower-level tests for `is_nu_drop_char` / `nu_quote_string`
-    /// itself live in `domain::sanitize::tests` and
-    /// `app::shell_export::tests::regression_issues`.
+    /// of `integration_line(Shell::Nu, ...)`, which drops those
+    /// characters with `sanitize_nu_cache_path_literal` and wraps the
+    /// path in a single-quoted nu literal.
     mod integration_line_nu_security {
         use super::*;
 
@@ -650,14 +645,9 @@ mod tests {
     }
 
     /// Mirror of `integration_line_nu_security` for clink, where
-    /// the path is wrapped via `lua_quote_string` instead of
-    /// `nu_quote_string`. The original `nu_quote_path_deceptive`
-    /// suite covered nu only; clink's lua-string escaping is
-    /// validated separately in
-    /// `app::shell_export::tests::regression_issues` for the
-    /// `lua_quote_string` function itself, but pinning it through
-    /// the public `integration_line` entry point catches drift in
-    /// the formatter.
+    /// the path is wrapped via `lua_quote_string`. That function is
+    /// tested on its own in `domain::shell::tests`; these tests go
+    /// through `integration_line` to catch drift in the formatter.
     mod integration_line_clink_security {
         use super::*;
 

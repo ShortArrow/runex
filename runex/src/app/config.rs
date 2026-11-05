@@ -1152,8 +1152,8 @@ expand = "git commit -m"
         assert!(config.abbr.is_empty());
     }
 
-    // File I/O tests for `load_config` / `default_config_path` live
-    // in `infra::config_store::tests` with the underlying functions;
+    // File I/O tests for `read_config_source` / `default_config_path`
+    // live in `infra::config_store::tests` with those functions;
     // `xdg_config_home_*` tests live in `infra::env::tests`.
 
     #[test]

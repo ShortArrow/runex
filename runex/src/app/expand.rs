@@ -9,9 +9,7 @@
 //! (`Config`, `ExpandResult`, `Shell`) cross the boundary as data.
 //!
 //! These wrappers add no logic on top of the domain functions —
-//! they're a one-line indirection. Future versions of the use-case
-//! could enrich them (e.g. adding metric hooks, tracing spans, or
-//! caching), and call sites would not have to change.
+//! they're a one-line indirection.
 
 use crate::domain::expand as domain_expand;
 use crate::domain::model::{Config, ExpandResult};

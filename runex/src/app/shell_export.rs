@@ -356,9 +356,9 @@ mod tests {
                 abbr: vec![],
             }),
         );
-        // New design: the bootstrap is a thin wrapper that calls
-        // `runex hook --shell bash` at keypress time. It should still bind the
-        // trigger key via `bind -x`, but the expansion logic itself now lives
+        // The bootstrap is a thin wrapper that calls
+        // `runex hook --shell bash` at keypress time. It binds the
+        // trigger key via `bind -x`, and the expansion logic lives
         // in the Rust binary — so there must be no inline `expand` call or
         // READLINE inspection in the template (the hook output handles both).
         assert!(s.contains("bind -x"), "bash bootstrap must use bind -x");

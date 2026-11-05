@@ -21,16 +21,15 @@
 //! the existing `runex hook` exec path; one cache file serves every
 //! bash flavour the user might run with the same dotfiles.
 //!
-//! ## Command-position parity (issue #9, fixed in 0.1.19)
+//! ## Command-position parity
 //!
 //! The bake path reproduces `domain::hook::is_command_position` in pure
 //! bash via `__runex_cyg_is_command_position`: a `case` over the four
 //! pipeline operators (`&&`, `||`, `|`, `;`) plus a trailing-`sudo`
 //! recursion that itself defers to the same operator check. The result
 //! is byte-equivalent to what the Linux / WSL exec path returns for the
-//! same READLINE_LINE / READLINE_POINT. The 0.1.17 trade-off where
-//! Git Bash expanded any trailing token regardless of context (e.g.
-//! `echo gst<Space>` would still expand `gst`) no longer applies.
+//! same READLINE_LINE / READLINE_POINT, so `echo gst<Space>` does not
+//! expand `gst` on Git Bash either.
 
 use crate::domain::expand::NUMBER_PLACEHOLDER;
 use crate::domain::model::{Config, MatchKind, Shell};

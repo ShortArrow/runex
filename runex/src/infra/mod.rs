@@ -5,7 +5,7 @@
 //!
 //! `infra → domain` only. `infra` must not import from `app`, `cmd`,
 //! or `util`. The trait definitions that `app` consumes for
-//! injection (`HomeDirResolver`, future `ConfigStore` etc.) live
+//! injection (`HomeDirResolver`) live
 //! here too, so `app` has a single import target for "the outside
 //! world".
 

@@ -20,9 +20,7 @@
 //! enums. That's a leaf type import, not a behaviour cycle —
 //! `infra::config_store` doesn't call any function from `app::config`,
 //! it only constructs `ConfigError::Io(_)` / `ConfigError::FileTooLarge`
-//! / `ConfigError::NoConfigDir` variants. A future refactor could lift
-//! `ConfigError` into `domain/errors.rs` to remove even the type
-//! reference, but that's purely cosmetic.
+//! / `ConfigError::NoConfigDir` variants.
 
 use std::path::{Path, PathBuf};
 

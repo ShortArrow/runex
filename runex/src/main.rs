@@ -190,10 +190,9 @@ enum Commands {
     },
     /// Pre-compute command existence cache for shell startup.
     ///
-    /// Hidden since 0.1.12: shell templates no longer call this subcommand;
-    /// the hook subcommand evaluates `when_command_exists` per keypress
-    /// instead. The command is retained for one release for backward
-    /// compatibility and may be removed in a future version.
+    /// Hidden: shell templates do not call this subcommand, because
+    /// the hook subcommand evaluates `when_command_exists` per keypress.
+    /// It stays callable for scripts that still invoke it.
     #[command(hide = true)]
     Precache {
         /// Target shell: bash, zsh, pwsh, clink, nu
@@ -363,9 +362,8 @@ pub(crate) fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> S
 /// the underlying closure owns its `path_prepend` so the context
 /// has no lifetime parameter.
 pub(crate) struct AppContext {
-    /// Path actually loaded — kept on the context for diagnostics
-    /// (and for handlers that may want to surface it). Currently
-    /// only constructed; future code may surface it on errors.
+    /// Path actually loaded. No handler reads it, hence
+    /// `allow(dead_code)`.
     #[allow(dead_code)]
     pub(crate) config_path: PathBuf,
     pub(crate) config: Config,
@@ -390,8 +388,8 @@ impl AppContext {
     ///
     /// `precache_enabled` controls whether the `command_exists`
     /// closure consults the on-disk precache hint. Most commands
-    /// pass `true`; the historical `make_command_exists(.., None)`
-    /// callers (precache itself, doctor) pass `false`.
+    /// pass `true`; precache itself and doctor, which must check live,
+    /// pass `false`.
     pub(crate) fn build(
         config_flag: Option<&Path>,
         shell_flag: Option<&str>,
@@ -725,9 +723,7 @@ mod tests {
         // `serial(env_path)` shares an exclusion group with the
         // AppContext fingerprint stability test: both mutate / read
         // $PATH and would otherwise produce flakes when run in
-        // parallel on Windows. The "tests run sequentially within
-        // this test module" comment below does not hold crate-wide,
-        // hence the explicit `serial` attribute.
+        // parallel on Windows.
 
         // Probe whether cargo is on the registry User PATH; if not, this test
         // can't reliably assert anything (e.g. CI without cargo in user PATH).
@@ -743,8 +739,8 @@ mod tests {
 
         // Strip the process PATH to a minimal Windows system value.
         let original = std::env::var_os("PATH");
-        // SAFETY: tests run sequentially within this test module. We do not
-        // mutate PATH from any other test, and we restore it before returning.
+        // SAFETY: `serial(env_path)` keeps the other tests that touch PATH
+        // from running alongside this one, and PATH is restored before returning.
         unsafe { std::env::set_var("PATH", r"C:\Windows\System32;C:\Windows"); }
 
         let exists = crate::util::path::make_command_exists(None, None);
@@ -982,11 +978,9 @@ mod tests {
 
     } // mod rc_file_non_regular
 
-    /// `AppContext` collapses the `resolve_config + resolve_shell +
-    /// compute_precache_fingerprint + make_command_exists` four-line
-    /// dance that used to live in five handlers. These tests pin the
-    /// builder's contract: same inputs produce same fingerprints
-    /// (cache stability), graceful builder survives missing config.
+    /// Pin the `AppContext` builder's contract: same inputs produce
+    /// same fingerprints (cache stability), and the graceful builder
+    /// survives a missing config.
     mod app_context {
         use super::*;
         use std::io::Write;

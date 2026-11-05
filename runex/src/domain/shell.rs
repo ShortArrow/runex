@@ -618,27 +618,4 @@ mod tests {
     }
 
     } // mod unicode_edge_cases
-
-    /// In bash/zsh `case` patterns, characters enclosed in single quotes are
-    /// treated as literals, not glob wildcards. `'*'` matches only a literal
-    /// asterisk, not every string. `bash_quote_pattern` wraps keys in single
-    /// quotes, so `*`, `?`, `[...]` are all safe in case patterns.
-    mod case_pattern_globs {
-    // The bash case-pattern injection tests were specific to the legacy
-    // design where abbreviation keys were embedded as `case` arms inside the
-    // bash bootstrap. With the new hook-based bootstrap, keys are never
-    // emitted into shell code, so glob-like keys (`*`, `?`, `[...]`) pose no
-    // shell-expansion risk at export time. The equivalent safety is now
-    // enforced by Rust-side key validation in `config::validate_abbr_key`
-    // (see runex-core/src/config.rs).
-
-    // Zsh case-pattern injection tests removed for the same reason as bash:
-    // the new hook-based bootstrap does not embed keys in shell code. See the
-    // comment block above for the bash equivalent.
-
-    // The "pwsh switch must have exactly one `default {` clause" regression
-    // test was specific to the legacy token-embedding design; with the new
-    // bootstrap there is no switch statement at all.
-
-    } // mod case_pattern_globs
 }
