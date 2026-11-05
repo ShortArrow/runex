@@ -235,9 +235,9 @@ fn bash_multibyte_blank_words() -> String {
 /// 4. `case "${OSTYPE-}"` — re-defines `__runex_expand` to either the
 ///    bake path (cygwin / msys) or keep the exec path (Linux / WSL).
 ///
-/// This block is inserted into `bash.sh` at `{BASH_CYG_DISPATCHER}` and
-/// is empty when `runex export bash` is called without a config so the
-/// legacy escape hatch (`eval "$(runex export bash)"`) stays unchanged.
+/// This block is inserted into `bash.sh` at `{BASH_CYG_DISPATCHER}`.
+/// Without a config the block is empty, and every bash takes the
+/// exec path.
 pub(crate) fn generate_cygwin_dispatcher(config: &Config) -> String {
     let exact = exact_table_lines(config);
     let patterns = pattern_table_lines(config);
@@ -911,8 +911,8 @@ mod tests {
     // ── command-position helper (issue #9) ───────────────────────────────
 
     /// The bake dispatcher must include a pure-bash command-position
-    /// helper so the runtime check (issue #9 closeout of the 0.1.17
-    /// trade-off) can run without spawning the runex binary from the
+    /// helper so the runtime check (issue #9) can run without
+    /// spawning the runex binary from the
     /// `bind -x` handler.
     #[test]
     fn bake_includes_command_position_helper() {
@@ -956,8 +956,8 @@ mod tests {
 
     /// The bake expand function must invoke the command-position
     /// helper before doing the abbreviation lookup. Without this the
-    /// helper would be dead code and the 0.1.17 trade-off would
-    /// silently survive.
+    /// helper would be dead code and Git Bash would expand tokens
+    /// outside command position.
     #[test]
     fn bake_expand_calls_command_position_before_lookup() {
         let c = cfg(vec![plain_abbr("gst", "git status")]);

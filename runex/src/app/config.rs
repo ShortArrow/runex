@@ -1154,7 +1154,8 @@ expand = "git commit -m"
 
     // File I/O tests for `read_config_source` / `default_config_path`
     // live in `infra::config_store::tests` with those functions;
-    // `xdg_config_home_*` tests live in `infra::env::tests`.
+    // `xdg_config_home_*` tests live in `infra::env::tests` and
+    // `infra::config_store::tests`.
 
     #[test]
     fn parse_config_rejects_too_many_abbr() {

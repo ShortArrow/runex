@@ -72,7 +72,7 @@ pub(crate) fn handle(shell: String, bin: Option<String>, config_flag: Option<&Pa
     // ahead of ~/.cargo/bin/runex, that lookup costs ~470 ms per
     // invocation (mise startup overhead through the shim wrapper).
     //
-    // Some(s) preserves the previous bare-name behaviour for power
+    // Some(s) keeps the bare name for power
     // users hand-managing dotfiles that need to source the same
     // exported script across multiple machines with different
     // installations. Most callers should leave --bin off.

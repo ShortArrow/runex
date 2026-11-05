@@ -39,7 +39,7 @@ use crate::infra::env::{xdg_cache_home_with, HomeDirResolver};
 ///   load on the exec path, so the bump exists to push `runex doctor`
 ///   into nudging Git Bash users back to `runex init bash` so they
 ///   pick up the Ctrl+C fix.
-/// - `3` (first release after 0.1.20): the pwsh template sends the
+/// - `3` (0.1.21): the pwsh template sends the
 ///   buffer hex-encoded (`--line-hex=`, issue #35), and the bash, zsh
 ///   and nu templates send it as one `--line=` argument (issue #50).
 pub(crate) const INTEGRATION_CACHE_VERSION: u32 = 3;

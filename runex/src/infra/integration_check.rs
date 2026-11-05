@@ -11,12 +11,11 @@
 //!    changes, users with a stale `runex.lua` silently miss out on the
 //!    new behaviour. [`check_clink_lua_freshness`] reads the file and
 //!    compares byte-for-byte against `runex export clink`.
-//! 2. **Legacy rcfile drift.** Earlier runex versions appended
-//!    `eval "$(runex export bash)"` to the rcfile, paying a `runex`
-//!    PATH lookup + spawn at every shell start. The current
-//!    `runex init` writes a static cache file and the rcfile only
-//!    sources it. A user who upgrades and re-runs `runex init
-//!    <shell>` keeps the legacy line — the cache file is written
+//! 2. **Legacy rcfile drift.** An rcfile can hold
+//!    `eval "$(runex export bash)"`, which pays a `runex` PATH
+//!    lookup + spawn at every shell start. `runex init` writes a
+//!    static cache file for the rcfile to source, and re-running
+//!    `runex init <shell>` keeps the eval line — the cache file is written
 //!    but never sourced. [`check_rcfile_marker`] flags this as
 //!    [`IntegrationCheck::Outdated`].
 //! 3. **Cache file freshness.** [`check_cache_freshness`] verifies

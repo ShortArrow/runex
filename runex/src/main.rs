@@ -349,14 +349,12 @@ pub(crate) fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> S
 /// Per-invocation runtime context shared by every command handler
 /// that needs config + resolved shell + a `command_exists` probe.
 ///
-/// One constructor runs the `(config_path, config) =
-/// resolve_config(...); shell = resolve_shell(...).unwrap_or(
-/// Shell::Bash); fp = compute_precache_fingerprint(...);
-/// command_exists = make_command_exists(path_prepend, Some(&fp));`
-/// sequence for `which`, `expand`, `hook` and `doctor`, so the
-/// precache-fingerprint policy (`Some(fp)` vs `None`) is a single
-/// decision per command. `timings` and `precache` run the sequence
-/// themselves.
+/// `build` (for `which` and `expand`) and `build_optional` (for
+/// `hook` and `doctor`) resolve the config and the shell, compute
+/// the precache fingerprint and build `command_exists` with
+/// `make_command_exists_owned`, so the precache-fingerprint policy
+/// is one `precache_enabled` argument per command. `timings` and
+/// `precache` run the sequence themselves.
 ///
 /// `command_exists` is `Box<dyn Fn>` so the context is movable;
 /// the underlying closure owns its `path_prepend` so the context
@@ -387,8 +385,10 @@ impl AppContext {
     /// unparseable.
     ///
     /// `precache_enabled` controls whether the `command_exists`
-    /// closure consults the on-disk precache hint. `doctor`, which
-    /// must check live, passes `false`; the other callers pass `true`.
+    /// closure consults the on-disk precache hint. `which` and
+    /// `expand` pass `true`. `build_optional` takes the same flag:
+    /// `hook` passes `true`, and `doctor`, which must check live,
+    /// passes `false`.
     pub(crate) fn build(
         config_flag: Option<&Path>,
         shell_flag: Option<&str>,
@@ -1040,9 +1040,9 @@ mod tests {
     /// `std::process::exit(1)`, so it is testable from inside the
     /// process without bringing the test process down with it.
     ///
-    /// These tests pin that contract for handle_which /
-    /// handle_expand / handle_timings on over-long tokens and for
-    /// validate_bin (via handle_export) on invalid bin strings.
+    /// These tests pin that contract for `handle_which` and
+    /// `handle_expand` on over-long tokens, and for
+    /// `cmd::export::validate_bin` on invalid bin strings.
     mod handler_outcomes {
         use super::*;
         use crate::domain::model::Config;

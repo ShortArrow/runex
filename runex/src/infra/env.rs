@@ -78,8 +78,7 @@ impl HomeDirResolver for SystemHomeDir {
 ///
 /// Constructed by `EnvHomeDir::new(|name| match name { ... })`. The
 /// closure is `Send + Sync` so `&dyn HomeDirResolver` can cross
-/// thread boundaries (none of the in-crate callers spawn threads
-/// today, but the trait bound future-proofs the public API).
+/// thread boundaries (none of the in-crate callers spawn threads).
 ///
 /// `#[allow(dead_code)]` because every concrete construction is
 /// inside a `#[cfg(test)] mod` (the inline tests in `cmd::init`,

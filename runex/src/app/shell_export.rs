@@ -666,9 +666,8 @@ mod tests {
 
     #[test]
     fn bash_script_omits_cyg_dispatcher_when_config_is_none() {
-        // `runex export bash` with no config is what
-        // `eval "$(runex export bash)"` in an rc file runs, and there is
-        // no config to bake into it.
+        // `runex export bash` passes no config when no config file
+        // loads, and there is nothing to bake.
         let s = export_script(Shell::Bash, "runex", None);
         // The dispatcher block is empty — no bake-mode function definition
         // and no abbreviation table. The template still contains a

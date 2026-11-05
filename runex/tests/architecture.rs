@@ -1,8 +1,8 @@
 //! Compile-time-ish architecture rules for the `runex` crate.
 //!
-//! Walks `runex/src/` from inside the cargo test runner and asserts
-//! the layering contract: `cmd → app → {domain, infra}`,
-//! `infra → domain`, nothing imports upward, no cycles.
+//! Walks `runex/src/` from inside the cargo test runner and checks
+//! the `use` lines of each layer against the layering contract
+//! `cmd → app → {domain, infra}`, `infra → domain`.
 //!
 //! ## Why a test instead of `cargo deny`
 //!
@@ -15,9 +15,8 @@
 //!
 //! Each rule is a triple of `(layer_we_check, forbidden_use_prefix,
 //! human-readable rationale)`. The walker only inspects `use`
-//! lines — fully-qualified paths inside function bodies (rare in
-//! this crate, and a code smell in their own right) are out of
-//! scope, so `infra::integration_check` calling
+//! lines — fully-qualified paths inside function bodies are out
+//! of scope, so `infra::integration_check` calling
 //! `crate::app::init::integration_line` passes every rule.
 
 use std::fs;
