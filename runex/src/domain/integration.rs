@@ -55,7 +55,7 @@ fn sanitize_nu_cache_path_literal(s: &str) -> String {
 /// `integration:clink` check.
 ///
 /// `cache_path` is the absolute on-disk path to the integration
-/// cache file (resolved by `infra::integration_cache::cache_path`).
+/// cache file, resolved by the caller.
 /// For clink, callers pass the lua install path; the line is a
 /// human-readable hint, not actually appended to any rcfile.
 pub(crate) fn integration_line(shell: Shell, cache_path: &str) -> String {

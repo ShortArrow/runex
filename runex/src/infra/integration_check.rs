@@ -334,10 +334,8 @@ pub(crate) enum RcfileIntegrationStatus {
 ///
 /// Called from [`check_rcfile_marker`] after the rcfile content has
 /// already been read and the marker presence confirmed. `expected_line`
-/// is the current cache-source line as produced by
-/// `crate::domain::integration::integration_line(shell, &cache_path_str)` —
-/// passed in rather than recomputed so this function stays a pure
-/// string operation.
+/// is the current cache-source line, passed in rather than recomputed
+/// so this function stays a pure string operation.
 pub(crate) fn classify_rcfile_content(
     shell: Shell,
     content: &str,

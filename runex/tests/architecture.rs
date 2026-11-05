@@ -30,7 +30,9 @@ use std::path::{Path, PathBuf};
 /// Comment-only lines and lines whose first non-whitespace token is
 /// `//` are dropped. Trailing `// foo` comments stay in the line — the
 /// substring rules below check for the *call site* (`std::fs::write(`)
-/// which won't appear inside a comment by accident.
+/// which won't appear inside a comment by accident. A `#[cfg(test)]`
+/// item that is not a `mod` (a test-only function) counts as
+/// production code.
 fn production_lines(content: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let mut depth: usize = 0;
