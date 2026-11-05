@@ -152,7 +152,7 @@ absorbed in 0.1.14) layered into modules with a deliberate boundary:
 - **`cmd/`** — per-subcommand handlers. Reach behaviour through `app/`; reach leaf utilities through `util/`.
 - **`util/`** — leaf helpers shared by `cmd/*` (shell detection, prompt confirmation, command-existence factory). No command-specific policy.
 
-The rule: if new code does not need to spawn a process or write to stdout, it belongs in `domain/` (or `app/` when it composes adapters). Formatting helpers are an exception — they live at the crate root (`format.rs`) but remain pure (data in, string out, no printing). The full layering contract lives in the `runex/src/main.rs` crate-root docstring, and `runex/tests/architecture.rs` enforces it at test time (no `infra → app` imports, no `domain →` anything, no filesystem calls in `app/`).
+The rule: if new code does not need to spawn a process or write to stdout, it belongs in `domain/` (or `app/` when it composes adapters). Formatting helpers are an exception — they live in `cmd/format.rs` but remain pure (data in, string out, no printing). The full layering contract lives in the `runex/src/main.rs` crate-root docstring, and `runex/tests/architecture.rs` enforces it at test time (no `infra → app` or `util → app` dependencies, no `domain →` anything, no `cmd →` domain behaviour modules, no filesystem calls in `app/`).
 
 **Dependency injection at the boundary.** Environment-querying closures (command existence checks, PATH resolution) are constructed once in the `cmd/` layer from user-supplied flags, then passed down into `app/` and `domain/` functions. Those functions never reach into the environment themselves.
 

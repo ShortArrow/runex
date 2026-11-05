@@ -18,7 +18,9 @@
 //! human-readable rationale)`. The `domain` and `cmd` rules inspect
 //! only `use` lines, so a fully-qualified path inside a function body
 //! passes them; the `infra` and `util` rules inspect every production
-//! line.
+//! line. Every rule reads one line at a time, so a grouped
+//! `use crate::{…}` import is caught only on the line that names the
+//! forbidden module after `crate::`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -268,14 +270,14 @@ fn no_infra_to_app_imports() {
 /// `app`: a helper that needs app behaviour takes its result as an
 /// argument instead. Every production line is checked, so a
 /// fully-qualified `crate::app::…` call is a violation as well as a
-/// `use` line.
+/// `use crate::app…` line.
 #[test]
 fn no_util_to_app_imports() {
     let util_dir = src_root().join("util");
     let mut violations = Vec::new();
     for (path, content) in collect_rs_files(&util_dir) {
         for (lineno, line) in production_lines(&content) {
-            if line.contains("crate::app::") {
+            if line.contains("crate::app") {
                 violations.push(format!(
                     "{}:{lineno}: {}",
                     path.strip_prefix(src_root().parent().unwrap())

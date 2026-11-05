@@ -29,8 +29,7 @@ use std::path::{Path, PathBuf};
 /// ## Hint layer (precache)
 ///
 /// `hint` is the command map of a precache whose fingerprint matched,
-/// as loaded by `app::precache::load_cache` (`None` when there is no
-/// usable cache):
+/// as loaded by the caller (`None` when there is no usable cache):
 /// - `hint[cmd] == true` → return true immediately (skip `which`)
 /// - `hint[cmd] == false` → re-check live (avoid stale false
 ///   negatives after installs)
