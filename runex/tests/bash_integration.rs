@@ -48,7 +48,7 @@ mod bash {
     /// integration script. Returns stdout trimmed.
     ///
     /// `-i` is required so the integration script's interactive guard
-    /// (Phase G `case $- in *i*) ;; *) return 0 ;; esac`) does not
+    /// (`case $- in *i*) ;; *) return 0 ;; esac`) does not
     /// short-circuit and skip the function definitions we need to
     /// exercise. The contract being tested is the per-keystroke logic
     /// of `__runex_expand`, which is a pure function on

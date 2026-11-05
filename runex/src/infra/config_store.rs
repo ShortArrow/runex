@@ -1,6 +1,6 @@
 //! Filesystem-backed reads and writes for the user's config file.
 //!
-//! Phase D D3 split this out of `app/config.rs`. The contract is:
+//! The contract is:
 //!
 //! - `app/config.rs` holds *parsing* and *validation* (pure, no
 //!   I/O — exercised by `parse_config` / `collect_validation_issues`).
@@ -199,9 +199,9 @@ fn atomically_write_config(path: &Path, contents: &str) -> Result<(), ConfigErro
 
 /// Append a `[[abbr]]` block to `path`, preserving existing content
 /// and formatting. The caller is responsible for validating the
-/// `key`, `expand`, and `when_command_exists` values — the wrapper in
-/// `app::abbr` (Phase D D4) does that before calling here. Rejects
-/// symlinks at the final path component on Unix.
+/// `key`, `expand`, and `when_command_exists` values — the wrapper
+/// `app::config::append_abbr_to_file` does that before calling here.
+/// Rejects symlinks at the final path component on Unix.
 pub(crate) fn append_abbr_block(
     path: &Path,
     key: &str,
@@ -273,11 +273,9 @@ mod tests {
     use crate::app::config::load_config;
     use serial_test::serial;
 
-    /// Filesystem-shape tests that were previously colocated with
-    /// `load_config` in `app/config.rs`. Moved to `infra` in Phase D
-    /// D3b alongside `read_config_source` itself; the symbol the
-    /// test exercises (the size cap, the FIFO rejection, the symlink
-    /// follow rules) lives here now.
+    /// Filesystem-shape tests for `load_config`. They live here
+    /// because what they exercise (the size cap, the FIFO rejection,
+    /// the symlink follow rules) is `read_config_source`.
     #[test]
     fn load_config_rejects_oversized_file() {
         use std::io::Write;

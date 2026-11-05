@@ -1,9 +1,9 @@
 //! Use-case wrappers for the `expand` / `which` / `list` commands.
 //!
-//! Phase D D4a: every cmd handler used to call `crate::domain::expand`
-//! directly, which made `cmd → domain` reach across the use-case
-//! layer. This module re-publishes the same operations under the
-//! `app::*` namespace so the architecture test
+//! A cmd handler calling `crate::domain::expand` directly would
+//! make `cmd → domain` reach across the use-case layer. This module
+//! re-publishes the same operations under the `app::*` namespace so
+//! the architecture test
 //! `no_cmd_to_domain_behavior_imports` can pin the contract: cmd
 //! handlers go through `app/`, and DTO types
 //! (`Config`, `ExpandResult`, `Shell`) cross the boundary as data.

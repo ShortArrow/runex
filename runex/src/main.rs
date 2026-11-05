@@ -350,17 +350,14 @@ pub(crate) fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> S
 /// Per-invocation runtime context shared by every command handler
 /// that needs config + resolved shell + a `command_exists` probe.
 ///
-/// Pre-B2 the `(config_path, config) = resolve_config(...);
-/// shell = resolve_shell(...).unwrap_or(Shell::Bash); fp =
-/// compute_precache_fingerprint(...); command_exists =
-/// make_command_exists(path_prepend, Some(&fp));` four-line dance
-/// was open-coded in `which`, `expand`, `timings`, `precache`,
-/// `hook`, and `doctor` (5+ sites, all subtly different in fp /
-/// command_exists tuning). Putting it behind one constructor
-/// removes the "five places to change" tax on any future runtime
-/// change and turns the precache-fingerprint policy (`Some(fp)` vs
-/// `None`) into a single decision per command rather than five
-/// scattered ones.
+/// One constructor runs the `(config_path, config) =
+/// resolve_config(...); shell = resolve_shell(...).unwrap_or(
+/// Shell::Bash); fp = compute_precache_fingerprint(...);
+/// command_exists = make_command_exists(path_prepend, Some(&fp));`
+/// sequence that `which`, `expand`, `timings`, `precache`, `hook`,
+/// and `doctor` all need, so a runtime change touches one place and
+/// the precache-fingerprint policy (`Some(fp)` vs `None`) is a
+/// single decision per command.
 ///
 /// `command_exists` is `Box<dyn Fn>` so the context is movable;
 /// the underlying closure owns its `path_prepend` so the context
@@ -487,8 +484,8 @@ pub(crate) struct OptionalContext {
 }
 
 /// Items at crate root use the util fns directly. cmd/* and util/*
-/// reach the rest of util via fully-qualified paths. After B5 the
-/// only crate-root caller of these is `AppContext` (for
+/// reach the rest of util via fully-qualified paths. The only
+/// crate-root callers of these are `AppContext` (for
 /// `make_command_exists_owned`) and the `Commands::List` dispatch
 /// arm (for `resolve_shell`).
 use util::path::make_command_exists_owned;
@@ -728,10 +725,9 @@ mod tests {
         // `serial(env_path)` shares an exclusion group with the
         // AppContext fingerprint stability test: both mutate / read
         // $PATH and would otherwise produce flakes when run in
-        // parallel on Windows. The comment about "tests run
-        // sequentially within this test module" below predates B2 —
-        // that's no longer true crate-wide, hence the explicit
-        // `serial` attribute.
+        // parallel on Windows. The "tests run sequentially within
+        // this test module" comment below does not hold crate-wide,
+        // hence the explicit `serial` attribute.
 
         // Probe whether cargo is on the registry User PATH; if not, this test
         // can't reliably assert anything (e.g. CI without cargo in user PATH).
@@ -1047,16 +1043,14 @@ mod tests {
         }
     }
 
-    /// Handlers that previously called `std::process::exit(1)`
-    /// directly are now testable from inside the process. These
-    /// tests confirm the new contract: a validation failure
-    /// returns `Ok(CmdOutcome::ExitCode(1))` instead of bringing
-    /// the test process down with it.
+    /// A validation failure in a handler returns
+    /// `Ok(CmdOutcome::ExitCode(1))` instead of calling
+    /// `std::process::exit(1)`, so it is testable from inside the
+    /// process without bringing the test process down with it.
     ///
-    /// The handlers exercised here are the ones that owned the
-    /// pre-B1 exits: handle_which / handle_expand / handle_timings
-    /// for over-long tokens, validate_bin (via handle_export) for
-    /// invalid bin strings.
+    /// These tests pin that contract for handle_which /
+    /// handle_expand / handle_timings on over-long tokens and for
+    /// validate_bin (via handle_export) on invalid bin strings.
     mod handler_outcomes {
         use super::*;
         use crate::domain::model::Config;

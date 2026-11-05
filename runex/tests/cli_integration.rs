@@ -767,7 +767,7 @@ fn json_doctor_contract_pins_name_and_status_enum() {
 /// Build a Command for `runex init` with HOME/USERPROFILE/XDG_CONFIG_HOME/
 /// XDG_CACHE_HOME/LOCALAPPDATA/PSModulePath/SHELL/RUNEX_CLINK_LUA_PATH all
 /// redirected into `home_dir` so that shell detection, clink-lua installs,
-/// and Phase G integration-cache writes stay entirely inside the temp
+/// and integration-cache writes stay entirely inside the temp
 /// directory on every platform.
 ///
 /// Rc-file resolution is the exception, and it is the rule every caller has
@@ -1369,7 +1369,7 @@ fn init_clink_writes_lua_to_resolved_path() {
     );
 }
 
-// ─── export --bin Phase G default-to-current_exe ───────────────────────────────
+// ─── export --bin default-to-current_exe ──────────────────────────────────────
 
 /// Static-cache layout: when --bin is omitted, the generated script bakes
 /// the absolute path of the running runex binary into the hook
@@ -1405,10 +1405,10 @@ fn export_omitted_bin_bakes_current_exe_absolute_path() {
     );
 }
 
-/// Phase G: when --bin is explicitly passed (= power user wants a
-/// portable hand-managed dotfile), the bare string is preserved as-is
-/// and the hook function calls it via PATH lookup. This is the legacy
-/// behaviour, retained intentionally so users running multi-machine
+/// When --bin is explicitly passed (= power user wants a portable
+/// hand-managed dotfile), the bare string is preserved as-is and the
+/// hook function calls it via PATH lookup. This is intentional so
+/// users running multi-machine
 /// dotfile sync against differently-installed runex copies aren't
 /// forced into per-machine cache regen.
 #[test]
@@ -1433,7 +1433,7 @@ fn export_explicit_bin_runex_preserves_bare_name() {
     );
 }
 
-/// Phase G: explicit --bin with a non-default value also passes through
+/// Explicit --bin with a non-default value also passes through
 /// verbatim (e.g. an absolute path the user picked manually).
 #[test]
 fn export_explicit_bin_absolute_path_passes_through() {

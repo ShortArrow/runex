@@ -34,9 +34,8 @@
 //!
 //! The atomic-write pattern (sibling temp + fsync + rename, with
 //! `O_NOFOLLOW` on Unix and a symlink reject everywhere) is the
-//! same one used by `cmd::init::write_clink_lua_safely` since
-//! 0.1.13. Phase G generalises it so all five shells share the
-//! same on-disk safety properties.
+//! same one used by `cmd::init::write_clink_lua_safely`, so all
+//! five shells share the same on-disk safety properties.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -118,9 +117,9 @@ pub(crate) fn cache_path(
 /// `.<name>.runex.tmp` file then renames over the target so a
 /// crash mid-write leaves the previous version in place.
 ///
-/// Refuses to follow a symlink at `path` (Phase D security
-/// posture: an attacker who can place a symlink in the cache dir
-/// must not be able to redirect writes elsewhere).
+/// Refuses to follow a symlink at `path`: an attacker who can place
+/// a symlink in the cache dir must not be able to redirect writes
+/// elsewhere.
 pub(crate) fn write_cache_file(path: &Path, contents: &str) -> Result<(), CacheError> {
     let parent = path
         .parent()

@@ -1,4 +1,4 @@
-//! Phase G shell-integration cache tests.
+//! Shell-integration cache tests.
 //!
 //! These pin the contract that motivated the static-cache pattern:
 //!
@@ -7,7 +7,7 @@
 //!    `__runex_expand`, install any `bind -x` binding, or do
 //!    anything that a CI script wouldn't expect from "an integration
 //!    that's installed but the shell isn't interactive". This is
-//!    enforced by the per-template guard added in G2 plus the
+//!    enforced by the per-template interactive guard plus the
 //!    cache file just being a copy of that template.
 //!
 //! 2. **Interactive shells get the function defined.** Same
@@ -95,8 +95,8 @@ fn cache_is_no_op_in_non_interactive_bash() {
     let cache = home.join(".cache").join("runex").join("integration.bash");
     assert!(cache.is_file(), "expected cache file at {}", cache.display());
 
-    // `bash -c` is non-interactive; the G2 guard inside the cache
-    // must early-return before defining __runex_expand.
+    // `bash -c` is non-interactive; the interactive guard inside
+    // the cache must early-return before defining __runex_expand.
     let out = Command::new("bash")
         .args([
             "--norc",

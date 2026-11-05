@@ -97,9 +97,9 @@ pub(crate) fn handle(shell: String, bin: Option<String>, config_flag: Option<&Pa
         cfg
     };
 
-    // Phase G: prepend the integration-cache header so the same byte
-    // stream serves both `runex export <shell>` (stdout) and `runex
-    // init <shell>` (cache file). Doctor (G6) parses the header to
+    // Prepend the integration-cache header so the same byte stream
+    // serves both `runex export <shell>` (stdout) and `runex init
+    // <shell>` (cache file). Doctor parses the header to
     // detect drift / version mismatch / missing baked-bin path; having
     // the same format on both write paths keeps the parser simple.
     //

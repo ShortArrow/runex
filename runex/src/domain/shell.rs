@@ -380,9 +380,9 @@ mod tests {
     }
 
     // `nu_hook_invocation_uses_separate_line_and_cursor_args` and
-    // `nu_bin_newline_does_not_inject_into_cmd_block` moved to
-    // `app::shell_export::tests` (Phase D D2b) — they assert on
-    // `export_script` output, which is an app concern.
+    // `nu_bin_newline_does_not_inject_into_cmd_block` live in
+    // `app::shell_export::tests` — they assert on `export_script`
+    // output, which is an app concern.
 
     #[test]
     fn bash_quote_string_drops_newline() {

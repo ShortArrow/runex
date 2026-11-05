@@ -9,11 +9,10 @@
 //! `nu_quote_string`) live in `domain::shell` and are reached
 //! through that module here.
 //!
-//! Phase D D2 split this out of `domain::shell`. The original
-//! co-location was an accident of where the code was first
-//! written: `export_script` takes a `&Config` and selects template
-//! fragments based on user config, which is the shape of an
-//! app-layer use-case, not pure quoting logic.
+//! `export_script` lives in `app`, not `domain::shell`, because it
+//! takes a `&Config` and selects template fragments based on user
+//! config, which is the shape of an app-layer use-case, not pure
+//! quoting logic.
 
 use crate::domain::model::{Config, TriggerKey};
 use crate::domain::shell::{
@@ -1492,8 +1491,7 @@ mod tests {
 
     } // mod regression_issues
 
-    /// Migrated from `domain::shell::tests::quote_functions` in
-    /// Phase D D2b — both tests assert on `export_script` output,
+    /// Nu quoting regressions that assert on `export_script` output,
     /// which is an app concern.
     mod nu_export_regression {
         use super::*;

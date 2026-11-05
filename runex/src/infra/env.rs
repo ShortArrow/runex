@@ -131,11 +131,11 @@ where
 //
 // These three live here (not in `app::init` / `app::config`) because
 // they are pure path arithmetic over the `HomeDirResolver` trait,
-// with no Config or other app-layer concerns. Putting them in `infra`
-// breaks the `app::doctor → infra::integration_check → app::init`
-// cycle that the older Phase C layout had: integration_check needs
-// to resolve rcfile paths, and reaching back into `app::init` for
-// that did not actually express a real dependency on init logic.
+// with no Config or other app-layer concerns. Keeping them in
+// `infra` avoids an `app::doctor → infra::integration_check →
+// app::init` cycle: integration_check needs to resolve rcfile
+// paths, and reaching into `app::init` for that would not express
+// a real dependency on init logic.
 
 use crate::domain::shell::Shell;
 
@@ -152,7 +152,7 @@ pub(crate) fn xdg_config_home_with(env: &dyn HomeDirResolver) -> Option<PathBuf>
 }
 
 /// `XDG_CACHE_HOME` if set, else `~/.cache` on Linux/macOS,
-/// `%LOCALAPPDATA%` on Windows. This is where Phase G's static
+/// `%LOCALAPPDATA%` on Windows. This is where the static
 /// shell-integration cache files live (`<cache>/runex/integration.<ext>`).
 /// XDG fallback semantics match the spec; Windows fallback follows
 /// the `dirs` crate's `cache_dir()` convention but is reimplemented
@@ -256,10 +256,8 @@ mod tests {
         assert_eq!(r.env_var("XDG_CONFIG_HOME"), Some("/etc/xdg".to_string()));
     }
 
-    /// `xdg_config_home_with` was moved here from `app::config` in
-    /// Phase D D3b along with the function itself. The three tests
-    /// pin resolver-injectable behaviour without touching process
-    /// env state.
+    /// Pin the resolver-injectable behaviour of
+    /// `xdg_config_home_with` without touching process env state.
     mod xdg_config_home_with_tests {
         use super::*;
         use std::collections::HashMap;
@@ -292,8 +290,8 @@ mod tests {
         }
     }
 
-    /// `xdg_cache_home_with` was added in Phase G to support the
-    /// static integration cache file pattern. Resolution order on
+    /// `xdg_cache_home_with` locates the static integration cache
+    /// files. Resolution order on
     /// non-Windows: `XDG_CACHE_HOME` → `~/.cache`. On Windows:
     /// `XDG_CACHE_HOME` → `LOCALAPPDATA` → `~/AppData/Local`.
     mod xdg_cache_home_with_tests {
@@ -355,8 +353,6 @@ mod tests {
         }
     }
 
-    /// `rc_file_for` (formerly `app::init::rc_file_for_with`) was
-    /// moved here in Phase D D1b. The tests came along.
     mod rc_file_for_tests {
         use super::*;
         use std::collections::HashMap;

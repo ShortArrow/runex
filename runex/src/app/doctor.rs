@@ -656,10 +656,10 @@ fn integration_marker_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
     out
 }
 
-/// Phase G: run the static integration-cache freshness check for
-/// each shell. Outputs `integration:<shell>:cache` rows in doctor.
-/// `Skipped` is the common case (no cache installed yet) and is
-/// rendered as Ok so users without Phase G install don't see noise.
+/// Run the static integration-cache freshness check for each shell.
+/// Outputs `integration:<shell>:cache` rows in doctor. `Skipped` is
+/// the common case (no cache installed yet) and is rendered as Ok so
+/// users without an installed cache don't see noise.
 fn integration_cache_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
     use crate::infra::env::SystemHomeDir;
     use crate::infra::integration_check::check_cache_freshness;
