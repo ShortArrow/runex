@@ -3,9 +3,11 @@
 //! ## Layering
 //!
 //! ```text
-//!   cmd  → app  → domain
-//!     ↓     ↓
-//!   util   infra → domain
+//!   cmd    → app, infra, util, domain (data types)
+//!   app    → domain, infra
+//!   util   → domain, infra, app::precache
+//!   infra  → domain
+//!   domain → nothing
 //! ```
 //!
 //! - `domain/`  — pure data types and rule-evaluation logic. No I/O,
@@ -16,9 +18,11 @@
 //!   for this token?". No `std::fs::*` calls.
 //! - `infra/`   — file system, environment, registry adapters.
 //!   Implements injection traits (`HomeDirResolver`) for `app/`.
-//!   `infra → domain` only.
+//!   `infra → domain` only, apart from the `app::config::ConfigError`
+//!   type that `infra::config_store` returns.
 //! - `cmd/`     — per-subcommand handlers. Reach behaviour through
-//!   `app/`; reach shared helpers through `util/`. The architecture
+//!   `app/`, file, environment and cache access through `infra/`,
+//!   and shared helpers through `util/`. The architecture
 //!   test forbids `cmd → domain::{expand, hook}` and
 //!   `cmd → domain::shell::export_script`.
 //! - `util/`    — helpers shared by `cmd/*` (shell detection,
