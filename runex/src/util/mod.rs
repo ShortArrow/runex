@@ -2,8 +2,8 @@
 //!
 //! The submodules depend on the standard library, `domain` and
 //! `infra` (`infra::win_path` for the augmented-PATH probe on
-//! Windows). `path` also reads the command-existence cache through
-//! `app::precache`.
+//! Windows). They do not depend on `app`; `path` takes the
+//! command-existence cache as an argument.
 //!
 //! What does *not* belong here:
 //! * Anything with command-specific policy (the

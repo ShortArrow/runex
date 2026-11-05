@@ -12,6 +12,7 @@
 //! Both share identical command-resolution semantics behind two
 //! thin signatures.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Build a `command_exists` closure with precache hint layer.
@@ -27,12 +28,13 @@ use std::path::{Path, PathBuf};
 ///
 /// ## Hint layer (precache)
 ///
-/// If `RUNEX_CMD_CACHE_V1` env var contains a valid cache with
-/// matching fingerprint:
-/// - `cache[cmd] == true` → return true immediately (skip `which`)
-/// - `cache[cmd] == false` → re-check live (avoid stale false
+/// `hint` is the command map of a precache whose fingerprint matched,
+/// as loaded by `app::precache::load_cache` (`None` when there is no
+/// usable cache):
+/// - `hint[cmd] == true` → return true immediately (skip `which`)
+/// - `hint[cmd] == false` → re-check live (avoid stale false
 ///   negatives after installs)
-/// - `cmd` not in cache → live check
+/// - `cmd` not in `hint` → live check
 ///
 /// Results are also cached in a `RefCell<HashMap>` per invocation to
 /// avoid repeated `which` calls within the same CLI run.
@@ -58,12 +60,9 @@ use std::path::{Path, PathBuf};
 /// failure mode can't return unnoticed.
 pub(crate) fn make_command_exists<'a>(
     path_prepend: Option<&'a Path>,
-    precache_fingerprint: Option<&str>,
+    hint: Option<HashMap<String, bool>>,
 ) -> impl Fn(&str) -> bool + 'a {
-    use crate::app::precache;
-
-    let hint = precache_fingerprint.and_then(precache::load_cache);
-    let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
+    let cache = std::cell::RefCell::new(HashMap::<String, bool>::new());
     #[cfg(windows)]
     let effective_path = crate::infra::win_path::effective_search_path();
 
@@ -77,7 +76,7 @@ pub(crate) fn make_command_exists<'a>(
         }
 
         if let Some(ref h) = hint
-            && let Some(&cached) = h.commands.get(cmd)
+            && let Some(&cached) = h.get(cmd)
                 && cached {
                     cache.borrow_mut().insert(cmd.to_owned(), true);
                     return true;
@@ -127,14 +126,9 @@ pub(crate) fn make_command_exists<'a>(
 /// closure.
 pub(crate) fn make_command_exists_owned(
     path_prepend: Option<PathBuf>,
-    precache_fingerprint: Option<String>,
+    hint: Option<HashMap<String, bool>>,
 ) -> impl Fn(&str) -> bool + 'static {
-    use crate::app::precache;
-
-    let hint = precache_fingerprint
-        .as_deref()
-        .and_then(precache::load_cache);
-    let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
+    let cache = std::cell::RefCell::new(HashMap::<String, bool>::new());
     #[cfg(windows)]
     let effective_path = crate::infra::win_path::effective_search_path();
 
@@ -148,7 +142,7 @@ pub(crate) fn make_command_exists_owned(
         }
 
         if let Some(ref h) = hint
-            && let Some(&cached) = h.commands.get(cmd)
+            && let Some(&cached) = h.get(cmd)
                 && cached {
                     cache.borrow_mut().insert(cmd.to_owned(), true);
                     return true;

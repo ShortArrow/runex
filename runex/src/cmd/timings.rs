@@ -35,7 +35,8 @@ pub(crate) fn handle(
     timings.record_phase("shell_resolve", t.elapsed());
 
     let fp = compute_precache_fingerprint(&config_path, &format!("{shell:?}").to_lowercase());
-    let command_exists = make_command_exists(path_prepend, Some(&fp));
+    let hint = crate::app::precache::load_cache(&fp).map(|cache| cache.commands);
+    let command_exists = make_command_exists(path_prepend, hint);
 
     match key {
         Some(k) => {

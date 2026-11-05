@@ -2,8 +2,8 @@
 //!
 //! Walks `runex/src/` from inside the cargo test runner and checks
 //! the `use` lines of `domain` and `cmd` and every production line of
-//! `infra` against the layer dependencies listed at the top of
-//! `runex/src/main.rs`, and the `std::fs` calls in `app`.
+//! `infra` and `util` against the layer dependencies listed at the top
+//! of `runex/src/main.rs`, and the `std::fs` calls in `app`.
 //!
 //! ## Why a test instead of `cargo deny`
 //!
@@ -17,7 +17,8 @@
 //! Each rule is a triple of `(layer_we_check, forbidden_use_prefix,
 //! human-readable rationale)`. The `domain` and `cmd` rules inspect
 //! only `use` lines, so a fully-qualified path inside a function body
-//! passes them; the `infra` rule inspects every production line.
+//! passes them; the `infra` and `util` rules inspect every production
+//! line.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -263,6 +264,35 @@ fn no_infra_to_app_imports() {
     );
 }
 
+/// `util` holds helpers shared by `cmd/*` and must not reach into
+/// `app`: a helper that needs app behaviour takes its result as an
+/// argument instead. Every production line is checked, so a
+/// fully-qualified `crate::app::…` call is a violation as well as a
+/// `use` line.
+#[test]
+fn no_util_to_app_imports() {
+    let util_dir = src_root().join("util");
+    let mut violations = Vec::new();
+    for (path, content) in collect_rs_files(&util_dir) {
+        for (lineno, line) in production_lines(&content) {
+            if line.contains("crate::app::") {
+                violations.push(format!(
+                    "{}:{lineno}: {}",
+                    path.strip_prefix(src_root().parent().unwrap())
+                        .unwrap_or(&path)
+                        .display(),
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "util/ must not depend on app/. Found:\n  {}",
+        violations.join("\n  ")
+    );
+}
+
 /// `domain` must not import from any sibling layer. Domain is the
 /// bottom of the stack — any `use crate::{app,infra,cmd,util}` in
 /// here is a hint that orchestration leaked into pure logic.
@@ -395,10 +425,9 @@ fn no_filesystem_calls_in_app_layer() {
 }
 
 /// Every production module lives in one of the layers, so the rule
-/// for its layer applies to it (no rule checks `util`). `main.rs` is
-/// the crate root and wires the layers
-/// together; any other file or directory directly under `src/` sits
-/// outside every rule.
+/// for its layer applies to it. `main.rs` is the crate root and wires
+/// the layers together; any other file or directory directly under
+/// `src/` sits outside every rule.
 #[test]
 fn every_module_belongs_to_a_layer() {
     let layers = ["app", "cmd", "domain", "infra", "util"];

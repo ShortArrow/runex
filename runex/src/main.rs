@@ -5,7 +5,7 @@
 //! ```text
 //!   cmd    → app, infra, util, domain (data types and pure helpers)
 //!   app    → domain, infra
-//!   util   → domain, infra, app::precache
+//!   util   → domain, infra
 //!   infra  → domain, app::config::ConfigError
 //!   domain → nothing
 //! ```
@@ -27,11 +27,12 @@
 //!   `cmd → domain::shell::export_script`.
 //! - `util/`    — helpers shared by `cmd/*` (shell detection,
 //!   prompt confirmation, command-existence factory). No
-//!   command-specific policy. The command-existence factory reads
-//!   the cache in `app::precache`.
+//!   command-specific policy. The command-existence factory takes
+//!   the precache hint as an argument.
 //!
 //! `runex/tests/architecture.rs` checks every production line of
-//! `infra` (`no_infra_to_app_imports`), the `use` lines of `domain`
+//! `infra` and `util` (`no_infra_to_app_imports`,
+//! `no_util_to_app_imports`), the `use` lines of `domain`
 //! and `cmd` (`no_domain_to_anyone_else_imports`,
 //! `no_cmd_to_domain_behavior_imports`) and the `std::fs` calls in
 //! `app` (`no_filesystem_calls_in_app_layer`), and
@@ -356,10 +357,10 @@ pub(crate) fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> S
 ///
 /// `build` (for `which` and `expand`) and `build_optional` (for
 /// `hook` and `doctor`) resolve the config and the shell, compute
-/// the precache fingerprint and build `command_exists` with
-/// `make_command_exists_owned`, so the precache-fingerprint policy
-/// is one `precache_enabled` argument per command. `timings` and
-/// `precache` run the sequence themselves.
+/// the precache fingerprint, load the matching precache hint and
+/// build `command_exists` with `make_command_exists_owned`, so the
+/// precache policy is one `precache_enabled` argument per command.
+/// `timings` and `precache` run the sequence themselves.
 ///
 /// `command_exists` is `Box<dyn Fn>` so the context is movable;
 /// the underlying closure owns its `path_prepend` so the context
@@ -424,12 +425,14 @@ impl AppContext {
             &config_path,
             &format!("{resolved_shell:?}").to_lowercase(),
         );
-        let path_prepend_owned = path_prepend.map(|p| p.to_path_buf());
-        let command_exists: Box<dyn Fn(&str) -> bool> = if precache_enabled {
-            Box::new(make_command_exists_owned(path_prepend_owned, Some(fingerprint.clone())))
-        } else {
-            Box::new(make_command_exists_owned(path_prepend_owned, None))
-        };
+        let hint = precache_enabled
+            .then(|| crate::app::precache::load_cache(&fingerprint))
+            .flatten()
+            .map(|cache| cache.commands);
+        let command_exists: Box<dyn Fn(&str) -> bool> = Box::new(make_command_exists_owned(
+            path_prepend.map(|p| p.to_path_buf()),
+            hint,
+        ));
         OptionalContext {
             config_path,
             config: config_opt,
@@ -453,12 +456,14 @@ impl AppContext {
             &config_path,
             &format!("{resolved_shell:?}").to_lowercase(),
         );
-        let path_prepend_owned = path_prepend.map(|p| p.to_path_buf());
-        let command_exists: Box<dyn Fn(&str) -> bool> = if precache_enabled {
-            Box::new(make_command_exists_owned(path_prepend_owned, Some(fingerprint.clone())))
-        } else {
-            Box::new(make_command_exists_owned(path_prepend_owned, None))
-        };
+        let hint = precache_enabled
+            .then(|| crate::app::precache::load_cache(&fingerprint))
+            .flatten()
+            .map(|cache| cache.commands);
+        let command_exists: Box<dyn Fn(&str) -> bool> = Box::new(make_command_exists_owned(
+            path_prepend.map(|p| p.to_path_buf()),
+            hint,
+        ));
         Ok(Self {
             config_path,
             config,
