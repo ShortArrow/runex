@@ -18,6 +18,7 @@
 
 pub mod expand;
 pub mod hook;
+pub mod integration;
 pub mod model;
 pub mod sanitize;
 pub mod shell;

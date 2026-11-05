@@ -237,7 +237,7 @@ pub(crate) fn check_rcfile_marker(shell: Shell, rcfile_override: Option<&Path>) 
         }
     };
     let cache_str = cache_path.to_string_lossy().to_string();
-    let expected_line = crate::app::init::integration_line(shell, &cache_str);
+    let expected_line = crate::domain::integration::integration_line(shell, &cache_str);
     match classify_rcfile_content(shell, &content, &expected_line) {
         RcfileIntegrationStatus::Ok => IntegrationCheck::Ok {
             name,
@@ -335,7 +335,7 @@ pub(crate) enum RcfileIntegrationStatus {
 /// Called from [`check_rcfile_marker`] after the rcfile content has
 /// already been read and the marker presence confirmed. `expected_line`
 /// is the current cache-source line as produced by
-/// `crate::app::init::integration_line(shell, &cache_path_str)` —
+/// `crate::domain::integration::integration_line(shell, &cache_path_str)` —
 /// passed in rather than recomputed so this function stays a pure
 /// string operation.
 pub(crate) fn classify_rcfile_content(

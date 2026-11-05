@@ -173,7 +173,7 @@ fn install_rcfile_integration(
     // Append the source line to the rcfile (skipped if marker
     // already present — the cache refresh above is enough).
     if !marker_present {
-        let line = runex_init::integration_line(shell, &cache_str);
+        let line = crate::domain::integration::integration_line(shell, &cache_str);
         let block = format!("\n{}\n{}\n", crate::infra::integration_check::RUNEX_INIT_MARKER, line);
         if let Some(parent) = rc_path.parent() {
             std::fs::create_dir_all(parent)?;
