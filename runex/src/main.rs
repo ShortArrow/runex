@@ -1040,8 +1040,8 @@ mod tests {
     /// `std::process::exit(1)`, so it is testable from inside the
     /// process without bringing the test process down with it.
     ///
-    /// These tests pin that contract for `handle_which` and
-    /// `handle_expand` on over-long tokens, and for
+    /// These tests pin that contract for `cmd::which::handle` and
+    /// `cmd::expand::handle` on over-long tokens, and for
     /// `cmd::export::validate_bin` on invalid bin strings.
     mod handler_outcomes {
         use super::*;
