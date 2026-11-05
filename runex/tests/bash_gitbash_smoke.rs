@@ -328,8 +328,10 @@ fn cache_without_interactive_guard(src: &Path, dst: &Path) {
 /// Run a bash script under Git Bash with a given OSTYPE, sourcing
 /// the cache file first. Returns stdout (panics on non-zero exit).
 ///
-/// `--noprofile` leaves `/usr/bin` off MSYS2 bash's PATH, so `script`
-/// uses bash builtins only.
+/// Under `--noprofile`, MSYS2's and Git's `usr/bin/bash.exe` keep the
+/// test process's PATH and do not add their own `/usr/bin`, so `grep`,
+/// `seq` and the other coreutils may be missing (Git's `bin/bash.exe`
+/// wrapper does add it). `script` therefore uses bash builtins only.
 fn run_under_gitbash(bash: &Path, cache: &Path, ostype: &str, script: &str) -> String {
     // Strip the interactive guard into a sibling file so we can
     // source it from `bash -c`. The original cache is untouched —
@@ -784,7 +786,8 @@ shopt -u nocasematch
 READLINE_LINE="e"; READLINE_POINT=1; __runex_expand
 echo "EMPTY=[$READLINE_LINE]"
 export LC_ALL=C.UTF-8
-tok="l"; for i in $(seq 1 600); do tok="${tok}ä"; done
+tok="l"; for ((i = 0; i < 600; i++)); do tok+="ä"; done
+echo "TOKLEN=${#tok}"
 READLINE_LINE="$tok"; READLINE_POINT=${#tok}; __runex_expand
 [ "$READLINE_LINE" = "$tok " ] && echo "BYTECAP=ok""#,
         );
@@ -795,6 +798,7 @@ READLINE_LINE="$tok"; READLINE_POINT=${#tok}; __runex_expand
             out.contains("EMPTY=[E2  ]"),
             "[{label}] a glob rule that renders to nothing is skipped and the next glob rule is tried; got:\n{out}"
         );
+        assert!(out.contains("TOKLEN=601"), "[{label}] the byte-cap token is 601 characters long; got:\n{out}");
         assert!(out.contains("BYTECAP=ok"), "[{label}] the 4096 cap counts bytes, as the exec path does; got:\n{out}");
     });
 }
