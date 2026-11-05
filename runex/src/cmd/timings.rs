@@ -10,7 +10,7 @@ use std::path::Path;
 use crate::app::expand;
 use crate::domain::shell::Shell;
 
-use crate::format;
+use crate::cmd::format;
 use crate::util::path::make_command_exists;
 use crate::util::shell::resolve_shell;
 use crate::{compute_precache_fingerprint, resolve_config, CmdOutcome, CmdResult, MAX_TOKEN_BYTES};

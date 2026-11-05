@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 /// ## Windows-specific PATH augmentation
 ///
 /// On Windows we feed `which::which_in` the *augmented* search path
-/// from [`crate::win_path::effective_search_path`] (process PATH +
+/// from [`crate::infra::win_path::effective_search_path`] (process PATH +
 /// HKCU + HKLM) instead of relying on the inherited `PATH` env var
 /// alone.
 ///
@@ -67,7 +67,7 @@ pub(crate) fn make_command_exists<'a>(
     let hint = precache_fingerprint.and_then(precache::load_cache);
     let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
     #[cfg(windows)]
-    let effective_path = crate::win_path::effective_search_path();
+    let effective_path = crate::infra::win_path::effective_search_path();
 
     move |cmd: &str| -> bool {
         if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {
@@ -138,7 +138,7 @@ pub(crate) fn make_command_exists_owned(
         .and_then(precache::load_cache);
     let cache = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
     #[cfg(windows)]
-    let effective_path = crate::win_path::effective_search_path();
+    let effective_path = crate::infra::win_path::effective_search_path();
 
     move |cmd: &str| -> bool {
         if cmd.contains('/') || cmd.contains('\\') || cmd.contains(':') {

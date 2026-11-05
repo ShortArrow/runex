@@ -18,7 +18,7 @@ use crate::domain::model::{Config, ExpandResult};
 use crate::domain::shell::Shell;
 use crate::domain::timings::Timings;
 
-pub(crate) use crate::domain::expand::WhichResult;
+pub(crate) use crate::domain::expand::{SkipReason, WhichResult};
 
 /// Compute the expansion for a single token. Untouched-on-skip
 /// behaviour and self-loop guard live in `domain::expand`.

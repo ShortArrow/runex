@@ -14,8 +14,8 @@ use crate::app::doctor;
 use crate::domain::model::Config;
 use crate::domain::shell::Shell;
 
-use crate::format::format_check_line;
-use crate::shell_alias::add_shell_alias_conflicts;
+use crate::cmd::format::format_check_line;
+use crate::app::shell_alias_conflicts::add_shell_alias_conflicts;
 use crate::{AppContext, CmdOutcome, CmdResult, OptionalContext, Spinner};
 
 /// Compose the [`doctor::DoctorEnvInfo`] that the `doctor` subcommand
@@ -27,7 +27,7 @@ pub(crate) fn build_doctor_env_info(config: Option<&Config>) -> doctor::DoctorEn
 
     #[cfg(windows)]
     {
-        let p = crate::win_path::effective_search_path();
+        let p = crate::infra::win_path::effective_search_path();
         info.effective_search_path = Some(doctor::EffectiveSearchPathSummary {
             from_process: p.from_process,
             from_user_registry: p.from_user_registry,
@@ -81,7 +81,7 @@ pub(crate) fn handle(
     let spinner = Spinner::start("Checking environment...");
     // Build informational env-info that doctor renders alongside the
     // config checks: Windows effective_search_path breakdown (see
-    // `runex/src/win_path.rs`), per-shell rcfile marker checks, and a
+    // `runex/src/infra/win_path.rs`), per-shell rcfile marker checks, and a
     // clink-lua drift check. The current config is forwarded so the
     // generated clink export reflects the user's keybinds & abbrs.
     let env_info = build_doctor_env_info(config.as_ref());

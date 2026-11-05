@@ -1,9 +1,9 @@
-//! Leaf utility modules used across the runex CLI.
+//! Utility modules used across the runex CLI.
 //!
-//! Each submodule here is a *leaf*: it depends only on the standard
-//! library, the in-crate `domain`/`infra` types, and platform
-//! crates where the helper is platform-specific (`libc` for
-//! `O_NOFOLLOW`, `winreg`/`win_path` for the augmented-PATH probe).
+//! The submodules depend on the standard library, `domain` and
+//! `infra` (`infra::win_path` for the augmented-PATH probe on
+//! Windows). `path` also reads the command-existence cache through
+//! `app::precache`.
 //!
 //! What does *not* belong here:
 //! * Anything with command-specific policy (the
@@ -13,7 +13,7 @@
 //!   straddles util + handler concerns.
 //!
 //! `util/` is a sibling of `cmd/`, not below `infra/`. The split
-//! exists so `cmd/*` can reach truly leaf helpers without going
+//! exists so `cmd/*` can reach these helpers without going
 //! through the use-case layer (`app/*`); calls that need orchestration
 //! must still go through `app/`.
 

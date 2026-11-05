@@ -1,5 +1,5 @@
 use crate::app::doctor::{Check, CheckStatus};
-use crate::domain::expand::{self, WhichResult};
+use crate::app::expand::{SkipReason, WhichResult};
 use crate::domain::sanitize::sanitize_for_display;
 
 use crate::{ANSI_GREEN, ANSI_RED, ANSI_RESET, ANSI_YELLOW, CHECK_TAG_WIDTH, GIT_COMMIT};
@@ -34,15 +34,15 @@ pub(crate) fn version_line() -> String {
     }
 }
 
-pub(crate) fn format_skip_reason(i: usize, reason: &expand::SkipReason, why: bool) -> String {
+pub(crate) fn format_skip_reason(i: usize, reason: &SkipReason, why: bool) -> String {
     if !why {
         return String::new();
     }
     match reason {
-        expand::SkipReason::SelfLoop => {
+        SkipReason::SelfLoop => {
             format!("\n  rule #{} skipped: key == expand (self-loop)", i + 1)
         }
-        expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
+        SkipReason::ConditionFailed { found_commands, missing_commands } => {
             let mut parts = Vec::new();
             for cmd in found_commands {
                 parts.push(format!("{}: found", sanitize_for_display(cmd)));
@@ -56,21 +56,21 @@ pub(crate) fn format_skip_reason(i: usize, reason: &expand::SkipReason, why: boo
                 parts.join(", ")
             )
         }
-        expand::SkipReason::NoShellEntry => {
+        SkipReason::NoShellEntry => {
             format!("\n  rule #{} skipped: no expand entry for current shell", i + 1)
         }
-        expand::SkipReason::BlankExpansion => {
+        SkipReason::BlankExpansion => {
             format!("\n  rule #{} skipped: expand is blank once {{}} is removed", i + 1)
         }
     }
 }
 
 /// Collect all missing commands from `ConditionFailed` skip reasons, deduplicated.
-pub(crate) fn collect_all_missing_commands(skipped: &[(usize, expand::SkipReason)]) -> Vec<String> {
+pub(crate) fn collect_all_missing_commands(skipped: &[(usize, SkipReason)]) -> Vec<String> {
     skipped
         .iter()
         .flat_map(|(_, r)| match r {
-            expand::SkipReason::ConditionFailed { missing_commands, .. } => {
+            SkipReason::ConditionFailed { missing_commands, .. } => {
                 missing_commands.iter().map(|c| sanitize_for_display(c)).collect::<Vec<_>>()
             }
             _ => vec![],
@@ -86,17 +86,17 @@ pub(crate) fn collect_all_missing_commands(skipped: &[(usize, expand::SkipReason
 /// line, choosing the message based on which skip reasons are present.
 pub(crate) fn format_all_skipped_headline(
     token: &str,
-    skipped: &[(usize, expand::SkipReason)],
+    skipped: &[(usize, SkipReason)],
 ) -> String {
     let has_condition_fail = skipped
         .iter()
-        .any(|(_, r)| matches!(r, expand::SkipReason::ConditionFailed { .. }));
+        .any(|(_, r)| matches!(r, SkipReason::ConditionFailed { .. }));
     let has_self_loop = skipped
         .iter()
-        .any(|(_, r)| matches!(r, expand::SkipReason::SelfLoop));
+        .any(|(_, r)| matches!(r, SkipReason::SelfLoop));
     let has_no_shell_entry = skipped
         .iter()
-        .any(|(_, r)| matches!(r, expand::SkipReason::NoShellEntry));
+        .any(|(_, r)| matches!(r, SkipReason::NoShellEntry));
     match (has_condition_fail, has_self_loop, has_no_shell_entry) {
         (true, _, _) => {
             let all_missing = collect_all_missing_commands(skipped);
@@ -204,10 +204,10 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
         } => {
             for (i, reason) in skipped {
                 match reason {
-                    expand::SkipReason::SelfLoop => {
+                    SkipReason::SelfLoop => {
                         out.push_str(&format!("rule #{} skipped: self-loop\n", i + 1));
                     }
-                    expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
+                    SkipReason::ConditionFailed { found_commands, missing_commands } => {
                         out.push_str(&format!("rule #{} skipped: when_command_exists\n", i + 1));
                         for cmd in found_commands {
                             out.push_str(&format!("  {}: found\n", sanitize_for_display(cmd)));
@@ -216,10 +216,10 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
                             out.push_str(&format!("  {}: NOT FOUND\n", sanitize_for_display(cmd)));
                         }
                     }
-                    expand::SkipReason::NoShellEntry => {
+                    SkipReason::NoShellEntry => {
                         out.push_str(&format!("rule #{} skipped: no entry for current shell\n", i + 1));
                     }
-                    expand::SkipReason::BlankExpansion => {
+                    SkipReason::BlankExpansion => {
                         out.push_str(&format!("rule #{} skipped: blank expansion\n", i + 1));
                     }
                 }
@@ -248,10 +248,10 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
         WhichResult::AllSkipped { token, skipped } => {
             for (i, reason) in skipped {
                 match reason {
-                    expand::SkipReason::SelfLoop => {
+                    SkipReason::SelfLoop => {
                         out.push_str(&format!("rule #{} skipped: self-loop\n", i + 1));
                     }
-                    expand::SkipReason::ConditionFailed { found_commands, missing_commands } => {
+                    SkipReason::ConditionFailed { found_commands, missing_commands } => {
                         out.push_str(&format!("rule #{} skipped: when_command_exists\n", i + 1));
                         for cmd in found_commands {
                             out.push_str(&format!("  {}: found\n", sanitize_for_display(cmd)));
@@ -260,10 +260,10 @@ pub(crate) fn format_dry_run_result(token: &str, result: &WhichResult) -> String
                             out.push_str(&format!("  {}: NOT FOUND\n", sanitize_for_display(cmd)));
                         }
                     }
-                    expand::SkipReason::NoShellEntry => {
+                    SkipReason::NoShellEntry => {
                         out.push_str(&format!("rule #{} skipped: no entry for current shell\n", i + 1));
                     }
-                    expand::SkipReason::BlankExpansion => {
+                    SkipReason::BlankExpansion => {
                         out.push_str(&format!("rule #{} skipped: blank expansion\n", i + 1));
                     }
                 }

@@ -18,30 +18,27 @@
 //!   Implements injection traits (`HomeDirResolver`) for `app/`.
 //!   `infra → domain` only.
 //! - `cmd/`     — per-subcommand handlers. Reach behaviour through
-//!   `app/`; reach leaf utilities through `util/`. The architecture
+//!   `app/`; reach shared helpers through `util/`. The architecture
 //!   test forbids `cmd → domain::{expand, hook}` and
 //!   `cmd → domain::shell::export_script`.
-//! - `util/`    — leaf helpers shared by `cmd/*` (shell detection,
+//! - `util/`    — helpers shared by `cmd/*` (shell detection,
 //!   prompt confirmation, command-existence factory). No
-//!   command-specific policy.
-//! - `format` / `shell_alias` / `win_path` — single-purpose modules
-//!   pre-dating the layering split; safe in their current location.
+//!   command-specific policy. The command-existence factory reads
+//!   the cache in `app::precache`.
 //!
-//! Cycles are prevented at compile-time by
-//! `runex/tests/architecture.rs` (`no_infra_to_app_imports`,
+//! `runex/tests/architecture.rs` checks the `use` lines of `infra`,
+//! `domain` and `cmd` (`no_infra_to_app_imports`,
 //! `no_domain_to_anyone_else_imports`,
-//! `no_cmd_to_domain_behavior_imports`,
-//! `no_filesystem_calls_in_app_layer`).
+//! `no_cmd_to_domain_behavior_imports`) and the `std::fs` calls in
+//! `app` (`no_filesystem_calls_in_app_layer`), and
+//! `every_module_belongs_to_a_layer` keeps every module inside one of
+//! the layers above.
 
 mod app;
 mod cmd;
 mod domain;
-mod format;
 mod infra;
-mod shell_alias;
 mod util;
-#[cfg(windows)]
-mod win_path;
 
 use clap::{Parser, Subcommand};
 use crate::app::config::{default_config_path, load_config};
