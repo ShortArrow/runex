@@ -24,24 +24,20 @@
 //! - `util/`    — leaf helpers shared by `cmd/*` (shell detection,
 //!   prompt confirmation, command-existence factory). No
 //!   command-specific policy.
-//! - `format` / `shell_alias` / `win_path` — single-purpose modules
-//!   pre-dating the layering split; safe in their current location.
 //!
 //! Cycles are prevented at compile-time by
 //! `runex/tests/architecture.rs` (`no_infra_to_app_imports`,
 //! `no_domain_to_anyone_else_imports`,
 //! `no_cmd_to_domain_behavior_imports`,
-//! `no_filesystem_calls_in_app_layer`).
+//! `no_filesystem_calls_in_app_layer`), and
+//! `every_module_belongs_to_a_layer` keeps every module inside one of
+//! the layers above.
 
 mod app;
 mod cmd;
 mod domain;
-mod format;
 mod infra;
-mod shell_alias;
 mod util;
-#[cfg(windows)]
-mod win_path;
 
 use clap::{Parser, Subcommand};
 use crate::app::config::{default_config_path, load_config};

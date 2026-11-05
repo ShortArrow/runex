@@ -1,6 +1,7 @@
 //! `runex version` — print the version string (and optionally git commit).
 
-use crate::{format::version_line, CmdOutcome, CmdResult, GIT_COMMIT};
+use crate::cmd::format::version_line;
+use crate::{CmdOutcome, CmdResult, GIT_COMMIT};
 
 pub(crate) fn handle(json: bool) -> CmdResult {
     if json {

@@ -3,7 +3,7 @@
 //! Each submodule here is a *leaf*: it depends only on the standard
 //! library, the in-crate `domain`/`infra` types, and platform
 //! crates where the helper is platform-specific (`libc` for
-//! `O_NOFOLLOW`, `winreg`/`win_path` for the augmented-PATH probe).
+//! `O_NOFOLLOW`, `infra::win_path` for the augmented-PATH probe).
 //!
 //! What does *not* belong here:
 //! * Anything with command-specific policy (the

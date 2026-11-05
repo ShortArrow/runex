@@ -29,4 +29,5 @@ pub mod expand;
 pub mod hook;
 pub mod init;
 pub mod precache;
+pub mod shell_alias_conflicts;
 pub mod shell_export;

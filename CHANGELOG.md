@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI lints the Dockerfiles with hadolint. Both Dockerfiles run their
   `RUN` steps under `pipefail`, so a failed download fails the build,
   and the VHS demo image is pinned to v0.12.1.
+- Every module sits in one of the source layers, and an architecture
+  test fails on a file outside them. Shell alias reading moved to
+  `infra::shell_alias`, the doctor check that reports a key colliding
+  with an alias to `app::shell_alias_conflicts`, the Windows PATH
+  probe to `infra::win_path`, and the output formatting to
+  `cmd::format`.
 
 ## [0.1.21] - 2026-10-20
 

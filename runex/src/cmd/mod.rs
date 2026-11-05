@@ -35,6 +35,7 @@ pub mod config;
 pub mod doctor;
 pub mod expand;
 pub mod export;
+pub mod format;
 pub mod hook;
 pub mod init;
 pub mod list;

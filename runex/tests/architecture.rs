@@ -399,3 +399,24 @@ fn no_filesystem_calls_in_app_layer() {
         violations.join("\n  ")
     );
 }
+
+/// Every production module lives in one of the layers, so the rules
+/// above cover it. `main.rs` is the crate root and wires the layers
+/// together; any other file or directory directly under `src/` sits
+/// outside every rule.
+#[test]
+fn every_module_belongs_to_a_layer() {
+    let layers = ["app", "cmd", "domain", "infra", "util"];
+    let mut strays: Vec<String> = fs::read_dir(src_root())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "main.rs" && !layers.contains(&name.as_str()))
+        .collect();
+    strays.sort();
+    assert!(
+        strays.is_empty(),
+        "every module under src/ must live in one of {layers:?}. Found:\n  {}",
+        strays.join("\n  ")
+    );
+}

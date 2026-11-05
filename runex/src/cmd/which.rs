@@ -4,7 +4,7 @@ use crate::app::expand;
 use crate::domain::model::Config;
 use crate::domain::shell::Shell;
 
-use crate::format::{format_which_result, which_result_to_json};
+use crate::cmd::format::{format_which_result, which_result_to_json};
 use crate::{CmdOutcome, CmdResult, MAX_TOKEN_BYTES};
 
 pub(crate) fn handle(

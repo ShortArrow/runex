@@ -8,14 +8,12 @@
 //! injection (`HomeDirResolver`, future `ConfigStore` etc.) live
 //! here too, so `app` has a single import target for "the outside
 //! world".
-//!
-//! `win_path` (the Windows process+HKCU+HKLM PATH augmentation)
-//! still lives at `runex/src/win_path.rs` because it predates this
-//! split; moving it here is a separate commit to keep this one
-//! move-only across the runex-core absorption.
 
 pub mod clipboard;
 pub mod config_store;
 pub mod env;
 pub mod integration_cache;
 pub mod integration_check;
+pub mod shell_alias;
+#[cfg(windows)]
+pub mod win_path;
