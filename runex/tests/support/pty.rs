@@ -86,7 +86,7 @@ pub struct PtySession {
     /// When the child last printed anything; `None` until it has.
     last_output: Option<Instant>,
     /// When the shell was launched, so a failure can say how long the
-    /// whole bootstrap had taken.
+    /// session had been running.
     started: Instant,
     /// Everything read since launch. Unlike `seen` it is never
     /// cleared, so a failure can show the startup output too.
@@ -645,6 +645,8 @@ mod step_error_tests {
         let mut session = PtySession::launch("cat").expect("cat runs under a PTY");
         session.step_timeout = deadline;
         session.send_line("typed").expect("the PTY accepts a line");
+        session.expect_regex("typed").expect("cat prints the line back");
+        session.seen.clear();
         let err = session
             .expect_regex("never printed")
             .expect_err("cat prints back only the line it was sent");
