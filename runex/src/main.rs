@@ -26,8 +26,9 @@
 //!   command-specific policy. The command-existence factory reads
 //!   the cache in `app::precache`.
 //!
-//! `runex/tests/architecture.rs` checks the `use` lines of each layer
-//! (`no_infra_to_app_imports`, `no_domain_to_anyone_else_imports`,
+//! `runex/tests/architecture.rs` checks the `use` lines of `infra`,
+//! `domain` and `cmd` (`no_infra_to_app_imports`,
+//! `no_domain_to_anyone_else_imports`,
 //! `no_cmd_to_domain_behavior_imports`) and the `std::fs` calls in
 //! `app` (`no_filesystem_calls_in_app_layer`), and
 //! `every_module_belongs_to_a_layer` keeps every module inside one of
