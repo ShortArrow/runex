@@ -37,10 +37,6 @@ fn space_triggers_expand_for_known_token() {
     session.send("gcm ");
     session.send_line("");
 
-    // Use the inner expect for richer error messages on the assertion
-    // path; PtySession::expect_regex returns Option<()> which would
-    // only let us say "didn't see it" with no captured surrounding
-    // text. Reach across via the published API.
     session
         .expect_regex(r"EXPANDED")
         .expect("bash should have echoed EXPANDED after the gcm<Space> expansion");
