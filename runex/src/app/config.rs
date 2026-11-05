@@ -850,10 +850,9 @@ fn first_keybind_error(config: &Config) -> Option<ConfigError> {
 }
 
 /// Default config file path. Re-exported wrapper around
-/// [`crate::infra::config_store::default_config_path`] so existing
-/// `crate::app::config::default_config_path` call sites keep working
-/// after the D3 split. Phase D D4 / future cleanup may inline these
-/// shims; the function itself lives in `infra` because it touches
+/// [`crate::infra::config_store::default_config_path`] so callers
+/// reach it through `crate::app::config::default_config_path`; the
+/// function itself lives in `infra` because it touches
 /// `RUNEX_CONFIG` env / `XDG_CONFIG_HOME` resolution.
 pub(crate) fn default_config_path() -> Result<PathBuf, ConfigError> {
     crate::infra::config_store::default_config_path()
@@ -887,8 +886,6 @@ pub(crate) fn load_config(path: &std::path::Path) -> Result<Config, ConfigError>
 /// including a missing or version-less one), and the resulting rule
 /// count must fit `MAX_ABBR_RULES`. Only then delegates the file
 /// append to [`crate::infra::config_store::append_abbr_block`].
-/// Phase D D4 will move this wrapper to `app::abbr` and have
-/// `cmd/add_remove` call that instead.
 pub(crate) fn append_abbr_to_file(
     path: &std::path::Path,
     key: &str,
@@ -1155,10 +1152,10 @@ expand = "git commit -m"
         assert!(config.abbr.is_empty());
     }
 
-    // File I/O tests for `load_config` / `default_config_path`
-    // moved to `infra::config_store::tests` in Phase D D3b along
-    // with the underlying functions. `xdg_config_home_*` tests
-    // moved to `infra::env::tests`.
+    // File I/O tests for `read_config_source` / `default_config_path`
+    // live in `infra::config_store::tests` with those functions;
+    // `xdg_config_home_*` tests live in `infra::env::tests` and
+    // `infra::config_store::tests`.
 
     #[test]
     fn parse_config_rejects_too_many_abbr() {
@@ -1179,8 +1176,8 @@ expand = "git commit -m"
     }
 
     // `load_config_rejects_*` and `load_config_follows_symlink_*`
-    // tests moved to `infra::config_store::tests` in Phase D D3b
-    // (they exercise the `read_config_source` filesystem layer).
+    // tests live in `infra::config_store::tests` (they exercise the
+    // `read_config_source` filesystem layer).
 
     } // mod parsing
 

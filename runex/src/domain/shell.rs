@@ -380,9 +380,9 @@ mod tests {
     }
 
     // `nu_hook_invocation_uses_separate_line_and_cursor_args` and
-    // `nu_bin_newline_does_not_inject_into_cmd_block` moved to
-    // `app::shell_export::tests` (Phase D D2b) — they assert on
-    // `export_script` output, which is an app concern.
+    // `nu_bin_newline_does_not_inject_into_cmd_block` live in
+    // `app::shell_export::tests` — they assert on `export_script`
+    // output, which is an app concern.
 
     #[test]
     fn bash_quote_string_drops_newline() {
@@ -460,10 +460,6 @@ mod tests {
         assert_eq!(bash_quote_buffer("a\u{2028}b\u{2029}c"), "'a\u{2028}b\u{2029}c'");
         assert_eq!(bash_quote_buffer("it's"), r"'it'\''s'");
     }
-
-    // bash_quote_pattern tests dropped — the helper and its callers (the
-    // case-arm builder) are gone now that abbreviations aren't embedded in
-    // shell code.
 
     #[test]
     fn lua_quote_string_escapes_nul() {
@@ -618,27 +614,4 @@ mod tests {
     }
 
     } // mod unicode_edge_cases
-
-    /// In bash/zsh `case` patterns, characters enclosed in single quotes are
-    /// treated as literals, not glob wildcards. `'*'` matches only a literal
-    /// asterisk, not every string. `bash_quote_pattern` wraps keys in single
-    /// quotes, so `*`, `?`, `[...]` are all safe in case patterns.
-    mod case_pattern_globs {
-    // The bash case-pattern injection tests were specific to the legacy
-    // design where abbreviation keys were embedded as `case` arms inside the
-    // bash bootstrap. With the new hook-based bootstrap, keys are never
-    // emitted into shell code, so glob-like keys (`*`, `?`, `[...]`) pose no
-    // shell-expansion risk at export time. The equivalent safety is now
-    // enforced by Rust-side key validation in `config::validate_abbr_key`
-    // (see runex-core/src/config.rs).
-
-    // Zsh case-pattern injection tests removed for the same reason as bash:
-    // the new hook-based bootstrap does not embed keys in shell code. See the
-    // comment block above for the bash equivalent.
-
-    // The "pwsh switch must have exactly one `default {` clause" regression
-    // test was specific to the legacy token-embedding design; with the new
-    // bootstrap there is no switch statement at all.
-
-    } // mod case_pattern_globs
 }

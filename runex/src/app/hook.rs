@@ -2,8 +2,8 @@
 //! dispatch that decides "insert a literal space", "expand the token
 //! to the left of the cursor", or "no-op".
 //!
-//! Phase D D4a routes `cmd::hook` through this module so the cmd
-//! layer doesn't import `crate::domain::hook` directly. See
+//! `cmd::hook` goes through this module so the cmd layer doesn't
+//! import `crate::domain::hook` directly. See
 //! `app::expand` for the rationale.
 //!
 //! The `HookAction` enum and the rendering function are re-exported

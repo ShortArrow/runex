@@ -11,12 +11,11 @@
 //!    changes, users with a stale `runex.lua` silently miss out on the
 //!    new behaviour. [`check_clink_lua_freshness`] reads the file and
 //!    compares byte-for-byte against `runex export clink`.
-//! 2. **Legacy rcfile drift.** Earlier runex versions appended
-//!    `eval "$(runex export bash)"` to the rcfile, paying a `runex`
-//!    PATH lookup + spawn at every shell start. The current
-//!    `runex init` writes a static cache file and the rcfile only
-//!    sources it. A user who upgrades and re-runs `runex init
-//!    <shell>` keeps the legacy line — the cache file is written
+//! 2. **Legacy rcfile drift.** An rcfile can hold
+//!    `eval "$(runex export bash)"`, which pays a `runex` PATH
+//!    lookup + spawn at every shell start. `runex init` writes a
+//!    static cache file for the rcfile to source, and re-running
+//!    `runex init <shell>` keeps the eval line — the cache file is written
 //!    but never sourced. [`check_rcfile_marker`] flags this as
 //!    [`IntegrationCheck::Outdated`].
 //! 3. **Cache file freshness.** [`check_cache_freshness`] verifies
@@ -39,8 +38,8 @@ use crate::infra::env::{rc_file_for, SystemHomeDir};
 /// idempotent re-runs. Living in `infra::integration_check` rather
 /// than `app::init` because both the *write side* (`cmd::init`) and
 /// the *read side* (`check_rcfile_marker`) need it, and the latter
-/// lives here in `infra`. Phase D moved the constant to break the
-/// `app → infra → app` cycle the prior layout had.
+/// lives here in `infra`. Defining it in `app::init` would make
+/// `infra` import `app` for it.
 pub(crate) const RUNEX_INIT_MARKER: &str = "# runex-init";
 
 /// Maximum bytes any of the rcfile / clink-lua probes will read.
@@ -404,7 +403,7 @@ fn legacy_export_token(shell: Shell) -> &'static str {
     }
 }
 
-/// Phase G cache file freshness check. Reads
+/// Integration cache file freshness check. Reads
 /// `<XDG_CACHE_HOME>/runex/integration.<ext>` for `shell` and
 /// classifies the result:
 ///
@@ -418,7 +417,7 @@ fn legacy_export_token(shell: Shell) -> &'static str {
 ///   [`crate::infra::integration_cache::INTEGRATION_CACHE_VERSION`],
 ///   the `runex-bin:` header points at a path that no longer
 ///   exists, or the header is absent entirely (= legacy `eval
-///   "$(runex export bash)"`-style content from before Phase G).
+///   "$(runex export bash)"`-style content with no header).
 /// * **Ok** when the version matches and the baked-bin path
 ///   exists on disk.
 ///
@@ -535,9 +534,9 @@ pub(crate) fn check_cache_freshness(
 
     if let Some(bin) = bin_line {
         let bin = bin.trim();
-        // Bare `runex` is a deliberate power-user override (Phase
-        // G3) — accept it without checking existence on disk
-        // since it's PATH-resolved at run time.
+        // Bare `runex` is a deliberate power-user override
+        // (explicit `--bin runex`) — accept it without checking
+        // existence on disk since it's PATH-resolved at run time.
         if bin != "runex" && !std::path::Path::new(bin).exists() {
             return IntegrationCheck::Outdated {
                 name,
@@ -816,8 +815,8 @@ mod tests {
         );
     }
 
-    /// `default_clink_lua_paths_with` (Phase B Step B3) is the
-    /// resolver-injectable variant. These tests pin its honour for
+    /// `default_clink_lua_paths_with` is the resolver-injectable
+    /// variant. These tests pin its honour for
     /// each env knob a real install consults: explicit
     /// `RUNEX_CLINK_LUA_PATH` first, then `LOCALAPPDATA`-derived,
     /// then `home_dir`-derived (Linux clink fork).
@@ -882,7 +881,7 @@ mod tests {
         );
     }
 
-    /// Phase G: pin every branch of `check_cache_freshness`.
+    /// Pin every branch of `check_cache_freshness`.
     mod cache_freshness {
         use super::*;
         use crate::infra::env::EnvHomeDir;
@@ -1006,8 +1005,8 @@ mod tests {
 
         #[test]
         fn ok_when_baked_bin_is_bare_runex() {
-            // Bare "runex" is a deliberate power-user override (G3
-            // explicit --bin runex). Don't flag it as missing — it's
+            // Bare "runex" is a deliberate power-user override
+            // (explicit --bin runex). Don't flag it as missing — it's
             // resolved through PATH at run time.
             let dir = TempDir::new().unwrap();
             let env = env_with(dir.path());

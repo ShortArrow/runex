@@ -1,17 +1,15 @@
 //! Use-case wrappers for the `expand` / `which` / `list` commands.
 //!
-//! Phase D D4a: every cmd handler used to call `crate::domain::expand`
-//! directly, which made `cmd → domain` reach across the use-case
-//! layer. This module re-publishes the same operations under the
-//! `app::*` namespace so the architecture test
+//! A cmd handler calling `crate::domain::expand` directly would
+//! make `cmd → domain` reach across the use-case layer. This module
+//! re-publishes the same operations under the `app::*` namespace so
+//! the architecture test
 //! `no_cmd_to_domain_behavior_imports` can pin the contract: cmd
 //! handlers go through `app/`, and DTO types
 //! (`Config`, `ExpandResult`, `Shell`) cross the boundary as data.
 //!
 //! These wrappers add no logic on top of the domain functions —
-//! they're a one-line indirection. Future versions of the use-case
-//! could enrich them (e.g. adding metric hooks, tracing spans, or
-//! caching), and call sites would not have to change.
+//! they're a one-line indirection.
 
 use crate::domain::expand as domain_expand;
 use crate::domain::model::{Config, ExpandResult};

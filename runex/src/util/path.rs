@@ -9,10 +9,8 @@
 //!   `'static`-bounded, which is what [`crate::AppContext`] needs to
 //!   carry it around without lifetime parameters.
 //!
-//! Both share identical command-resolution semantics; keeping the
-//! single source of truth tucked behind two thin signatures avoided
-//! a churning rewrite of the existing test suite when AppContext
-//! landed in B2.
+//! Both share identical command-resolution semantics behind two
+//! thin signatures.
 
 use std::path::{Path, PathBuf};
 
@@ -188,13 +186,12 @@ pub(crate) fn make_command_exists_owned(
 /// or fall back to `default` (typically `"runex"`) when
 /// `current_exe()` fails or contains non-UTF-8 bytes.
 ///
-/// Used by Phase G's `export` and `init` paths to bake the real
+/// Used by the `export` and `init` paths to bake the real
 /// binary location into generated shell-integration scripts so
 /// per-keystroke hooks don't pay PATH lookup overhead. When invoked
 /// through a `mise` shim, `current_exe()` reads `/proc/self/exe`
 /// (Linux/WSL) or `GetModuleFileNameW` (Windows), both of which
-/// return the post-`exec` real binary, not the shim — confirmed
-/// during Phase F's clink lua install path testing.
+/// return the post-`exec` real binary, not the shim.
 pub(crate) fn current_exe_or_default(default: &str) -> String {
     std::env::current_exe()
         .ok()

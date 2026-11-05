@@ -9,11 +9,10 @@
 //! `nu_quote_string`) live in `domain::shell` and are reached
 //! through that module here.
 //!
-//! Phase D D2 split this out of `domain::shell`. The original
-//! co-location was an accident of where the code was first
-//! written: `export_script` takes a `&Config` and selects template
-//! fragments based on user config, which is the shape of an
-//! app-layer use-case, not pure quoting logic.
+//! `export_script` lives in `app`, not `domain::shell`, because it
+//! takes a `&Config` and selects template fragments based on user
+//! config, which is the shape of an app-layer use-case, not pure
+//! quoting logic.
 
 use crate::domain::model::{Config, TriggerKey};
 use crate::domain::shell::{
@@ -357,9 +356,9 @@ mod tests {
                 abbr: vec![],
             }),
         );
-        // New design: the bootstrap is a thin wrapper that calls
-        // `runex hook --shell bash` at keypress time. It should still bind the
-        // trigger key via `bind -x`, but the expansion logic itself now lives
+        // The bootstrap is a thin wrapper that calls
+        // `runex hook --shell bash` at keypress time. It binds the
+        // trigger key via `bind -x`, and the expansion logic lives
         // in the Rust binary — so there must be no inline `expand` call or
         // READLINE inspection in the template (the hook output handles both).
         assert!(s.contains("bind -x"), "bash bootstrap must use bind -x");
@@ -512,7 +511,7 @@ mod tests {
         );
         assert!(
             !s.contains("local RUNEX_KNOWN"),
-            "clink bootstrap must not embed token lookup table (moved to `runex hook`)"
+            "clink bootstrap must not embed token lookup table (the lookup runs in `runex hook`)"
         );
         assert!(s.contains(r#"pcall(rl.setbinding, [[" "]], [["luafunc:runex_expand"]], "emacs")"#), "clink script must bind the trigger key in emacs mode");
         assert!(s.contains(r#"pcall(rl.setbinding, [[" "]], [["luafunc:runex_expand"]], "vi-insert")"#), "clink script must bind the trigger key in vi insert mode");
@@ -667,15 +666,14 @@ mod tests {
 
     #[test]
     fn bash_script_omits_cyg_dispatcher_when_config_is_none() {
-        // `runex export bash` (no config) is the legacy escape hatch.
-        // It must stay byte-compatible with pre-0.1.17 callers so users
-        // who source it via `eval "$(runex export bash)"` aren't broken.
+        // `runex export bash` passes no config when no config file
+        // loads, and there is nothing to bake.
         let s = export_script(Shell::Bash, "runex", None);
         // The dispatcher block is empty — no bake-mode function definition
         // and no abbreviation table. The template still contains a
         // `case "${OSTYPE-}"` switch and a defensive `declare -F` probe,
         // but with no `__runex_cyg_expand` defined the probe falls through
-        // to the exec path. That's the legacy escape hatch contract.
+        // to the exec path.
         assert!(
             !s.contains("__runex_cyg_expand() {"),
             "bash export without a config must not define the bake dispatcher function: {s}"
@@ -769,7 +767,7 @@ mod tests {
         );
         assert!(
             !s.contains("__runex_is_known_token"),
-            "legacy helper removed (was for the pre-hook bake path)"
+            "bash must not define `__runex_is_known_token`"
         );
     }
 
@@ -833,7 +831,7 @@ mod tests {
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
         assert!(!s.contains("'gcm' { return $true }"), "pwsh must not embed tokens");
-        assert!(!s.contains("__runex_is_known_token"), "legacy helper removed");
+        assert!(!s.contains("__runex_is_known_token"), "pwsh must not define `__runex_is_known_token`");
     }
 
     #[test]
@@ -1492,8 +1490,7 @@ mod tests {
 
     } // mod regression_issues
 
-    /// Migrated from `domain::shell::tests::quote_functions` in
-    /// Phase D D2b — both tests assert on `export_script` output,
+    /// Nu quoting regressions that assert on `export_script` output,
     /// which is an app concern.
     mod nu_export_regression {
         use super::*;

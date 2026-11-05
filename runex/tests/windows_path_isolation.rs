@@ -1,8 +1,8 @@
 //! End-to-end regression: when `runex hook` is launched as a subprocess
 //! with a *degraded* PATH (the shape clink's lua `io.popen` produces),
 //! command-existence resolution must still succeed by augmenting the
-//! search path from HKCU/HKLM. Previously this scenario silently
-//! produced a no-op `InsertSpace` action and abbreviations failed to
+//! search path from HKCU/HKLM. Without the augmentation the hook
+//! returns a no-op `InsertSpace` action and abbreviations do not
 //! expand.
 //!
 //! ## What this test pins

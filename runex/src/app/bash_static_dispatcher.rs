@@ -21,16 +21,15 @@
 //! the existing `runex hook` exec path; one cache file serves every
 //! bash flavour the user might run with the same dotfiles.
 //!
-//! ## Command-position parity (issue #9, fixed in 0.1.19)
+//! ## Command-position parity
 //!
 //! The bake path reproduces `domain::hook::is_command_position` in pure
 //! bash via `__runex_cyg_is_command_position`: a `case` over the four
 //! pipeline operators (`&&`, `||`, `|`, `;`) plus a trailing-`sudo`
 //! recursion that itself defers to the same operator check. The result
 //! is byte-equivalent to what the Linux / WSL exec path returns for the
-//! same READLINE_LINE / READLINE_POINT. The 0.1.17 trade-off where
-//! Git Bash expanded any trailing token regardless of context (e.g.
-//! `echo gst<Space>` would still expand `gst`) no longer applies.
+//! same READLINE_LINE / READLINE_POINT, so `echo gst<Space>` does not
+//! expand `gst` on Git Bash either.
 
 use crate::domain::expand::NUMBER_PLACEHOLDER;
 use crate::domain::model::{Config, MatchKind, Shell};
@@ -236,9 +235,9 @@ fn bash_multibyte_blank_words() -> String {
 /// 4. `case "${OSTYPE-}"` — re-defines `__runex_expand` to either the
 ///    bake path (cygwin / msys) or keep the exec path (Linux / WSL).
 ///
-/// This block is inserted into `bash.sh` at `{BASH_CYG_DISPATCHER}` and
-/// is empty when `runex export bash` is called without a config so the
-/// legacy escape hatch (`eval "$(runex export bash)"`) stays unchanged.
+/// This block is inserted into `bash.sh` at `{BASH_CYG_DISPATCHER}`.
+/// Without a config the block is empty, and every bash takes the
+/// exec path.
 pub(crate) fn generate_cygwin_dispatcher(config: &Config) -> String {
     let exact = exact_table_lines(config);
     let patterns = pattern_table_lines(config);
@@ -912,8 +911,8 @@ mod tests {
     // ── command-position helper (issue #9) ───────────────────────────────
 
     /// The bake dispatcher must include a pure-bash command-position
-    /// helper so the runtime check (issue #9 closeout of the 0.1.17
-    /// trade-off) can run without spawning the runex binary from the
+    /// helper so the runtime check (issue #9) can run without
+    /// spawning the runex binary from the
     /// `bind -x` handler.
     #[test]
     fn bake_includes_command_position_helper() {
@@ -957,8 +956,8 @@ mod tests {
 
     /// The bake expand function must invoke the command-position
     /// helper before doing the abbreviation lookup. Without this the
-    /// helper would be dead code and the 0.1.17 trade-off would
-    /// silently survive.
+    /// helper would be dead code and Git Bash would expand tokens
+    /// outside command position.
     #[test]
     fn bake_expand_calls_command_position_before_lookup() {
         let c = cfg(vec![plain_abbr("gst", "git status")]);

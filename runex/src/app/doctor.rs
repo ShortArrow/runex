@@ -394,9 +394,8 @@ pub(crate) fn check_rejected_rules(config_source: &str) -> Vec<Check> {
 }
 
 /// Strict-mode check: warn when the deprecated `[precache]` section is
-/// present in the config. The section was used by the legacy shell template
-/// to emit a startup precache helper; the hook-based bootstraps consult the
-/// config at keypress time so the section now has no run-time effect.
+/// present in the config. No shell template reads it; only the hidden
+/// `runex precache` subcommand does.
 ///
 /// Returns an empty vec when the TOML is unparseable; that case is reported
 /// by `check_config_parse` already.
@@ -656,10 +655,10 @@ fn integration_marker_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
     out
 }
 
-/// Phase G: run the static integration-cache freshness check for
-/// each shell. Outputs `integration:<shell>:cache` rows in doctor.
-/// `Skipped` is the common case (no cache installed yet) and is
-/// rendered as Ok so users without Phase G install don't see noise.
+/// Run the static integration-cache freshness check for each shell.
+/// Outputs `integration:<shell>:cache` rows in doctor. `Skipped` is
+/// the common case (no cache installed yet) and is rendered as Ok so
+/// users without an installed cache don't see noise.
 fn integration_cache_checks(sel: &RcfileMarkerSelection) -> Vec<Check> {
     use crate::infra::env::SystemHomeDir;
     use crate::infra::integration_check::check_cache_freshness;

@@ -9,12 +9,6 @@
 //! (`__runex_expand` invoked from the actual key event), and the
 //! READLINE_LINE / READLINE_POINT plumbing.
 //!
-//! The 0.1.12 clink regression (silent fallback to a literal space
-//! when the cmd host's PATH was degraded) would have been caught by
-//! a test like this, just on the clink side. clink is harder to drive
-//! from Linux CI; bash's readline is the most stable target so we
-//! pin it first and treat the others as future work.
-//!
 //! Mechanics (PTY launch, sentinel prompt, integration sourcing) live
 //! in [`support::pty`]; this file owns only the bash-specific scenarios.
 

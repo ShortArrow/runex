@@ -8,7 +8,7 @@
 //! The keybindings themselves are wired up by the user's `config.nu`
 //! and require a TTY to fire; we cover those at the template-render
 //! level (`runex export nu`) in unit tests, and the per-keystroke
-//! decision logic in `runex-core::hook::tests`. This file fills the
+//! decision logic in `domain::hook::tests`. This file fills the
 //! middle gap: "given a real `nu` interpreter and a real `runex hook`
 //! invocation, do the two interoperate?".
 

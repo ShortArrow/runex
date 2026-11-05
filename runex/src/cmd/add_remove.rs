@@ -1,9 +1,9 @@
 //! `runex add <key> <expand>` and `runex remove <key>` — direct edits
 //! to the config TOML.
 //!
-//! Phase G additions: after a successful config edit, both handlers
-//! call `cmd::init::refresh_existing_caches` so any installed
-//! Phase G integration cache files (`<XDG_CACHE_HOME>/runex/
+//! After a successful config edit, both handlers call
+//! `cmd::init::refresh_existing_caches` so any installed
+//! integration cache files (`<XDG_CACHE_HOME>/runex/
 //! integration.<ext>`) immediately reflect the new abbreviation
 //! table on the next shell startup. Refresh is silent and best-
 //! effort: a transient I/O error on one shell's cache emits a
@@ -59,7 +59,7 @@ pub(crate) fn handle_remove(
 
 #[cfg(test)]
 mod tests {
-    //! Pin the Phase G silent-cache-refresh contract: after a
+    //! Pin the silent-cache-refresh contract: after a
     //! successful `add` / `remove`, every cache file the user has
     //! installed (`<XDG_CACHE_HOME>/runex/integration.<ext>`) is
     //! atomically rewritten to reflect the new abbreviation table.

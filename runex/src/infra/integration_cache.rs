@@ -3,26 +3,8 @@
 //! to `source` it, paying zero PATH-resolution cost on every shell
 //! startup or keystroke.
 //!
-//! ## Why this exists
-//!
-//! The previous integration model put `eval "$(runex export bash)"`
-//! directly into the user's rcfile. Two consequences:
-//!
-//! 1. **Per-shell-startup cost**: each interactive shell launches
-//!    `runex` synchronously through `$PATH`. On WSL with a `mise`
-//!    shim ahead of `~/.cargo/bin`, that lookup hits the shim
-//!    binary, which `exec`s the real `runex` after ~470 ms of
-//!    `mise` startup. That's once per shell — annoying but
-//!    bounded.
-//! 2. **Per-keystroke cost**: the generated hook function still
-//!    embedded `'runex' hook ...`, so `bind -x` callbacks paid the
-//!    same shim overhead on every Space press, producing visible
-//!    "prompt blanks for one second" UX breakage.
-//!
-//! Caching the export output to a file with the absolute path of
-//! the producing `runex` baked in eliminates both: rcfile sources
-//! a static file (no `$()`-substitution), and the hook function
-//! invokes the binary by absolute path (no PATH walk).
+//! Why the integration is a cached file: `docs/design.md`,
+//! "Shell integration is a static cache".
 //!
 //! ## Layering
 //!
@@ -34,9 +16,8 @@
 //!
 //! The atomic-write pattern (sibling temp + fsync + rename, with
 //! `O_NOFOLLOW` on Unix and a symlink reject everywhere) is the
-//! same one used by `cmd::init::write_clink_lua_safely` since
-//! 0.1.13. Phase G generalises it so all five shells share the
-//! same on-disk safety properties.
+//! same one used by `cmd::init::write_clink_lua_safely`, so all
+//! five shells share the same on-disk safety properties.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -58,7 +39,7 @@ use crate::infra::env::{xdg_cache_home_with, HomeDirResolver};
 ///   load on the exec path, so the bump exists to push `runex doctor`
 ///   into nudging Git Bash users back to `runex init bash` so they
 ///   pick up the Ctrl+C fix.
-/// - `3` (first release after 0.1.20): the pwsh template sends the
+/// - `3` (0.1.21): the pwsh template sends the
 ///   buffer hex-encoded (`--line-hex=`, issue #35), and the bash, zsh
 ///   and nu templates send it as one `--line=` argument (issue #50).
 pub(crate) const INTEGRATION_CACHE_VERSION: u32 = 3;
@@ -118,9 +99,9 @@ pub(crate) fn cache_path(
 /// `.<name>.runex.tmp` file then renames over the target so a
 /// crash mid-write leaves the previous version in place.
 ///
-/// Refuses to follow a symlink at `path` (Phase D security
-/// posture: an attacker who can place a symlink in the cache dir
-/// must not be able to redirect writes elsewhere).
+/// Refuses to follow a symlink at `path`: an attacker who can place
+/// a symlink in the cache dir must not be able to redirect writes
+/// elsewhere.
 pub(crate) fn write_cache_file(path: &Path, contents: &str) -> Result<(), CacheError> {
     let parent = path
         .parent()

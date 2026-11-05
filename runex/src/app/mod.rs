@@ -12,7 +12,7 @@
 //! cycle.
 //!
 //! `app::config` holds parse + validate; the file I/O lives in
-//! `infra::config_store` (Phase D D3b). The architecture rule
+//! `infra::config_store`. The architecture rule
 //! `no_filesystem_calls_in_app_layer` prevents `std::fs::*` from
 //! drifting back into this directory.
 //!

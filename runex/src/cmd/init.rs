@@ -78,7 +78,7 @@ pub(crate) fn handle(
     Ok(CmdOutcome::Ok)
 }
 
-/// Phase G shell integration installer for bash/zsh/pwsh/nu.
+/// Shell integration installer for bash/zsh/pwsh/nu.
 ///
 /// Two-phase install:
 ///
@@ -90,9 +90,9 @@ pub(crate) fn handle(
 ///    in `infra::integration_cache::write_cache_file`.
 ///
 /// 2. **Append a source line** to the user's rcfile pointing at the
-///    cache. Idempotent via `RUNEX_INIT_MARKER`; the rcfile-write
-///    safety properties (append-only, `O_NOFOLLOW`, user
-///    confirmation) are unchanged from 0.1.14.
+///    cache. Idempotent via `RUNEX_INIT_MARKER`; the rcfile write
+///    is append-only, opens with `O_NOFOLLOW` and asks the user to
+///    confirm.
 ///
 /// Returns the rcfile path for the Next-steps blurb. Cache write
 /// happens unconditionally on `--yes` or after user confirmation
@@ -333,7 +333,7 @@ fn write_clink_lua_safely(install_path: &Path, contents: &str) -> CmdResult {
     Ok(CmdOutcome::Ok)
 }
 
-/// Refresh every existing Phase G integration cache file silently.
+/// Refresh every existing integration cache file silently.
 /// Called from `cmd::add_remove::handle_add` /
 /// `handle_remove` after the user's `config.toml` has been edited
 /// so the cached scripts pick up the new abbreviation table on the
@@ -467,11 +467,8 @@ mod tests {
     //! end-to-end without touching the real filesystem outside the
     //! test's tempdir, and without mutating process env vars.
     //!
-    //! Phase D D5 added these tests to prove the resolver is wired
-    //! through *production* `handle`, not just the underlying app
-    //! helpers. Before D5 the resolver only entered through `_with`
-    //! suffix functions that the binary itself never called, so the
-    //! cmd-level handler was effectively un-injected.
+    //! They prove the resolver is wired through *production*
+    //! `handle`, not only through the `_with` suffix helpers.
 
     use super::*;
     use crate::infra::env::EnvHomeDir;

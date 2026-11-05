@@ -1,28 +1,24 @@
 //! Compile-time-ish architecture rules for the `runex` crate.
 //!
-//! Walks `runex/src/` from inside the cargo test runner and asserts
-//! the layering contract: `cmd → app → {domain, infra}`,
-//! `infra → domain`, nothing imports upward, no cycles. The rules
-//! exist so a future refactor can't quietly re-introduce the
-//! `app::doctor → infra::integration_check → app::init` cycle that
-//! Phase D removed (or any other circular import).
+//! Walks `runex/src/` from inside the cargo test runner and checks
+//! the `use` lines of `infra`, `domain` and `cmd` against the layer
+//! dependencies listed at the top of `runex/src/main.rs`, and the
+//! `std::fs` calls in `app`.
 //!
 //! ## Why a test instead of `cargo deny`
 //!
 //! The single-process test runs in <30 ms, has zero external
 //! dependencies, and shows up in the same green-bar / red-bar gate
 //! as the rest of the suite. `cargo deny` would need a separate
-//! config file and a CI step; for a 12-file `src/` tree the cost is
-//! much higher than the value.
+//! config file and a CI step.
 //!
 //! ## How rules are expressed
 //!
 //! Each rule is a triple of `(layer_we_check, forbidden_use_prefix,
-//! human-readable rationale)`. The walker only inspects `use`
-//! lines — fully-qualified paths inside function bodies (rare in
-//! this crate, and a code smell in their own right) are out of
-//! scope. If a violation slips in via `crate::foo::bar()` instead
-//! of `use crate::foo`, the next refactor will surface it.
+//! human-readable rationale)`. The import rules inspect only `use`
+//! lines — fully-qualified paths inside function bodies are out
+//! of scope, so `infra::integration_check` calling
+//! `crate::app::init::integration_line` passes every rule.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -223,10 +219,10 @@ fn src_root() -> PathBuf {
 /// three entries, the right move is to lift those types into
 /// `domain/` rather than relax the rule further.
 ///
-/// The Phase D D1b/D3b splits moved `RUNEX_INIT_MARKER`,
-/// `rc_file_for*`, and the config file I/O out of `app/` into
-/// `infra/` precisely so this rule can hold; if it ever fires on a
-/// non-exempt symbol we have a cycle (`app → infra → app`).
+/// `RUNEX_INIT_MARKER`, `rc_file_for*`, and the config file I/O
+/// live in `infra/`, not `app/`, so this rule can hold; if it ever
+/// fires on a non-exempt symbol we have a cycle
+/// (`app → infra → app`).
 #[test]
 fn no_infra_to_app_imports() {
     let infra_dir = src_root().join("infra");
@@ -298,30 +294,24 @@ fn no_domain_to_anyone_else_imports() {
 /// stay legal because cmd needs the type names to pass values
 /// around.
 ///
-/// Forbidden today: `crate::domain::expand`, `crate::domain::hook`,
-/// `crate::domain::shell::export_script` (the orchestration symbol
-/// inside an otherwise pure module — Phase D moves it to
-/// `app::shell_export`, after which a stricter rule can ban every
-/// `crate::domain::shell::*` except the `Shell` type itself).
+/// Forbidden: `crate::domain::expand`, `crate::domain::hook`, and
+/// `crate::domain::shell::export_script`. `export_script` is an
+/// orchestration symbol and lives in `app::shell_export`; the
+/// needle keeps cmd from importing it from `domain::shell`.
 #[test]
 fn no_cmd_to_domain_behavior_imports() {
     let cmd_dir = src_root().join("cmd");
     // `crate::domain::shell::export_script` shows up in `use crate::
     // domain::shell::export_script` style or as
     // `use crate::domain::shell::{export_script, Shell}`. The
-    // simple substring catches both. Phase D D2 will remove the
-    // need for this needle entirely — once `export_script` lives in
-    // `app`, no `cmd/*` will reference it from `domain`.
+    // simple substring catches both.
     let forbidden = [
         "crate::domain::expand",
         "crate::domain::hook",
-        // `export_script` is the only orchestration symbol that
-        // historically lived in `domain::shell`. Phase D D2 moves it
-        // to `app::shell_export`; this rule enforces that cmd
-        // callers go through `app` from then on. The substring
-        // catches both the explicit `use crate::domain::shell::
-        // export_script` form and the bracket form
-        // `use crate::domain::shell::{export_script, Shell}`.
+        // `export_script` lives in `app::shell_export`; cmd callers
+        // go through `app`. The needle stays so a
+        // `crate::domain::shell::export_script` import cannot come
+        // back.
         "crate::domain::shell::export_script",
     ];
     let mut violations = Vec::new();
@@ -351,9 +341,8 @@ fn no_cmd_to_domain_behavior_imports() {
 /// `app/` must stay file-system-free in production code: every
 /// destructive `std::fs::*` call (`write`, `rename`, `remove_file`,
 /// `OpenOptions`, `File::open`, `create_dir_all`, …) belongs in
-/// `infra/`. Phase D D3 moves the config-file I/O from
-/// `app/config.rs` into `infra/config_store.rs` precisely so this
-/// rule can hold.
+/// `infra/`. The config-file I/O lives in `infra/config_store.rs`,
+/// not `app/config.rs`, so this rule can hold.
 ///
 /// Only production lines are checked — `#[cfg(test)] mod` blocks are
 /// allowed to touch the file system because the tests build their

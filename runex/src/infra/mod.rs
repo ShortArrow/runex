@@ -3,11 +3,14 @@
 //!
 //! ## Dependency direction
 //!
-//! `infra → domain` only. `infra` must not import from `app`, `cmd`,
-//! or `util`. The trait definitions that `app` consumes for
-//! injection (`HomeDirResolver`, future `ConfigStore` etc.) live
-//! here too, so `app` has a single import target for "the outside
-//! world".
+//! `infra → domain`. `infra` must not import from `app`, `cmd`, or
+//! `util`; the `no_infra_to_app_imports` architecture test allows
+//! one exception, the `app::config::ConfigError` type. It checks
+//! `use` lines only, and `integration_check::check_rcfile_marker`
+//! calls `crate::app::init::integration_line` by its full path.
+//! The trait definitions that `app` consumes for injection
+//! (`HomeDirResolver`) live here too, so `app` has a single import
+//! target for "the outside world".
 
 pub mod clipboard;
 pub mod config_store;
