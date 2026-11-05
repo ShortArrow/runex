@@ -39,8 +39,8 @@ use crate::infra::env::{rc_file_for, SystemHomeDir};
 /// idempotent re-runs. Living in `infra::integration_check` rather
 /// than `app::init` because both the *write side* (`cmd::init`) and
 /// the *read side* (`check_rcfile_marker`) need it, and the latter
-/// lives here in `infra`. Defining it in `app::init` would create an
-/// `app → infra → app` cycle.
+/// lives here in `infra`. Defining it in `app::init` would make
+/// `infra` import `app` for it.
 pub(crate) const RUNEX_INIT_MARKER: &str = "# runex-init";
 
 /// Maximum bytes any of the rcfile / clink-lua probes will read.

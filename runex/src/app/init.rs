@@ -107,8 +107,7 @@ pub(crate) fn integration_line(shell: Shell, cache_path: &str) -> String {
             // wraps in `^"..."` which is nu's *external-command*
             // prefix — `source ^"path"` parses as "run an executable
             // called <path>, then source its output" and fails with
-            // "File not found: ^<path>" (issue surfaced during pre-release
-            // hand-check on nu 0.112.2).
+            // "File not found: ^<path>" (nu 0.112.2).
             //
             // Use a single-quoted literal instead. Nu's single-quoted
             // strings are byte-literal: no escape sequences, no
@@ -525,10 +524,10 @@ mod tests {
 
     } // mod integration_line
 
-    /// Pin RLO / BOM / ZWSP / control-char / `$` injection-safety
-    /// of `integration_line(Shell::Nu, ...)`, which drops those
-    /// characters with `sanitize_nu_cache_path_literal` and wraps the
-    /// path in a single-quoted nu literal.
+    /// Pin how `integration_line(Shell::Nu, ...)` handles RLO, BOM,
+    /// ZWSP, control characters and `$`: `sanitize_nu_cache_path_literal`
+    /// drops all but `$`, and the single-quoted nu literal keeps `$`
+    /// verbatim.
     mod integration_line_nu_security {
         use super::*;
 
@@ -587,11 +586,10 @@ mod tests {
             );
         }
 
-        /// All C0 control characters except `\n`, `\r`, `\t` must
-        /// be dropped from the cache path. `\n`, `\r`, `\t`
-        /// themselves get explicit `\n`, `\r`, `\t` escapes; any
-        /// other control char is silently removed (= `is_nu_drop_char`
-        /// policy).
+        /// All C0 control characters other than `\n`, `\r`, `\t`
+        /// must be dropped from the cache path. Those three are
+        /// dropped as well; `newline_in_cache_path_does_not_inject`
+        /// covers `\n`.
         #[test]
         fn drops_remaining_c0_controls_in_cache_path() {
             let dangerous_c0: &[char] = &[

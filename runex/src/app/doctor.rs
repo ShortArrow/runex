@@ -394,8 +394,8 @@ pub(crate) fn check_rejected_rules(config_source: &str) -> Vec<Check> {
 }
 
 /// Strict-mode check: warn when the deprecated `[precache]` section is
-/// present in the config. The hook-based bootstraps consult the config at
-/// keypress time, so the section has no run-time effect.
+/// present in the config. No shell template reads it; only the hidden
+/// `runex precache` subcommand does.
 ///
 /// Returns an empty vec when the TOML is unparseable; that case is reported
 /// by `check_config_parse` already.

@@ -353,10 +353,10 @@ pub(crate) fn compute_precache_fingerprint(config_path: &Path, shell: &str) -> S
 /// resolve_config(...); shell = resolve_shell(...).unwrap_or(
 /// Shell::Bash); fp = compute_precache_fingerprint(...);
 /// command_exists = make_command_exists(path_prepend, Some(&fp));`
-/// sequence that `which`, `expand`, `timings`, `precache`, `hook`,
-/// and `doctor` all need, so a runtime change touches one place and
-/// the precache-fingerprint policy (`Some(fp)` vs `None`) is a
-/// single decision per command.
+/// sequence for `which`, `expand`, `hook` and `doctor`, so the
+/// precache-fingerprint policy (`Some(fp)` vs `None`) is a single
+/// decision per command. `timings` and `precache` run the sequence
+/// themselves.
 ///
 /// `command_exists` is `Box<dyn Fn>` so the context is movable;
 /// the underlying closure owns its `path_prepend` so the context
@@ -383,13 +383,12 @@ pub(crate) struct AppContext {
 
 impl AppContext {
     /// Build a context for commands that *require* a loadable config
-    /// (`which`, `expand`, `timings`, `precache`). Fails fast if the
-    /// config is missing or unparseable.
+    /// (`which`, `expand`). Fails fast if the config is missing or
+    /// unparseable.
     ///
     /// `precache_enabled` controls whether the `command_exists`
-    /// closure consults the on-disk precache hint. Most commands
-    /// pass `true`; precache itself and doctor, which must check live,
-    /// pass `false`.
+    /// closure consults the on-disk precache hint. `doctor`, which
+    /// must check live, passes `false`; the other callers pass `true`.
     pub(crate) fn build(
         config_flag: Option<&Path>,
         shell_flag: Option<&str>,
@@ -483,9 +482,8 @@ pub(crate) struct OptionalContext {
 
 /// Items at crate root use the util fns directly. cmd/* and util/*
 /// reach the rest of util via fully-qualified paths. The only
-/// crate-root callers of these are `AppContext` (for
-/// `make_command_exists_owned`) and the `Commands::List` dispatch
-/// arm (for `resolve_shell`).
+/// crate-root callers of these are `AppContext` (both) and the
+/// `Commands::List` dispatch arm (`resolve_shell`).
 use util::path::make_command_exists_owned;
 use util::shell::resolve_shell;
 

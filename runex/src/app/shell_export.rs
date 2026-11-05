@@ -511,7 +511,7 @@ mod tests {
         );
         assert!(
             !s.contains("local RUNEX_KNOWN"),
-            "clink bootstrap must not embed token lookup table (moved to `runex hook`)"
+            "clink bootstrap must not embed token lookup table (the lookup runs in `runex hook`)"
         );
         assert!(s.contains(r#"pcall(rl.setbinding, [[" "]], [["luafunc:runex_expand"]], "emacs")"#), "clink script must bind the trigger key in emacs mode");
         assert!(s.contains(r#"pcall(rl.setbinding, [[" "]], [["luafunc:runex_expand"]], "vi-insert")"#), "clink script must bind the trigger key in vi insert mode");
@@ -666,15 +666,15 @@ mod tests {
 
     #[test]
     fn bash_script_omits_cyg_dispatcher_when_config_is_none() {
-        // `runex export bash` (no config) is the legacy escape hatch.
-        // It must stay byte-compatible with pre-0.1.17 callers so users
-        // who source it via `eval "$(runex export bash)"` aren't broken.
+        // `runex export bash` with no config is what
+        // `eval "$(runex export bash)"` in an rc file runs, and there is
+        // no config to bake into it.
         let s = export_script(Shell::Bash, "runex", None);
         // The dispatcher block is empty — no bake-mode function definition
         // and no abbreviation table. The template still contains a
         // `case "${OSTYPE-}"` switch and a defensive `declare -F` probe,
         // but with no `__runex_cyg_expand` defined the probe falls through
-        // to the exec path. That's the legacy escape hatch contract.
+        // to the exec path.
         assert!(
             !s.contains("__runex_cyg_expand() {"),
             "bash export without a config must not define the bake dispatcher function: {s}"
@@ -768,7 +768,7 @@ mod tests {
         );
         assert!(
             !s.contains("__runex_is_known_token"),
-            "legacy helper removed (was for the pre-hook bake path)"
+            "bash must not define `__runex_is_known_token`"
         );
     }
 
@@ -832,7 +832,7 @@ mod tests {
         };
         let s = export_script(Shell::Pwsh, "runex", Some(&config));
         assert!(!s.contains("'gcm' { return $true }"), "pwsh must not embed tokens");
-        assert!(!s.contains("__runex_is_known_token"), "legacy helper removed");
+        assert!(!s.contains("__runex_is_known_token"), "pwsh must not define `__runex_is_known_token`");
     }
 
     #[test]

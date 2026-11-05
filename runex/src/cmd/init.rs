@@ -90,9 +90,9 @@ pub(crate) fn handle(
 ///    in `infra::integration_cache::write_cache_file`.
 ///
 /// 2. **Append a source line** to the user's rcfile pointing at the
-///    cache. Idempotent via `RUNEX_INIT_MARKER`; the rcfile-write
-///    safety properties (append-only, `O_NOFOLLOW`, user
-///    confirmation) are unchanged from 0.1.14.
+///    cache. Idempotent via `RUNEX_INIT_MARKER`; the rcfile write
+///    is append-only, opens with `O_NOFOLLOW` and asks the user to
+///    confirm.
 ///
 /// Returns the rcfile path for the Next-steps blurb. Cache write
 /// happens unconditionally on `--yes` or after user confirmation
@@ -468,8 +468,7 @@ mod tests {
     //! test's tempdir, and without mutating process env vars.
     //!
     //! They prove the resolver is wired through *production*
-    //! `handle`, not just through `_with` suffix helpers that the
-    //! binary itself never calls.
+    //! `handle`, not only through the `_with` suffix helpers.
 
     use super::*;
     use crate::infra::env::EnvHomeDir;

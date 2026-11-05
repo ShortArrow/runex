@@ -2,18 +2,14 @@
 //!
 //! Walks `runex/src/` from inside the cargo test runner and asserts
 //! the layering contract: `cmd → app → {domain, infra}`,
-//! `infra → domain`, nothing imports upward, no cycles. The rules
-//! exist so a refactor can't quietly introduce an
-//! `app::doctor → infra::integration_check → app::init` cycle (or
-//! any other circular import).
+//! `infra → domain`, nothing imports upward, no cycles.
 //!
 //! ## Why a test instead of `cargo deny`
 //!
 //! The single-process test runs in <30 ms, has zero external
 //! dependencies, and shows up in the same green-bar / red-bar gate
 //! as the rest of the suite. `cargo deny` would need a separate
-//! config file and a CI step; for a 12-file `src/` tree the cost is
-//! much higher than the value.
+//! config file and a CI step.
 //!
 //! ## How rules are expressed
 //!
@@ -21,8 +17,8 @@
 //! human-readable rationale)`. The walker only inspects `use`
 //! lines — fully-qualified paths inside function bodies (rare in
 //! this crate, and a code smell in their own right) are out of
-//! scope. If a violation slips in via `crate::foo::bar()` instead
-//! of `use crate::foo`, the next refactor will surface it.
+//! scope, so `infra::integration_check` calling
+//! `crate::app::init::integration_line` passes every rule.
 
 use std::fs;
 use std::path::{Path, PathBuf};

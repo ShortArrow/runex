@@ -461,10 +461,6 @@ mod tests {
         assert_eq!(bash_quote_buffer("it's"), r"'it'\''s'");
     }
 
-    // bash_quote_pattern tests dropped — the helper and its callers (the
-    // case-arm builder) are gone now that abbreviations aren't embedded in
-    // shell code.
-
     #[test]
     fn lua_quote_string_escapes_nul() {
         let s = lua_quote_string("run\x00ex");

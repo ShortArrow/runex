@@ -132,10 +132,8 @@ where
 // These three live here (not in `app::init` / `app::config`) because
 // they are pure path arithmetic over the `HomeDirResolver` trait,
 // with no Config or other app-layer concerns. Keeping them in
-// `infra` avoids an `app::doctor → infra::integration_check →
-// app::init` cycle: integration_check needs to resolve rcfile
-// paths, and reaching into `app::init` for that would not express
-// a real dependency on init logic.
+// `infra` lets `infra::integration_check` resolve rcfile paths
+// without reaching into `app::init`.
 
 use crate::domain::shell::Shell;
 

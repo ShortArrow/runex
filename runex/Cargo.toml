@@ -16,8 +16,7 @@ name = "runex"
 path = "src/main.rs"
 
 # Bin-only crate. There is intentionally no `[lib]` target — all
-# code lives under the bin's `domain`/`app`/`infra` modules and is
-# `pub(crate)`. External users
+# code lives in the bin's modules and is `pub(crate)`. External users
 # install the CLI via `cargo install runex`; programmatic consumers
 # would need to embed the bin or the source. See `runex/src/main.rs`
 # crate-root docstring for the layering contract.

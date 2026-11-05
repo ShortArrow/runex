@@ -3,26 +3,8 @@
 //! to `source` it, paying zero PATH-resolution cost on every shell
 //! startup or keystroke.
 //!
-//! ## Why this exists
-//!
-//! The previous integration model put `eval "$(runex export bash)"`
-//! directly into the user's rcfile. Two consequences:
-//!
-//! 1. **Per-shell-startup cost**: each interactive shell launches
-//!    `runex` synchronously through `$PATH`. On WSL with a `mise`
-//!    shim ahead of `~/.cargo/bin`, that lookup hits the shim
-//!    binary, which `exec`s the real `runex` after ~470 ms of
-//!    `mise` startup. That's once per shell — annoying but
-//!    bounded.
-//! 2. **Per-keystroke cost**: the generated hook function still
-//!    embedded `'runex' hook ...`, so `bind -x` callbacks paid the
-//!    same shim overhead on every Space press, producing visible
-//!    "prompt blanks for one second" UX breakage.
-//!
-//! Caching the export output to a file with the absolute path of
-//! the producing `runex` baked in eliminates both: rcfile sources
-//! a static file (no `$()`-substitution), and the hook function
-//! invokes the binary by absolute path (no PATH walk).
+//! Why the integration is a cached file: `docs/design.md`,
+//! "Shell integration is a static cache".
 //!
 //! ## Layering
 //!
