@@ -1,7 +1,8 @@
 //! Read the aliases bash and pwsh define, for `runex doctor`.
 //!
-//! Each shell runs as a child process with a timeout and an output cap,
-//! and its output is parsed with per-entry and per-run limits.
+//! Each shell runs as a child process with an output cap, and its
+//! output is parsed with per-entry and per-run limits. The child is
+//! killed after a timeout on Unix only; on Windows it is waited for.
 
 use std::collections::HashMap;
 #[cfg(unix)]
