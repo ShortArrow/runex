@@ -41,7 +41,8 @@ mod infra;
 mod util;
 
 use clap::{Parser, Subcommand};
-use crate::app::config::{default_config_path, load_config};
+use crate::app::config::load_config;
+use crate::infra::config_store::default_config_path;
 use crate::domain::model::Config;
 use crate::domain::sanitize::sanitize_for_display;
 use crate::domain::shell::Shell;

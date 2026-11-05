@@ -50,7 +50,7 @@ pub(crate) fn handle_type(config_path: &Path) -> CmdResult {
         eprintln!("{}", missing_config_message(config_path));
         return Ok(CmdOutcome::ExitCode(1));
     }
-    let text = crate::app::config::read_config_text(config_path)?;
+    let text = crate::infra::config_store::read_config_source(config_path)?;
     print!("{}", sanitize_multiline_for_display(&text));
     Ok(CmdOutcome::Ok)
 }
