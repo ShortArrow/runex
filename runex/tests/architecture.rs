@@ -400,8 +400,9 @@ fn no_filesystem_calls_in_app_layer() {
     );
 }
 
-/// Every production module lives in one of the layers, so the rules
-/// above cover it. `main.rs` is the crate root and wires the layers
+/// Every production module lives in one of the layers, so the rule
+/// for its layer applies to it (no rule checks `util`). `main.rs` is
+/// the crate root and wires the layers
 /// together; any other file or directory directly under `src/` sits
 /// outside every rule.
 #[test]
