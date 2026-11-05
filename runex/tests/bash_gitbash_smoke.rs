@@ -327,6 +327,9 @@ fn cache_without_interactive_guard(src: &Path, dst: &Path) {
 
 /// Run a bash script under Git Bash with a given OSTYPE, sourcing
 /// the cache file first. Returns stdout (panics on non-zero exit).
+///
+/// `--noprofile` leaves `/usr/bin` off MSYS2 bash's PATH, so `script`
+/// uses bash builtins only.
 fn run_under_gitbash(bash: &Path, cache: &Path, ostype: &str, script: &str) -> String {
     // Strip the interactive guard into a sibling file so we can
     // source it from `bash -c`. The original cache is untouched —
@@ -409,7 +412,7 @@ fn routes_to_bake_dispatcher_under_cygwin_family_ostypes() {
                 bash,
                 &cache,
                 ostype,
-                "declare -f __runex_expand | grep -q __runex_cyg_expand && echo CYG || echo OTHER",
+                "[[ $(declare -f __runex_expand) == *__runex_cyg_expand* ]] && echo CYG || echo OTHER",
             );
             assert_eq!(
                 out.trim(),
@@ -430,7 +433,7 @@ fn routes_to_exec_dispatcher_under_non_cygwin_ostype() {
             bash,
             &cache,
             "linux-gnu",
-            "declare -f __runex_expand | grep -q __runex_exec_expand && echo EXEC || echo OTHER",
+            "[[ $(declare -f __runex_expand) == *__runex_exec_expand* ]] && echo EXEC || echo OTHER",
         );
         assert_eq!(
             out.trim(),
