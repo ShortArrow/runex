@@ -328,10 +328,11 @@ fn cache_without_interactive_guard(src: &Path, dst: &Path) {
 /// Run a bash script under Git Bash with a given OSTYPE, sourcing
 /// the cache file first. Returns stdout (panics on non-zero exit).
 ///
-/// Under `--noprofile`, MSYS2's and Git's `usr/bin/bash.exe` keep the
-/// test process's PATH and do not add their own `/usr/bin`, so `grep`,
-/// `seq` and the other coreutils may be missing (Git's `bin/bash.exe`
-/// wrapper does add it). `script` therefore uses bash builtins only.
+/// As a non-login `bash -c`, MSYS2's and Git's `usr/bin/bash.exe`
+/// never read `/etc/profile`, which is what adds `/usr/bin`; they keep
+/// the test process's PATH, so `grep`, `seq` and the other coreutils
+/// may be missing (Git's `bin/bash.exe` wrapper adds `/usr/bin`
+/// itself). `script` therefore uses bash builtins only.
 fn run_under_gitbash(bash: &Path, cache: &Path, ostype: &str, script: &str) -> String {
     // Strip the interactive guard into a sibling file so we can
     // source it from `bash -c`. The original cache is untouched —
@@ -766,6 +767,10 @@ echo "LINE=[$READLINE_LINE] POINT=$READLINE_POINT""#,
 }
 
 /// Parity with the exec path found by differential review of #46.
+///
+/// The byte-cap case types `l` and 600 `ä`; the `l*` rule renders the
+/// capture four times, 2400 characters but 4800 bytes, so the rule is
+/// skipped only when the 4096 cap counts bytes.
 #[test]
 fn bake_glob_edge_cases_match_the_exec_path_on_every_cygwin_bash() {
     for_each_cygwin_bash("bake_glob_edge_cases", |label, bash| {
