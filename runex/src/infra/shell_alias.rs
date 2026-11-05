@@ -7,7 +7,6 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::time::Duration;
 
-
 /// Maximum number of alias entries accepted from a single shell invocation.
 /// Prevents unbounded memory consumption if a misbehaving or compromised shell
 /// emits an unusually large number of alias definitions.

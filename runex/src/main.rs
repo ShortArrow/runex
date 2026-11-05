@@ -18,12 +18,13 @@
 //!   Implements injection traits (`HomeDirResolver`) for `app/`.
 //!   `infra → domain` only.
 //! - `cmd/`     — per-subcommand handlers. Reach behaviour through
-//!   `app/`; reach leaf utilities through `util/`. The architecture
+//!   `app/`; reach shared helpers through `util/`. The architecture
 //!   test forbids `cmd → domain::{expand, hook}` and
 //!   `cmd → domain::shell::export_script`.
-//! - `util/`    — leaf helpers shared by `cmd/*` (shell detection,
+//! - `util/`    — helpers shared by `cmd/*` (shell detection,
 //!   prompt confirmation, command-existence factory). No
-//!   command-specific policy.
+//!   command-specific policy. The command-existence factory reads
+//!   the cache in `app::precache`.
 //!
 //! Cycles are prevented at compile-time by
 //! `runex/tests/architecture.rs` (`no_infra_to_app_imports`,
