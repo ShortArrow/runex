@@ -1,9 +1,9 @@
 //! Compile-time-ish architecture rules for the `runex` crate.
 //!
 //! Walks `runex/src/` from inside the cargo test runner and checks
-//! the `use` lines of `infra`, `domain` and `cmd` against the layer
-//! dependencies listed at the top of `runex/src/main.rs`, and the
-//! `std::fs` calls in `app`.
+//! the `use` lines of `domain` and `cmd` and every production line of
+//! `infra` against the layer dependencies listed at the top of
+//! `runex/src/main.rs`, and the `std::fs` calls in `app`.
 //!
 //! ## Why a test instead of `cargo deny`
 //!
@@ -15,23 +15,24 @@
 //! ## How rules are expressed
 //!
 //! Each rule is a triple of `(layer_we_check, forbidden_use_prefix,
-//! human-readable rationale)`. The import rules inspect only `use`
-//! lines — fully-qualified paths inside function bodies are out
-//! of scope, so `infra::integration_check` calling
-//! `crate::app::init::integration_line` passes every rule.
+//! human-readable rationale)`. The `domain` and `cmd` rules inspect
+//! only `use` lines, so a fully-qualified path inside a function body
+//! passes them; the `infra` rule inspects every production line.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Return every non-comment, non-`use`, non-test-mod source line in
-/// `content` together with its 1-indexed number. Mirrors `use_lines`'s
-/// `#[cfg(test)] mod` skipping so layering rules apply only to the
-/// production code that ships in the binary.
+/// Return every non-comment, non-test-mod source line in `content`
+/// (`use` lines included) together with its 1-indexed number.
+/// Mirrors `use_lines`'s `#[cfg(test)] mod` skipping so layering
+/// rules apply only to the production code that ships in the binary.
 ///
 /// Comment-only lines and lines whose first non-whitespace token is
 /// `//` are dropped. Trailing `// foo` comments stay in the line — the
 /// substring rules below check for the *call site* (`std::fs::write(`)
-/// which won't appear inside a comment by accident.
+/// which won't appear inside a comment by accident. A `#[cfg(test)]`
+/// item that is not a `mod` (a test-only function) counts as
+/// production code.
 fn production_lines(content: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let mut depth: usize = 0;
@@ -223,6 +224,10 @@ fn src_root() -> PathBuf {
 /// live in `infra/`, not `app/`, so this rule can hold; if it ever
 /// fires on a non-exempt symbol we have a cycle
 /// (`app → infra → app`).
+///
+/// Every production line is checked, not only `use` lines, so a
+/// fully-qualified `crate::app::…` call in a function body is a
+/// violation too.
 #[test]
 fn no_infra_to_app_imports() {
     let infra_dir = src_root().join("infra");
@@ -234,7 +239,7 @@ fn no_infra_to_app_imports() {
     let exempt_substrings = ["crate::app::config::ConfigError"];
     let mut violations = Vec::new();
     for (path, content) in collect_rs_files(&infra_dir) {
-        for (lineno, line) in use_lines(&content) {
+        for (lineno, line) in production_lines(&content) {
             if !line.contains("crate::app") {
                 continue;
             }

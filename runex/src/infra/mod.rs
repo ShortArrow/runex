@@ -6,8 +6,8 @@
 //! `infra → domain`. `infra` must not import from `app`, `cmd`, or
 //! `util`; the `no_infra_to_app_imports` architecture test allows
 //! one exception, the `app::config::ConfigError` type. It checks
-//! `use` lines only, and `integration_check::check_rcfile_marker`
-//! calls `crate::app::init::integration_line` by its full path.
+//! every production line, so a full-path `crate::app::…` call is
+//! caught as well as a `use` line.
 //! The trait definitions that `app` consumes for injection
 //! (`HomeDirResolver`) live here too, so `app` has a single import
 //! target for "the outside world".
