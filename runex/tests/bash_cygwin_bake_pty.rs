@@ -216,8 +216,8 @@ fn cygwin_bake_strips_cursor_placeholder_from_rendered_expansion() {
 //
 // The five tests below pin one expectation each: the bake path mirrors
 // `domain::hook::is_command_position` for argument-position tokens (no
-// expand) and every command-position prefix listed in
-// `docs/recipes.md` (`sudo`, `|`, `&&`, `;`).
+// expand) and for the command-position prefixes `sudo`, `|`, `&&` and
+// `;` from `docs/recipes.md`.
 
 #[test]
 fn cygwin_bake_skips_expansion_after_echo() {

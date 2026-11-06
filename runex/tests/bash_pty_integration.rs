@@ -43,8 +43,8 @@ fn space_triggers_expand_for_known_token() {
 }
 
 /// Mirror of `bash_cygwin_bake_pty::cygwin_bake_skips_expansion_after_echo`
-/// for the exec path (Linux bash → `runex hook`). The exec path has always
-/// honoured `is_command_position`, so `echo gcm<Space>` self-inserts a
+/// for the exec path (Linux bash → `runex hook`). The exec path honours
+/// `is_command_position`, so `echo gcm<Space>` self-inserts a
 /// literal space instead of expanding `gcm`. Putting the assertion side
 /// by side with the bake-path counterpart makes the parity visible in
 /// any diff that touches command-position handling (issue #9).
