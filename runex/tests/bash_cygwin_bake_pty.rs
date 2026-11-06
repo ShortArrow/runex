@@ -239,22 +239,21 @@ fn cygwin_bake_skips_expansion_after_echo() {
     let mut session = spawn_cyg_bash(&rcfile, home);
 
     session.send("echo gst ").ok();
-    session.send_line("").ok();
+    session.send_line("'RX''DONE'").ok();
 
     use expectrl::Regex;
-    // After the trigger Space the line should still be `echo gst ` and
-    // bash's `echo` will print `gst` somewhere in the PTY stream. The
-    // critical negative property is that the *expanded* output
-    // (`echo EXPANDED_GST` would produce the string `EXPANDED_GST` on
-    // its own) does NOT appear — anchored matches like `^gst\b` are
-    // unreliable through mintty/xterm framing, so we assert via the
-    // positive `gst` token plus the absence of `EXPANDED_GST`.
-    let saw = session.expect(Regex(r"gst")).is_ok();
+    let output = session
+        .expect(Regex(r"RXDONE"))
+        .map(|captures| String::from_utf8_lossy(captures.before()).into_owned());
     session.send_line("exit").ok();
+    let output = output.expect("the line ran, so its two quoted halves printed joined");
     assert!(
-        saw,
-        "bake path must NOT expand `gst` after `echo ` (argument position); \
-         expected `echo gst` to run and print plain `gst`"
+        !output.contains("EXPANDED_GST"),
+        "bake path must NOT expand `gst` after `echo ` (argument position); output: {output:?}"
+    );
+    assert!(
+        output.ends_with("gst "),
+        "`echo` should have received `gst` as typed; output: {output:?}"
     );
 }
 
