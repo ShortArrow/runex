@@ -75,8 +75,9 @@ pub struct PtySession {
     /// Monotonic counter for the per-line sync token in
     /// [`Self::send_line_synced`].
     sync_counter: u64,
-    /// How long each bootstrap step may take: the shell starting up, or
-    /// [`Self::send_line_synced`] waiting for a line to finish.
+    /// How long each step may take: the shell starting up,
+    /// [`Self::send_line_synced`] waiting for a line to finish, or
+    /// [`Self::expect_regex`] waiting for its needle.
     step_timeout: Duration,
     /// The last `DSR_QUERY.len() - 1` bytes read, carried across
     /// `try_read` calls so a query split over two reads is still
@@ -85,18 +86,18 @@ pub struct PtySession {
     /// When the child last printed anything; `None` until it has.
     last_output: Option<Instant>,
     /// When the shell was launched, so a failure can say how long the
-    /// whole bootstrap had taken.
+    /// session had been running.
     started: Instant,
     /// Everything read since launch. Unlike `seen` it is never
-    /// cleared, so a bootstrap failure can show the startup output too.
+    /// cleared, so a failure can show the startup output too.
     transcript: String,
 }
 
-/// How much of the transcript a [`BootstrapError`] keeps, counted
+/// How much of the transcript a [`StepError`] keeps, counted
 /// from the end: enough for a banner and a few prompts.
 const TRANSCRIPT_TAIL: usize = 4096;
 
-/// What stopped a step of the bootstrap.
+/// What stopped a step.
 #[derive(Debug)]
 pub enum Cause {
     Launch(String),
@@ -108,12 +109,13 @@ pub enum Cause {
     Export(String),
 }
 
-/// Why [`PtySession::spawn`] could not hand back a ready session. Its
+/// Why [`PtySession::spawn`] could not hand back a ready session, or
+/// why [`PtySession::expect_regex`] did not see its needle. Its
 /// `Debug` form is what a failed `.expect(..)` prints, so it carries
 /// what is needed to tell a slow shell from a broken one.
-pub struct BootstrapError {
-    /// `launch`, `startup`, `runex export nu`, or the line the harness
-    /// had sent to the shell.
+pub struct StepError {
+    /// `launch`, `startup`, `runex export nu`, the line the harness
+    /// had sent to the shell, or `expect "<needle>"`.
     pub step: String,
     pub cause: Cause,
     /// Time from launch to the failure.
@@ -122,7 +124,7 @@ pub struct BootstrapError {
     pub output: String,
 }
 
-impl std::fmt::Debug for BootstrapError {
+impl std::fmt::Debug for StepError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "step {:?} failed {:.1?} after launch: {:?}", self.step, self.elapsed, self.cause)?;
         write!(f, "output since launch: {:?}", self.output)
@@ -135,13 +137,13 @@ impl PtySession {
     /// produced by `runex export <shell>`, and block until the post-
     /// source prompt has settled.
     ///
-    /// Returns a [`BootstrapError`] if the shell can't be launched or
+    /// Returns a [`StepError`] if the shell can't be launched or
     /// any of the setup steps don't complete within [`DEFAULT_TIMEOUT`].
     /// Tests check that the shell is installed *before* calling this,
     /// so they treat the error as a failure (`.expect(..)`), never as a
     /// skip: a harness that quietly stops bootstrapping must turn the
     /// suite red, not green.
-    pub fn spawn(shell: PtyShell, runex_bin: &str, config: &Path) -> Result<Self, BootstrapError> {
+    pub fn spawn(shell: PtyShell, runex_bin: &str, config: &Path) -> Result<Self, StepError> {
         let mut this = Self::launch(&launch_command(shell, runex_bin))?;
         this.settle_startup(shell)?;
         bootstrap(&mut this, shell, runex_bin, config)?;
@@ -154,9 +156,9 @@ impl PtySession {
     /// Run `command` under a PTY. The window is made wide and tall so a
     /// wrapped line doesn't derail the editor's cursor tracking during
     /// a keystroke test; the PTY otherwise defaults to a small size.
-    fn launch(command: &str) -> Result<Self, BootstrapError> {
+    fn launch(command: &str) -> Result<Self, StepError> {
         let started = Instant::now();
-        let mut session = expectrl::spawn(command).map_err(|e| BootstrapError {
+        let mut session = expectrl::spawn(command).map_err(|e| StepError {
             step: "launch".to_string(),
             cause: Cause::Launch(e.to_string()),
             elapsed: started.elapsed(),
@@ -175,13 +177,13 @@ impl PtySession {
         })
     }
 
-    /// A [`BootstrapError`] for `step`, with the tail of the transcript.
-    fn failure(&self, step: &str, cause: Cause) -> BootstrapError {
+    /// A [`StepError`] for `step`, with the tail of the transcript.
+    fn failure(&self, step: &str, cause: Cause) -> StepError {
         let mut from = self.transcript.len().saturating_sub(TRANSCRIPT_TAIL);
         while !self.transcript.is_char_boundary(from) {
             from += 1;
         }
-        BootstrapError {
+        StepError {
             step: step.to_string(),
             cause,
             elapsed: self.started.elapsed(),
@@ -214,7 +216,7 @@ impl PtySession {
     /// typed input (pwsh, nu do; bash, zsh do not). Serialising each
     /// bootstrap line this way stops a line editor from accumulating
     /// several unexecuted lines into one multi-line buffer.
-    fn send_line_synced(&mut self, s: &str, sep: &str, echo: &str) -> Result<(), BootstrapError> {
+    fn send_line_synced(&mut self, s: &str, sep: &str, echo: &str) -> Result<(), StepError> {
         // A fresh token per call so a stale one from an earlier line
         // can't satisfy the wait.
         self.sync_counter += 1;
@@ -258,18 +260,20 @@ impl PtySession {
 
     /// Block until `needle` appears in the child's output, answering
     /// any DSR cursor-position query in the meantime so the shell's
-    /// line editor never blocks on us. Returns `Some(())` on match and
-    /// `None` on the [`DEFAULT_TIMEOUT`] deadline or a read error.
+    /// line editor never blocks on us. Fails with a [`StepError`] for
+    /// step `expect "<needle>"` when `step_timeout` passes or a read
+    /// fails.
     ///
     /// `needle` is matched as a literal substring, not a regex: the
     /// sentinel and the expansions under test contain no metacharacters
     /// and a literal match can't be fooled by an unescaped `.`.
-    pub fn expect_regex(&mut self, needle: &str) -> Option<()> {
-        self.read_until(needle, DEFAULT_TIMEOUT).ok()
+    pub fn expect_regex(&mut self, needle: &str) -> Result<(), StepError> {
+        self.read_until(needle, self.step_timeout)
+            .map_err(|cause| self.failure(&format!("expect {needle:?}"), cause))
     }
 
     /// Block until the [`SENTINEL_PROMPT`] appears.
-    pub fn expect_prompt(&mut self) -> Option<()> {
+    pub fn expect_prompt(&mut self) -> Result<(), StepError> {
         self.expect_regex(SENTINEL_PROMPT)
     }
 
@@ -329,7 +333,7 @@ impl PtySession {
     /// slow macOS runner pwsh then rendered the first bootstrap line but
     /// never ran it. A shell that has not printed its prompt within
     /// `step_timeout`, including one that exited, fails at `startup`.
-    fn settle_startup(&mut self, shell: PtyShell) -> Result<(), BootstrapError> {
+    fn settle_startup(&mut self, shell: PtyShell) -> Result<(), StepError> {
         let start = Instant::now();
         loop {
             // A needle that never arrives makes `read_until` a drain
@@ -423,7 +427,7 @@ fn bootstrap(
     shell: PtyShell,
     runex_bin: &str,
     config: &Path,
-) -> Result<(), BootstrapError> {
+) -> Result<(), StepError> {
     let cfg = config.display();
     // Per-shell statement separator and echo command, used by
     // `send_line_synced` to append a "this line finished" token to
@@ -616,7 +620,7 @@ mod startup_tests {
 }
 
 #[cfg(test)]
-mod bootstrap_error_tests {
+mod step_error_tests {
     use super::*;
 
     #[test]
@@ -636,8 +640,24 @@ mod bootstrap_error_tests {
     }
 
     #[test]
+    fn an_expect_that_never_matches_reports_the_needle_the_cause_and_the_output() {
+        let deadline = Duration::from_millis(200);
+        let mut session = PtySession::launch("cat").expect("cat runs under a PTY");
+        session.step_timeout = deadline;
+        session.send_line("typed").expect("the PTY accepts a line");
+        session.expect_regex("typed").expect("cat prints the line back");
+        session.seen.clear();
+        let err = session
+            .expect_regex("never printed")
+            .expect_err("cat prints back only the line it was sent");
+        assert_eq!(err.step, r#"expect "never printed""#);
+        assert!(matches!(err.cause, Cause::Timeout(d) if d == deadline), "{err:?}");
+        assert!(err.output.contains("typed"), "{err:?}");
+    }
+
+    #[test]
     fn the_failure_message_names_the_step_the_cause_and_the_output() {
-        let err = BootstrapError {
+        let err = StepError {
             step: "function prompt { 'p' }".to_string(),
             cause: Cause::Timeout(DEFAULT_TIMEOUT),
             elapsed: Duration::from_millis(6200),
