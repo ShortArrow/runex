@@ -214,21 +214,15 @@ fn cygwin_bake_strips_cursor_placeholder_from_rendered_expansion() {
 
 // ─── command-position parity with the exec path (issue #9) ──────────
 //
-// 0.1.17 carved out command-position detection so the Ctrl+C fix
-// (#7) could ship. 0.1.19 restores parity: `echo gst<Space>` no
-// longer expands on the bake path, matching what the Linux/WSL exec
-// path has always done. The five tests below pin one expectation
-// each — the bake path now mirrors `domain::hook::is_command_position`
-// for argument-position tokens (no expand) and every command-position
-// prefix listed in `docs/recipes.md` (`sudo`, `|`, `&&`, `;`).
+// The five tests below pin one expectation each: the bake path mirrors
+// `domain::hook::is_command_position` for argument-position tokens (no
+// expand) and for the command-position prefixes `sudo`, `|`, `&&` and
+// `;` from `docs/recipes.md`.
 
 #[test]
 fn cygwin_bake_skips_expansion_after_echo() {
-    // Argument position. The 0.1.17 trade-off would have expanded
-    // `gst` here, producing `echo echo EXPANDED_GST` and printing
-    // `echo EXPANDED_GST` to stdout. Post-#9 it must self-insert a
-    // literal space, leaving the line as `echo gst ` and printing
-    // a plain `gst` (= bash sees `echo gst` as the command).
+    // Argument position: the Space self-inserts, so the line prints
+    // `gst RXDONE`. An expansion would print `echo EXPANDED_GST RXDONE`.
     if !bash4_available() {
         eprintln!("skipping: bash 4+ not available");
         return;
@@ -239,22 +233,21 @@ fn cygwin_bake_skips_expansion_after_echo() {
     let mut session = spawn_cyg_bash(&rcfile, home);
 
     session.send("echo gst ").ok();
-    session.send_line("").ok();
+    session.send_line("'RX''DONE'").ok();
 
     use expectrl::Regex;
-    // After the trigger Space the line should still be `echo gst ` and
-    // bash's `echo` will print `gst` somewhere in the PTY stream. The
-    // critical negative property is that the *expanded* output
-    // (`echo EXPANDED_GST` would produce the string `EXPANDED_GST` on
-    // its own) does NOT appear — anchored matches like `^gst\b` are
-    // unreliable through mintty/xterm framing, so we assert via the
-    // positive `gst` token plus the absence of `EXPANDED_GST`.
-    let saw = session.expect(Regex(r"gst")).is_ok();
+    let output = session
+        .expect(Regex(r"RXDONE"))
+        .map(|captures| String::from_utf8_lossy(captures.before()).into_owned());
     session.send_line("exit").ok();
+    let output = output.expect("the line ran, so its two quoted halves printed joined");
     assert!(
-        saw,
-        "bake path must NOT expand `gst` after `echo ` (argument position); \
-         expected `echo gst` to run and print plain `gst`"
+        !output.contains("EXPANDED_GST"),
+        "bake path must NOT expand `gst` after `echo ` (argument position); output: {output:?}"
+    );
+    assert!(
+        output.ends_with("gst "),
+        "`echo` should have received `gst` as typed; output: {output:?}"
     );
 }
 

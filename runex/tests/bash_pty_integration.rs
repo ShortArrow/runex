@@ -43,11 +43,13 @@ fn space_triggers_expand_for_known_token() {
 }
 
 /// Mirror of `bash_cygwin_bake_pty::cygwin_bake_skips_expansion_after_echo`
-/// for the exec path (Linux bash → `runex hook`). The exec path has always
-/// honoured `is_command_position`, so `echo gcm<Space>` self-inserts a
+/// for the exec path (Linux bash → `runex hook`). The exec path honours
+/// `is_command_position`, so `echo gcm<Space>` self-inserts a
 /// literal space instead of expanding `gcm`. Putting the assertion side
 /// by side with the bake-path counterpart makes the parity visible in
 /// any diff that touches command-position handling (issue #9).
+/// The line ends in `'RX''DONE'`, which prints `RXDONE` only when the
+/// line runs, so the checks read the executed output.
 #[test]
 fn space_does_not_expand_after_echo_argument_position() {
     if !bash4_available() {
@@ -58,28 +60,20 @@ fn space_does_not_expand_after_echo_argument_position() {
     let mut session = PtySession::spawn(PtyShell::Bash, runex_bin_str(), config.path())
         .expect("the shell is installed, so a PTY session that fails to bootstrap is a real failure, not a skip");
 
-    // Type `echo gcm` then Space. `echo ` is not a command position,
-    // so the hook must leave the buffer as `echo gcm ` (literal space)
-    // and bash should print `gcm` — NOT the expanded EXPANDED string.
     session.send("echo gcm ");
-    session.send_line("");
+    session.send_line("'RX''DONE'");
 
-    // We expect bash to print the literal token `gcm` (= what `echo`
-    // received as its argument) somewhere in the output, and *not* the
-    // `EXPANDED` marker that would only appear if the bake / hook
-    // rewrote the buffer. We can't anchor `gcm` to a line start because
-    // mintty / xterm don't always emit a leading newline before the
-    // output. So we assert two things separately: `gcm` appears, and
-    // `EXPANDED` does NOT.
     session
-        .expect_regex(r"gcm")
-        .expect("expected `gcm` to appear in stdout (= echo printed its argument)");
-    // Best-effort negative check: we already matched `gcm` so the
-    // session buffer should not also carry `EXPANDED`. expectrl's
-    // expect_regex doesn't expose a non-blocking try-match, so we
-    // resort to sending another keystroke and inspecting the prompt
-    // round-trip — but that's flaky in CI. Keep the positive assert
-    // and rely on the bake-side test for the negative side.
+        .expect_regex("RXDONE")
+        .expect("the line ran, so its two quoted halves printed joined");
+    assert!(
+        !session.saw("EXPANDED"),
+        "`gcm` after `echo ` is an argument, so the Space must not expand it"
+    );
+    assert!(
+        session.saw("gcm RXDONE"),
+        "`echo` should have received `gcm` as typed"
+    );
 }
 
 /// Issue #50: a line that starts with `-` reaches `runex hook` as the
