@@ -553,10 +553,14 @@ pub(crate) const MAX_HOOK_LINE_BYTES: usize = 16 * 1024;
 /// `CmdOutcome::ExitCode(n)` and `main` translates that here, so a test
 /// can call a handler and inspect its outcome without the process
 /// dying. An error from `run` is printed as `error: <message>` and
-/// exits with 1.
+/// exits with 1. The message can quote the config file, so characters
+/// unsafe for a terminal are stripped; newlines stay.
 fn main() {
     let outcome = run().unwrap_or_else(|e| {
-        eprintln!("error: {e}");
+        eprintln!(
+            "error: {}",
+            crate::domain::sanitize::sanitize_multiline_for_display(&e.to_string())
+        );
         CmdOutcome::ExitCode(1)
     });
     if let CmdOutcome::ExitCode(code) = outcome {

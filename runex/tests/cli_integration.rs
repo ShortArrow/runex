@@ -603,6 +603,21 @@ fn failed_add_prints_the_io_message_not_the_error_enums() {
     assert!(!stderr.contains("Store("), "stderr must not show the Debug form: {stderr}");
 }
 
+/// A TOML parse error quotes the offending config line, so the message
+/// printed after `error: ` must not carry that line's control bytes to
+/// the terminal.
+#[test]
+fn failed_list_does_not_echo_control_bytes_from_the_config_into_stderr() {
+    let cfg = write_config("bad \x1b[2J\x07\u{202e}line = = =\n");
+    let (_, stderr, ok) = run(&["list"], Some(cfg.path()), None);
+    assert!(!ok);
+    assert!(stderr.starts_with("error: "), "{stderr:?}");
+    assert!(stderr.contains("[2J"), "the parse error should quote the line: {stderr:?}");
+    for c in ['\x1b', '\x07', '\u{202e}'] {
+        assert!(!stderr.contains(c), "stderr must not contain {c:?}: {stderr:?}");
+    }
+}
+
 #[test]
 fn explicit_config_parse_error_exits_nonzero() {
     let cfg = write_config("this is not valid toml [[[");
