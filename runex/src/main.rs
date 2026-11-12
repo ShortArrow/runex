@@ -524,7 +524,7 @@ pub(crate) enum CmdOutcome {
 
 pub(crate) type CmdResult = Result<CmdOutcome, Box<dyn std::error::Error>>;
 
-// Per-subcommand handlers live in `cmd::*`. main()'s dispatch just
+// Per-subcommand handlers live in `cmd::*`. run()'s dispatch just
 // forwards there.
 
 
@@ -548,7 +548,25 @@ pub(crate) type CmdResult = Result<CmdOutcome, Box<dyn std::error::Error>>;
 /// on that single keypress.
 pub(crate) const MAX_HOOK_LINE_BYTES: usize = 16 * 1024;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// The single point of `process::exit` for the whole CLI. Handlers
+/// never call `std::process::exit` themselves: they return
+/// `CmdOutcome::ExitCode(n)` and `main` translates that here, so a test
+/// can call a handler and inspect its outcome without the process
+/// dying. An error from `run` is printed as `error: <message>` and
+/// exits with 1.
+fn main() {
+    let outcome = run().unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        CmdOutcome::ExitCode(1)
+    });
+    if let CmdOutcome::ExitCode(code) = outcome {
+        std::process::exit(code);
+    }
+}
+
+/// Parse the command line and run the chosen subcommand. An error is
+/// returned to `main`, which prints its message.
+fn run() -> CmdResult {
     let cli = Cli::parse();
 
     let outcome: CmdOutcome = match cli.command {
@@ -678,16 +696,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Single point of `process::exit` for the whole CLI. Handlers
-    // never call `std::process::exit` themselves — they return
-    // `CmdOutcome::ExitCode(n)` and main translates that here. This
-    // is what makes handlers unit-testable: a test harness can call
-    // them directly and inspect the returned outcome instead of
-    // having the test process silently die.
-    match outcome {
-        CmdOutcome::Ok => Ok(()),
-        CmdOutcome::ExitCode(code) => std::process::exit(code),
-    }
+    Ok(outcome)
 }
 
 #[cfg(test)]

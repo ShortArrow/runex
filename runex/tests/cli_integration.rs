@@ -576,6 +576,33 @@ fn explicit_config_not_found_exits_nonzero_and_mentions_path() {
     assert!(stderr.contains("nonexistent"), "stderr must mention the path: {stderr}");
 }
 
+/// A failed command prints its error's message after `error: `, not
+/// the error's `Debug` form.
+#[test]
+fn failed_list_prints_the_message_after_an_error_prefix() {
+    let (_, stderr, ok) = run(&["list"], Some(Path::new("/nonexistent/config.toml")), None);
+    assert!(!ok);
+    assert!(
+        stderr.starts_with("error: failed to load config "),
+        "stderr must be `error: <message>`, not a quoted Debug string: {stderr}"
+    );
+}
+
+/// The same holds for an error `infra::config_store` returns through
+/// `app::config::ConfigError`, whose `Debug` form names both enums.
+#[test]
+fn failed_add_prints_the_io_message_not_the_error_enums() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("missing").join("config.toml");
+    let (_, stderr, ok) = run(&["add", "gcm", "git commit -m"], Some(&config), None);
+    assert!(!ok);
+    assert!(
+        stderr.starts_with("error: IO error: "),
+        "stderr must be `error: <message>`: {stderr}"
+    );
+    assert!(!stderr.contains("Store("), "stderr must not show the Debug form: {stderr}");
+}
+
 #[test]
 fn explicit_config_parse_error_exits_nonzero() {
     let cfg = write_config("this is not valid toml [[[");

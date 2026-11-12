@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed command prints `error: <message>` on stderr. It printed
+  Rust's debug form instead, such as `Error: "failed to load config
+  …"` with quotes, or `Error: Store(Io(Os { code: 13, … }))` for a
+  config file runex could not write.
+
 ### Docs
 
 - The install guide and README describe installing from the APT
