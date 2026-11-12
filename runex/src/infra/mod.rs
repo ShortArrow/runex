@@ -4,8 +4,7 @@
 //! ## Dependency direction
 //!
 //! `infra → domain`. `infra` must not import from `app`, `cmd`, or
-//! `util`; the `no_infra_to_app_imports` architecture test allows
-//! one exception, the `app::config::ConfigError` type. It checks
+//! `util`; the `no_infra_to_app_imports` architecture test checks
 //! every production line, so a full-path `crate::app::…` call is
 //! caught as well as a `use` line.
 //! The trait definitions that `app` consumes for injection

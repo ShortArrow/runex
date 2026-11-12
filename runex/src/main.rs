@@ -6,7 +6,7 @@
 //!   cmd    → app, infra, util, domain (data types and pure helpers)
 //!   app    → domain, infra
 //!   util   → domain, infra
-//!   infra  → domain, app::config::ConfigError
+//!   infra  → domain
 //!   domain → nothing
 //! ```
 //!
@@ -18,8 +18,7 @@
 //!   for this token?". No `std::fs::*` calls.
 //! - `infra/`   — file system, environment, registry adapters.
 //!   Implements injection traits (`HomeDirResolver`) for `app/`.
-//!   `infra → domain`, apart from the `app::config::ConfigError`
-//!   type that `infra::config_store` returns.
+//!   `infra → domain`.
 //! - `cmd/`     — per-subcommand handlers. Reach behaviour through
 //!   `app/`, file, environment and cache access through `infra/`,
 //!   and shared helpers through `util/`. The architecture

@@ -214,19 +214,10 @@ fn src_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-/// `infra` must not import behaviour from `app`. Type-only imports
-/// (an error enum, a DTO struct) are allowed because they don't
-/// introduce a behavior cycle — `infra` constructs the variants,
-/// `app` consumes them. The exempt list below pins exactly which
-/// type names cross the layer; any other `use crate::app::…` line
-/// is treated as a violation. If the exempt list grows past two or
-/// three entries, the right move is to lift those types into
-/// `domain/` rather than relax the rule further.
-///
-/// `RUNEX_INIT_MARKER`, `rc_file_for*`, and the config file I/O
-/// live in `infra/`, not `app/`, so this rule can hold; if it ever
-/// fires on a non-exempt symbol we have a cycle
-/// (`app → infra → app`).
+/// `infra` must not reach into `app`, not even for a type: a type
+/// `infra` returns is defined in `infra` (or `domain`), and `app`
+/// wraps it. `RUNEX_INIT_MARKER`, `rc_file_for*`, the config file I/O
+/// and its `ConfigStoreError` live in `infra/` so this rule can hold.
 ///
 /// Every production line is checked, not only `use` lines, so a
 /// fully-qualified `crate::app::…` call in a function body is a
@@ -234,19 +225,10 @@ fn src_root() -> PathBuf {
 #[test]
 fn no_infra_to_app_imports() {
     let infra_dir = src_root().join("infra");
-    // Type-only re-imports that don't constitute a behavior cycle.
-    // Each one must be a leaf type (enum/struct/trait), not a
-    // function. `ConfigError` is an enum constructed by
-    // `infra::config_store` and consumed by callers in `app::config`;
-    // it's a leaf data type even though it's defined in `app/`.
-    let exempt_substrings = ["crate::app::config::ConfigError"];
     let mut violations = Vec::new();
     for (path, content) in collect_rs_files(&infra_dir) {
         for (lineno, line) in production_lines(&content) {
             if !line.contains("crate::app") {
-                continue;
-            }
-            if exempt_substrings.iter().any(|s| line.contains(s)) {
                 continue;
             }
             violations.push(format!(
@@ -260,8 +242,7 @@ fn no_infra_to_app_imports() {
     }
     assert!(
         violations.is_empty(),
-        "infra/ must not import from app/ (other than the exempt type-only \
-         imports). Found:\n  {}",
+        "infra/ must not import from app/. Found:\n  {}",
         violations.join("\n  ")
     );
 }

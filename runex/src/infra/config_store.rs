@@ -6,25 +6,25 @@
 //!   I/O — exercised by `parse_config` / `collect_validation_issues`).
 //! - This module holds every `std::fs::*` call against
 //!   `~/.config/runex/config.toml` (and the `RUNEX_CONFIG` override
-//!   path), wrapped behind functions that return `ConfigError` so the
-//!   call sites stay typed.
+//!   path), wrapped behind functions that return `ConfigStoreError`
+//!   so the call sites stay typed.
 //!
 //! The architecture test `no_filesystem_calls_in_app_layer` enforces
 //! the split: any `std::fs::write` / `OpenOptions` / `rename` /
 //! `remove_file` in `app/` is a regression and will fail CI.
-//!
-//! ## Why `infra → app::config::ConfigError` is OK
-//!
-//! `ConfigError` is a *type* defined in `app::config`; this module
-//! re-uses it so callers don't have to convert between two error
-//! enums. That's a leaf type import, not a behaviour cycle —
-//! `infra::config_store` doesn't call any function from `app::config`,
-//! it only constructs `ConfigError::Io(_)` / `ConfigError::FileTooLarge`
-//! / `ConfigError::NoConfigDir` variants.
 
 use std::path::{Path, PathBuf};
 
-use crate::app::config::ConfigError;
+/// Why locating, reading or writing the config file failed.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ConfigStoreError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("cannot determine config directory")]
+    NoConfigDir,
+    #[error("config file exceeds maximum size of 10 MB")]
+    FileTooLarge,
+}
 
 const MAX_CONFIG_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
@@ -32,13 +32,13 @@ const MAX_CONFIG_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 /// falling back to `~/.config/runex/config.toml` when `XDG_CONFIG_HOME`
 /// is unset. All platforms use this same resolution order. Overridden
 /// by the `RUNEX_CONFIG` env var.
-pub(crate) fn default_config_path() -> Result<PathBuf, ConfigError> {
+pub(crate) fn default_config_path() -> Result<PathBuf, ConfigStoreError> {
     if let Ok(p) = std::env::var("RUNEX_CONFIG")
         && !p.is_empty() {
             return Ok(PathBuf::from(p));
         }
     let dir = crate::infra::env::xdg_config_home_with(&crate::infra::env::SystemHomeDir);
-    Ok(dir.ok_or(ConfigError::NoConfigDir)?.join("runex").join("config.toml"))
+    Ok(dir.ok_or(ConfigStoreError::NoConfigDir)?.join("runex").join("config.toml"))
 }
 
 /// Read a config file into a string with the safety guarantees that
@@ -65,7 +65,7 @@ pub(crate) fn default_config_path() -> Result<PathBuf, ConfigError> {
 /// what they already have (writing arbitrary commands into the
 /// abbreviation table), so we accept the risk in exchange for keeping
 /// the dotfiles pattern frictionless.
-pub(crate) fn read_config_source(path: &Path) -> Result<String, ConfigError> {
+pub(crate) fn read_config_source(path: &Path) -> Result<String, ConfigStoreError> {
     use std::io::Read;
     #[cfg(unix)]
     let mut file = {
@@ -80,13 +80,13 @@ pub(crate) fn read_config_source(path: &Path) -> Result<String, ConfigError> {
     let mut file = std::fs::File::open(path)?;
     let meta = file.metadata()?;
     if !meta.is_file() {
-        return Err(ConfigError::Io(std::io::Error::new(
+        return Err(ConfigStoreError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "config path must be a regular file",
         )));
     }
     if meta.len() > MAX_CONFIG_FILE_BYTES {
-        return Err(ConfigError::FileTooLarge);
+        return Err(ConfigStoreError::FileTooLarge);
     }
     let mut content = String::new();
     file.read_to_string(&mut content)?;
@@ -144,12 +144,12 @@ fn open_config_for_append_safely(path: &Path) -> std::io::Result<std::fs::File> 
 /// so the other name keeps the old content. There is no portable way to
 /// detect a hard link from Rust's stable API on Windows, and dotfile
 /// managers use symlinks, so this is documented rather than guarded.
-fn atomically_write_config(path: &Path, contents: &str) -> Result<(), ConfigError> {
+fn atomically_write_config(path: &Path, contents: &str) -> Result<(), ConfigStoreError> {
     use std::io::Write;
-    let path = std::fs::canonicalize(path).map_err(ConfigError::Io)?;
+    let path = std::fs::canonicalize(path).map_err(ConfigStoreError::Io)?;
     let path = path.as_path();
     let parent = path.parent().ok_or_else(|| {
-        ConfigError::Io(std::io::Error::new(
+        ConfigStoreError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "config path has no parent directory",
         ))
@@ -158,7 +158,7 @@ fn atomically_write_config(path: &Path, contents: &str) -> Result<(), ConfigErro
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| {
-            ConfigError::Io(std::io::Error::new(
+            ConfigStoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "config path has no file name",
             ))
@@ -176,22 +176,22 @@ fn atomically_write_config(path: &Path, contents: &str) -> Result<(), ConfigErro
             .write(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(&tmp)
-            .map_err(ConfigError::Io)?
+            .map_err(ConfigStoreError::Io)?
     };
     #[cfg(not(unix))]
     let mut file = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(&tmp)
-        .map_err(ConfigError::Io)?;
+        .map_err(ConfigStoreError::Io)?;
 
-    file.write_all(contents.as_bytes()).map_err(ConfigError::Io)?;
-    file.sync_all().map_err(ConfigError::Io)?;
+    file.write_all(contents.as_bytes()).map_err(ConfigStoreError::Io)?;
+    file.sync_all().map_err(ConfigStoreError::Io)?;
     drop(file);
 
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        ConfigError::Io(e)
+        ConfigStoreError::Io(e)
     })
 }
 
@@ -205,7 +205,7 @@ pub(crate) fn append_abbr_block(
     key: &str,
     expand: &str,
     when_command_exists: Option<&[String]>,
-) -> Result<(), ConfigError> {
+) -> Result<(), ConfigStoreError> {
     let mut block = String::from("\n[[abbr]]\n");
     block.push_str(&format!("key = {}\n", toml_quote(key)));
     block.push_str(&format!("expand = {}\n", toml_quote(expand)));
@@ -215,18 +215,18 @@ pub(crate) fn append_abbr_block(
     }
 
     use std::io::Write;
-    let mut file = open_config_for_append_safely(path).map_err(ConfigError::Io)?;
-    file.write_all(block.as_bytes()).map_err(ConfigError::Io)?;
+    let mut file = open_config_for_append_safely(path).map_err(ConfigStoreError::Io)?;
+    file.write_all(block.as_bytes()).map_err(ConfigStoreError::Io)?;
     Ok(())
 }
 
 /// Remove all abbreviation rules with `key` from `path`. Uses
 /// `toml_edit` to preserve formatting; writes atomically via a
 /// sibling temp + rename. Returns the number of rules removed.
-pub(crate) fn remove_abbr_block(path: &Path, key: &str) -> Result<usize, ConfigError> {
+pub(crate) fn remove_abbr_block(path: &Path, key: &str) -> Result<usize, ConfigStoreError> {
     let content = read_config_source(path)?;
     let mut doc = content.parse::<toml_edit::DocumentMut>().map_err(|_| {
-        ConfigError::Io(std::io::Error::new(
+        ConfigStoreError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "failed to parse config as editable TOML",
         ))
