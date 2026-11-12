@@ -17,12 +17,8 @@ const NUMBER_PLACEHOLDER: &str = "{number}";
 pub(crate) enum ConfigError {
     #[error("{0}")]
     Parse(#[from] toml::de::Error),
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("cannot determine config directory")]
-    NoConfigDir,
-    #[error("config file exceeds maximum size of 10 MB")]
-    FileTooLarge,
+    #[error(transparent)]
+    Store(#[from] crate::infra::config_store::ConfigStoreError),
     #[error("config has too many abbr rules (max {MAX_ABBR_RULES})")]
     TooManyRules,
     #[error("abbr rule #{0}: key exceeds maximum length of {MAX_KEY_BYTES} bytes")]
@@ -900,7 +896,7 @@ pub(crate) fn append_abbr_to_file(
     if existing.abbr.len() + 1 > MAX_ABBR_RULES {
         return Err(ValidationIssue::Config { reason: ValidationReason::TooManyRules }.to_config_error());
     }
-    crate::infra::config_store::append_abbr_block(path, key, expand, when_command_exists)
+    crate::infra::config_store::append_abbr_block(path, key, expand, when_command_exists).map_err(ConfigError::from)
 }
 
 /// Remove all abbreviation rules with the given key from a config
@@ -915,7 +911,7 @@ pub(crate) fn append_abbr_to_file(
 /// table with a matching key is not enough.
 pub(crate) fn remove_abbr_from_file(path: &std::path::Path, key: &str) -> Result<usize, ConfigError> {
     load_config(path)?;
-    crate::infra::config_store::remove_abbr_block(path, key)
+    crate::infra::config_store::remove_abbr_block(path, key).map_err(ConfigError::from)
 }
 
 #[cfg(test)]
