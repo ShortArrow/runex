@@ -43,8 +43,8 @@ use crate::infra::env::{rc_file_for, SystemHomeDir};
 pub(crate) const RUNEX_INIT_MARKER: &str = "# runex-init";
 
 /// Maximum bytes any of the rcfile / clink-lua probes will read.
-/// Matches `config::MAX_CONFIG_FILE_BYTES` so the safety story is
-/// uniform across the three doctor file-reads.
+/// Matches `MAX_CONFIG_FILE_BYTES` in `infra::config_store` so the
+/// safety story is uniform across the three doctor file-reads.
 ///
 /// 10 MiB is plenty for a real rcfile (multi-megabyte rcfiles are
 /// pathological) and for a `runex.lua` (the template renders to a
@@ -52,10 +52,12 @@ pub(crate) const RUNEX_INIT_MARKER: &str = "# runex-init";
 /// could not be read.
 const MAX_PROBE_FILE_BYTES: u64 = 10 * 1024 * 1024;
 
-/// Read a file with the same safety guarantees as
-/// `config::read_config_source`: refuses non-regular files (FIFO /
-/// device nodes), refuses oversized content, and refuses symlinks at
-/// the final path component on every platform.
+/// Read a file with the checks
+/// [`crate::infra::config_store::read_config_source`] applies: refuses
+/// non-regular files (FIFO / device nodes) and oversized content.
+/// Unlike that function, which follows a config symlink into a
+/// dotfiles repository, this also refuses a symlink at the final path
+/// component on every platform.
 ///
 /// * **Unix:** `O_NOFOLLOW | O_NONBLOCK` make `open()` itself fail
 ///   on a final-component symlink and prevent a named pipe with no
@@ -66,7 +68,8 @@ const MAX_PROBE_FILE_BYTES: u64 = 10 * 1024 * 1024;
 ///   This covers ordinary symlinks; directory junctions and other
 ///   reparse-point variants typically fail the `is_file()` check
 ///   below, but we don't rely on that and the explicit symlink reject
-///   keeps policy parity with the clink write path in `main.rs`.
+///   keeps policy parity with the clink write path
+///   (`cmd::init::write_clink_lua_safely`).
 ///
 /// Returns `None` for any failure mode (the doctor callers all
 /// treat a `None` read as "skip / missing", which is the correct
