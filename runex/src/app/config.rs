@@ -170,7 +170,7 @@ pub(crate) enum ValidationReason {
 /// A single validation failure.
 ///
 /// `ValidationIssue` carries enough information for `doctor` to produce a
-/// field-path-aware warning ("abbr[3].expand.pwsh rejected: expand is empty")
+/// field-path-aware warning (`abbr[3].expand.pwsh rejected: expand is empty`)
 /// while `parse_config` can still convert it back into a single `ConfigError`.
 ///
 /// `field_path` is a *logical* path — it mirrors the in-memory `PerShellString`

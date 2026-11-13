@@ -163,7 +163,7 @@ enum Commands {
         /// Show full error details (e.g. multi-line parse errors)
         #[arg(long)]
         verbose: bool,
-        /// Warn about unknown fields in config (catches typos like [[abr]])
+        /// Warn about unknown fields in config (catches typos like `[[abr]]`)
         #[arg(long)]
         strict: bool,
     },

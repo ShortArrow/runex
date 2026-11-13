@@ -620,8 +620,8 @@ where
     DiagResult { checks }
 }
 
-/// Convert an [`integration_check::IntegrationCheck`] into the doctor
-/// `Check` shape. `Outdated` becomes `Warn`, `Missing` becomes `Warn`
+/// Convert an [`crate::infra::integration_check::IntegrationCheck`]
+/// into the doctor `Check` shape. `Outdated` becomes `Warn`, `Missing` becomes `Warn`
 /// (we don't escalate to Error: a stale or missing rcfile shouldn't
 /// fail `doctor` outright — the user's shell still works).
 fn integration_check_to_check(r: crate::infra::integration_check::IntegrationCheck) -> Check {

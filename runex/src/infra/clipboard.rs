@@ -7,7 +7,7 @@
 //!
 //! ## Provider chain
 //!
-//! - Windows: native API via [`windows-sys`] — OpenClipboard +
+//! - Windows: native API via the `windows-sys` crate — OpenClipboard +
 //!   GetClipboardData(CF_UNICODETEXT) + GlobalLock, all wrapped in an
 //!   RAII guard so panics still close the clipboard.
 //! - WSL: tries Linux providers first (a Wayland or X server may be
