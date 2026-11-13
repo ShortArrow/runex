@@ -68,7 +68,8 @@ const MAX_PROBE_FILE_BYTES: u64 = 10 * 1024 * 1024;
 ///   This covers ordinary symlinks; directory junctions and other
 ///   reparse-point variants typically fail the `is_file()` check
 ///   below, but we don't rely on that and the explicit symlink reject
-///   keeps policy parity with the clink write path in `main.rs`.
+///   keeps policy parity with the clink write path
+///   (`cmd::init::write_clink_lua_safely`).
 ///
 /// Returns `None` for any failure mode (the doctor callers all
 /// treat a `None` read as "skip / missing", which is the correct
