@@ -100,12 +100,25 @@ pub(crate) fn sanitize_for_display(s: &str) -> String {
 
 /// Strip characters unsafe for terminal display, preserving newlines and tabs.
 ///
-/// Like [`sanitize_for_display`] but allows `\n`, `\r`, and `\t` so that
-/// multi-line messages (e.g. TOML parse errors) remain readable.
+/// Like [`sanitize_for_display`] but keeps `\n`, `\t`, and a `\r` that
+/// begins a CRLF, so multi-line messages (e.g. TOML parse errors) and
+/// CRLF files remain readable. A `\r` not followed by `\n` is dropped:
+/// it returns the cursor to the start of the line, and the text after
+/// it would overwrite what is already shown.
 pub(crate) fn sanitize_multiline_for_display(s: &str) -> String {
-    s.chars()
-        .filter(|&c| c == '\n' || c == '\r' || c == '\t' || !is_unsafe_for_display(c))
-        .collect()
+    let mut chars = s.chars().peekable();
+    let mut out = String::with_capacity(s.len());
+    while let Some(c) = chars.next() {
+        let keep = match c {
+            '\n' | '\t' => true,
+            '\r' => chars.peek() == Some(&'\n'),
+            _ => !is_unsafe_for_display(c),
+        };
+        if keep {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Map a character to its double-quoted string escape sequence.
@@ -211,6 +224,26 @@ mod tests {
     #[test]
     fn sanitize_for_display_preserves_normal_text() {
         assert_eq!(sanitize_for_display("hello world"), "hello world");
+    }
+
+    #[test]
+    fn sanitize_multiline_keeps_lf_crlf_and_tab() {
+        assert_eq!(
+            sanitize_multiline_for_display("a\nb\r\nc\td\r\n"),
+            "a\nb\r\nc\td\r\n"
+        );
+    }
+
+    #[test]
+    fn sanitize_multiline_strips_other_control_chars() {
+        assert_eq!(sanitize_multiline_for_display("a\x1B[2Jb\x07\n"), "a[2Jb\n");
+    }
+
+    #[test]
+    fn sanitize_multiline_drops_a_cr_not_followed_by_lf() {
+        assert_eq!(sanitize_multiline_for_display("safe\rEVIL\n"), "safeEVIL\n");
+        assert_eq!(sanitize_multiline_for_display("end\r"), "end");
+        assert_eq!(sanitize_multiline_for_display("a\r\r\nb"), "a\r\nb");
     }
 
     #[test]

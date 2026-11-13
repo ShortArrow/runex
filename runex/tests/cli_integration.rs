@@ -2155,6 +2155,24 @@ fn config_type_prints_file_contents() {
 }
 
 #[test]
+fn config_type_keeps_crlf_line_endings() {
+    let cfg = write_config("version = 1\r\n\r\n[[abbr]]\r\nkey = \"gcm\"\r\nexpand = \"git commit -m\"\r\n");
+    let (stdout, _, ok) = run(&["config", "type"], Some(cfg.path()), None);
+    assert!(ok, "config type must succeed for an existing config");
+    assert!(stdout.starts_with("version = 1\r\n\r\n[[abbr]]\r\n"), "got: {stdout:?}");
+}
+
+/// A bare CR returns the cursor to the start of the line, so text after
+/// it would overwrite what the terminal already shows.
+#[test]
+fn config_type_drops_a_bare_cr() {
+    let cfg = write_config("# safe\rEVIL\nversion = 1\n");
+    let (stdout, _, ok) = run(&["config", "type"], Some(cfg.path()), None);
+    assert!(ok, "config type must succeed for an existing config");
+    assert!(stdout.starts_with("# safeEVIL\nversion = 1\n"), "got: {stdout:?}");
+}
+
+#[test]
 fn config_type_missing_file_fails_with_init_hint() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("nope.toml");
