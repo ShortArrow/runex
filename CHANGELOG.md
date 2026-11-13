@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Rust's debug form instead, such as `Error: "failed to load config
   …"` with quotes, or `Error: Store(Io(Os { code: 13, … }))` for a
   config file runex could not write.
+- `runex config type`, `runex doctor --verbose` and a failed command's
+  error drop a carriage return that does not end a CRLF line, so text
+  in the config file cannot overwrite what the terminal already shows.
+  CRLF files print unchanged.
 
 ### Docs
 
