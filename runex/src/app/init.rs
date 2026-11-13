@@ -46,8 +46,8 @@ expand = "git status"
 /// (Rust → shell tool) for one path lookup, and the env-var override
 /// already lets users with non-standard installs cope.
 /// Resolver-injectable factory for the clink lua install path.
-/// Production callers pass [`SystemHomeDir`]; tests pass an
-/// [`crate::infra::env::EnvHomeDir`] so a hermetic `cmd::init::handle`
+/// Production callers pass [`crate::infra::env::SystemHomeDir`]; tests
+/// pass an [`crate::infra::env::EnvHomeDir`] so a hermetic `cmd::init::handle`
 /// run can verify the chosen install path without touching real env
 /// vars or `dirs::home_dir()`.
 pub(crate) fn clink_lua_install_path_with_resolver(

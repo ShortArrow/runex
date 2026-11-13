@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 /// ## Windows-specific PATH augmentation
 ///
 /// On Windows we feed `which::which_in` the *augmented* search path
-/// from [`crate::infra::win_path::effective_search_path`] (process PATH +
+/// from `crate::infra::win_path::effective_search_path` (process PATH +
 /// HKCU + HKLM) instead of relying on the inherited `PATH` env var
 /// alone.
 ///
