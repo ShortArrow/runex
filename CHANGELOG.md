@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with an alias to `app::shell_alias_conflicts`, the Windows PATH
   probe to `infra::win_path`, and the output formatting to
   `cmd::format`.
+- CI builds the API docs, private items included, on Linux, macOS and
+  Windows, and fails on a doc link to an item that does not exist.
 
 ## [0.1.21] - 2026-10-20
 

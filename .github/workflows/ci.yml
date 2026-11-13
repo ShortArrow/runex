@@ -151,3 +151,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
+      # Private items too: most of the crate is pub(crate), and a doc
+      # link to a renamed or moved item is otherwise never checked.
+      - name: Rustdoc
+        run: cargo doc --locked --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings
